@@ -8,7 +8,8 @@ import {
   Users, 
   LayoutDashboard, 
   LogOut,
-  User
+  User,
+  MessageCircle
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -55,6 +56,12 @@ const Sidebar = () => {
       label: 'Členové', 
       icon: Users,
       roles: ['admin']
+    },
+    { 
+      path: '/communication', 
+      label: 'Komunikace', 
+      icon: MessageCircle,
+      roles: ['admin', 'trainer', 'part_time_staff', 'pro_player', 'hobby_player']
     },
   ];
 

@@ -11,6 +11,7 @@ import IceCalendar from "./pages/IceCalendar";
 import Shifts from "./pages/Shifts";
 import Notifications from "./pages/Notifications";
 import Members from "./pages/Members";
+import Communication from "./pages/Communication";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -30,6 +31,7 @@ const App = () => (
               <Route path="/shifts" element={<Shifts />} />
               <Route path="/notifications" element={<Notifications />} />
               <Route path="/members" element={<Members />} />
+              <Route path="/communication" element={<Communication />} />
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>
