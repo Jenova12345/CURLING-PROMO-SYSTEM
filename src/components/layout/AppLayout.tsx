@@ -20,21 +20,21 @@ const AppLayout = () => {
   }
 
   return (
-    <div className="flex min-h-screen bg-background">
-      {/* Desktop Sidebar */}
-      <div className="hidden md:block">
+    <div className="min-h-screen bg-background">
+      {/* Desktop Sidebar - completely hidden on mobile */}
+      <aside className="fixed inset-y-0 left-0 z-40 hidden md:block">
         <Sidebar />
-      </div>
+      </aside>
       
-      {/* Mobile Header */}
+      {/* Mobile Header - only visible on mobile */}
       <MobileHeader />
       
-      {/* Main Content */}
-      <main className="flex-1 overflow-auto pb-20 md:pb-0">
+      {/* Main Content - full width on mobile, offset on desktop */}
+      <main className="min-h-screen overflow-auto pb-20 md:pb-0 md:ml-64">
         <Outlet />
       </main>
       
-      {/* Mobile Bottom Navigation */}
+      {/* Mobile Bottom Navigation - only visible on mobile */}
       <MobileNav />
     </div>
   );
