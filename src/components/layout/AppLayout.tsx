@@ -1,6 +1,8 @@
 import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import Sidebar from './Sidebar';
+import MobileHeader from './MobileHeader';
+import MobileNav from './MobileNav';
 
 const AppLayout = () => {
   const { user, loading } = useAuth();
@@ -19,10 +21,21 @@ const AppLayout = () => {
 
   return (
     <div className="flex min-h-screen bg-background">
-      <Sidebar />
-      <main className="flex-1 overflow-auto">
+      {/* Desktop Sidebar */}
+      <div className="hidden md:block">
+        <Sidebar />
+      </div>
+      
+      {/* Mobile Header */}
+      <MobileHeader />
+      
+      {/* Main Content */}
+      <main className="flex-1 overflow-auto pb-20 md:pb-0">
         <Outlet />
       </main>
+      
+      {/* Mobile Bottom Navigation */}
+      <MobileNav />
     </div>
   );
 };
