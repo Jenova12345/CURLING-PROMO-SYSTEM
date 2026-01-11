@@ -12,6 +12,7 @@ interface ChatGroup {
   description: string | null;
   whatsapp_url: string;
   icon: string | null;
+  icon_slug: string | null;
   authorized_roles: AppRole[];
   created_at: string;
   updated_at: string;
@@ -22,6 +23,7 @@ interface CreateChatGroupInput {
   description?: string;
   whatsapp_url: string;
   icon?: string;
+  icon_slug?: string;
   authorized_roles: AppRole[];
 }
 
@@ -55,7 +57,8 @@ export const useChatGroups = () => {
           name: input.name,
           description: input.description || null,
           whatsapp_url: input.whatsapp_url,
-          icon: input.icon || '💬',
+          icon: input.icon || null,
+          icon_slug: input.icon_slug || 'message-circle',
           authorized_roles: input.authorized_roles,
         })
         .select()

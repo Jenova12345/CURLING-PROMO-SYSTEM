@@ -9,8 +9,9 @@ import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ExternalLink, Plus, Pencil, Trash2, MessageCircle } from 'lucide-react';
+import { ExternalLink, Plus, Pencil, Trash2, icons } from 'lucide-react';
 import type { Database } from '@/integrations/supabase/types';
 
 type AppRole = Database['public']['Enums']['app_role'];
@@ -23,20 +24,51 @@ const ALL_ROLES: { value: AppRole; label: string }[] = [
   { value: 'hobby_player', label: 'Hobby hráč' },
 ];
 
+const AVAILABLE_ICONS = [
+  { slug: 'message-circle', label: 'Chat' },
+  { slug: 'users', label: 'Uživatelé' },
+  { slug: 'briefcase', label: 'Práce' },
+  { slug: 'target', label: 'Cíl' },
+  { slug: 'trophy', label: 'Trofej' },
+  { slug: 'megaphone', label: 'Oznámení' },
+  { slug: 'heart', label: 'Srdce' },
+  { slug: 'star', label: 'Hvězda' },
+  { slug: 'zap', label: 'Energie' },
+  { slug: 'shield', label: 'Štít' },
+  { slug: 'info', label: 'Info' },
+  { slug: 'bell', label: 'Zvon' },
+  { slug: 'calendar', label: 'Kalendář' },
+  { slug: 'settings', label: 'Nastavení' },
+];
+
+// Dynamic icon component
+const DynamicIcon = ({ name, className }: { name: string; className?: string }) => {
+  // Convert kebab-case to PascalCase for lucide icons lookup
+  const iconName = name
+    .split('-')
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join('') as keyof typeof icons;
+  
+  const IconComponent = icons[iconName] || icons.MessageCircle;
+  return <IconComponent className={className} />;
+};
+
 interface ChatGroupFormData {
   name: string;
   description: string;
   whatsapp_url: string;
-  icon: string;
+  icon_slug: string;
   authorized_roles: AppRole[];
+  isPublic: boolean;
 }
 
 const defaultFormData: ChatGroupFormData = {
   name: '',
   description: '',
   whatsapp_url: '',
-  icon: '💬',
+  icon_slug: 'message-circle',
   authorized_roles: [],
+  isPublic: false,
 };
 
 const Communication = () => {
@@ -51,17 +83,33 @@ const Communication = () => {
   };
 
   const handleCreateOrUpdate = async () => {
-    if (!formData.name || !formData.whatsapp_url || formData.authorized_roles.length === 0) {
+    if (!formData.name || !formData.whatsapp_url) {
       return;
     }
+
+    // If public, authorized_roles should be empty array
+    const authorizedRoles = formData.isPublic ? [] : formData.authorized_roles;
+
+    // Validate: either public or has at least one role
+    if (!formData.isPublic && authorizedRoles.length === 0) {
+      return;
+    }
+
+    const payload = {
+      name: formData.name,
+      description: formData.description || undefined,
+      whatsapp_url: formData.whatsapp_url,
+      icon_slug: formData.icon_slug,
+      authorized_roles: authorizedRoles,
+    };
 
     if (editingGroup) {
       await updateGroup.mutateAsync({
         id: editingGroup,
-        ...formData,
+        ...payload,
       });
     } else {
-      await createGroup.mutateAsync(formData);
+      await createGroup.mutateAsync(payload);
     }
 
     setIsDialogOpen(false);
@@ -70,12 +118,14 @@ const Communication = () => {
   };
 
   const handleEdit = (group: typeof chatGroups[0]) => {
+    const isPublic = group.authorized_roles.length === 0;
     setFormData({
       name: group.name,
       description: group.description || '',
       whatsapp_url: group.whatsapp_url,
-      icon: group.icon || '💬',
+      icon_slug: group.icon_slug || 'message-circle',
       authorized_roles: group.authorized_roles,
+      isPublic,
     });
     setEditingGroup(group.id);
     setIsDialogOpen(true);
@@ -94,15 +144,26 @@ const Communication = () => {
     }));
   };
 
+  const handlePublicToggle = (checked: boolean) => {
+    setFormData(prev => ({
+      ...prev,
+      isPublic: checked,
+      // Clear roles when making public
+      authorized_roles: checked ? [] : prev.authorized_roles,
+    }));
+  };
+
   const handleCloseDialog = () => {
     setIsDialogOpen(false);
     setEditingGroup(null);
     setFormData(defaultFormData);
   };
 
+  const isFormValid = formData.name && formData.whatsapp_url && (formData.isPublic || formData.authorized_roles.length > 0);
+
   if (isLoading) {
     return (
-      <div className="space-y-6">
+      <div className="p-4 md:p-6 space-y-6">
         <div>
           <Skeleton className="h-8 w-48 mb-2" />
           <Skeleton className="h-4 w-72" />
@@ -137,7 +198,7 @@ const Communication = () => {
                 Přidat skupinu
               </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[425px]">
+            <DialogContent className="sm:max-w-[425px] max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>
                   {editingGroup ? 'Upravit skupinu' : 'Nová skupina'}
@@ -150,14 +211,30 @@ const Communication = () => {
               </DialogHeader>
               <div className="grid gap-4 py-4">
                 <div className="grid gap-2">
-                  <Label htmlFor="icon">Ikona (emoji)</Label>
-                  <Input
-                    id="icon"
-                    value={formData.icon}
-                    onChange={(e) => setFormData(prev => ({ ...prev, icon: e.target.value }))}
-                    placeholder="💬"
-                    className="w-20"
-                  />
+                  <Label>Ikona skupiny</Label>
+                  <Select 
+                    value={formData.icon_slug} 
+                    onValueChange={(value) => setFormData(prev => ({ ...prev, icon_slug: value }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Vyberte ikonu">
+                        <div className="flex items-center gap-2">
+                          <DynamicIcon name={formData.icon_slug} className="h-4 w-4" />
+                          <span>{AVAILABLE_ICONS.find(i => i.slug === formData.icon_slug)?.label || 'Chat'}</span>
+                        </div>
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {AVAILABLE_ICONS.map(icon => (
+                        <SelectItem key={icon.slug} value={icon.slug}>
+                          <div className="flex items-center gap-2">
+                            <DynamicIcon name={icon.slug} className="h-4 w-4" />
+                            <span>{icon.label}</span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="name">Název skupiny *</Label>
@@ -188,20 +265,39 @@ const Communication = () => {
                   />
                 </div>
                 <div className="grid gap-2">
-                  <Label>Oprávněné role *</Label>
-                  <div className="space-y-2">
-                    {ALL_ROLES.map(role => (
-                      <div key={role.value} className="flex items-center space-x-2">
-                        <Checkbox
-                          id={role.value}
-                          checked={formData.authorized_roles.includes(role.value)}
-                          onCheckedChange={() => handleRoleToggle(role.value)}
-                        />
-                        <Label htmlFor={role.value} className="font-normal cursor-pointer">
-                          {role.label}
-                        </Label>
+                  <Label>Přístup ke skupině *</Label>
+                  <div className="space-y-3">
+                    <div className="flex items-center space-x-2 p-3 border rounded-lg bg-muted/50">
+                      <Checkbox
+                        id="public"
+                        checked={formData.isPublic}
+                        onCheckedChange={handlePublicToggle}
+                      />
+                      <Label htmlFor="public" className="font-normal cursor-pointer flex-1">
+                        <span className="font-medium">Veřejná skupina</span>
+                        <p className="text-xs text-muted-foreground">
+                          Viditelná pro všechny přihlášené uživatele
+                        </p>
+                      </Label>
+                    </div>
+                    
+                    {!formData.isPublic && (
+                      <div className="space-y-2 pl-1">
+                        <span className="text-sm text-muted-foreground">Nebo vyberte oprávněné role:</span>
+                        {ALL_ROLES.map(role => (
+                          <div key={role.value} className="flex items-center space-x-2">
+                            <Checkbox
+                              id={role.value}
+                              checked={formData.authorized_roles.includes(role.value)}
+                              onCheckedChange={() => handleRoleToggle(role.value)}
+                            />
+                            <Label htmlFor={role.value} className="font-normal cursor-pointer">
+                              {role.label}
+                            </Label>
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    )}
                   </div>
                 </div>
               </div>
@@ -211,7 +307,7 @@ const Communication = () => {
                 </Button>
                 <Button 
                   onClick={handleCreateOrUpdate}
-                  disabled={!formData.name || !formData.whatsapp_url || formData.authorized_roles.length === 0}
+                  disabled={!isFormValid}
                 >
                   {editingGroup ? 'Uložit' : 'Vytvořit'}
                 </Button>
@@ -225,7 +321,9 @@ const Communication = () => {
       {chatGroups.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
-            <MessageCircle className="h-12 w-12 text-muted-foreground mb-4" />
+            <div className="p-3 rounded-full bg-muted mb-4">
+              <DynamicIcon name="message-circle" className="h-8 w-8 text-muted-foreground" />
+            </div>
             <h3 className="text-lg font-medium mb-1">Žádné skupiny</h3>
             <p className="text-muted-foreground text-center">
               {isAdmin 
@@ -239,11 +337,11 @@ const Communication = () => {
           {chatGroups.map(group => (
             <Card key={group.id} className="group relative hover:shadow-md transition-shadow">
               {isAdmin && (
-                <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+                <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 z-10">
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8"
+                    className="h-8 w-8 bg-background/80 backdrop-blur-sm"
                     onClick={() => handleEdit(group)}
                   >
                     <Pencil className="h-4 w-4" />
@@ -253,7 +351,7 @@ const Communication = () => {
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-8 w-8 text-destructive hover:text-destructive"
+                        className="h-8 w-8 text-destructive hover:text-destructive bg-background/80 backdrop-blur-sm"
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
@@ -280,9 +378,14 @@ const Communication = () => {
               )}
               <CardHeader className="pb-2">
                 <div className="flex items-center gap-3">
-                  <span className="text-3xl">{group.icon || '💬'}</span>
-                  <div>
-                    <CardTitle className="text-lg">{group.name}</CardTitle>
+                  <div className="p-2.5 rounded-lg bg-primary/10 shrink-0">
+                    <DynamicIcon 
+                      name={group.icon_slug || 'message-circle'} 
+                      className="h-6 w-6 text-primary" 
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <CardTitle className="text-lg truncate">{group.name}</CardTitle>
                     {group.description && (
                       <CardDescription className="line-clamp-2">
                         {group.description}
@@ -298,7 +401,7 @@ const Communication = () => {
                   onClick={() => handleOpenWhatsApp(group.whatsapp_url)}
                 >
                   <ExternalLink className="h-4 w-4 mr-2" />
-                  Otevřít WhatsApp
+                  Otevřít chat
                 </Button>
               </CardContent>
             </Card>
