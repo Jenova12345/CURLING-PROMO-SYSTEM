@@ -14,6 +14,39 @@ export type Database = {
   }
   public: {
     Tables: {
+      chat_groups: {
+        Row: {
+          authorized_roles: Database["public"]["Enums"]["app_role"][]
+          created_at: string
+          description: string | null
+          icon: string | null
+          id: string
+          name: string
+          updated_at: string
+          whatsapp_url: string
+        }
+        Insert: {
+          authorized_roles: Database["public"]["Enums"]["app_role"][]
+          created_at?: string
+          description?: string | null
+          icon?: string | null
+          id?: string
+          name: string
+          updated_at?: string
+          whatsapp_url: string
+        }
+        Update: {
+          authorized_roles?: Database["public"]["Enums"]["app_role"][]
+          created_at?: string
+          description?: string | null
+          icon?: string | null
+          id?: string
+          name?: string
+          updated_at?: string
+          whatsapp_url?: string
+        }
+        Relationships: []
+      }
       events: {
         Row: {
           created_at: string
