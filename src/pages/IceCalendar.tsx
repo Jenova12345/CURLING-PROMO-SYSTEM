@@ -132,12 +132,12 @@ const IceCalendar = () => {
   const dayNames = ['Po', 'Út', 'St', 'Čt', 'Pá', 'So', 'Ne'];
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 md:p-6 space-y-4 md:space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold">Kalendář ledu</h1>
-          <p className="text-muted-foreground mt-1">
+          <h1 className="text-2xl md:text-3xl font-bold">Kalendář ledu</h1>
+          <p className="text-muted-foreground mt-1 text-sm md:text-base">
             Přehled obsazenosti a dostupnosti ledové plochy
           </p>
         </div>
@@ -257,11 +257,11 @@ const IceCalendar = () => {
       </div>
 
       {/* Legend */}
-      <div className="flex flex-wrap gap-4">
+      <div className="flex flex-wrap gap-2 md:gap-4">
         {(Object.keys(eventTypeLabels) as EventType[]).map((type) => (
-          <div key={type} className="flex items-center gap-2">
-            <div className={`w-4 h-4 rounded ${eventTypeColors[type]}`} />
-            <span className="text-sm">{eventTypeLabels[type]}</span>
+          <div key={type} className="flex items-center gap-1.5 md:gap-2">
+            <div className={`w-3 h-3 md:w-4 md:h-4 rounded ${eventTypeColors[type]}`} />
+            <span className="text-xs md:text-sm">{eventTypeLabels[type]}</span>
           </div>
         ))}
       </div>
@@ -281,21 +281,21 @@ const IceCalendar = () => {
 
       {/* Calendar Grid */}
       <Card>
-        <CardContent className="p-4">
+        <CardContent className="p-2 md:p-4">
           {/* Day headers */}
-          <div className="grid grid-cols-7 gap-1 mb-2">
+          <div className="grid grid-cols-7 gap-0.5 md:gap-1 mb-2">
             {dayNames.map((day) => (
-              <div key={day} className="text-center text-sm font-medium text-muted-foreground py-2">
+              <div key={day} className="text-center text-[10px] md:text-sm font-medium text-muted-foreground py-1 md:py-2">
                 {day}
               </div>
             ))}
           </div>
 
           {/* Days grid */}
-          <div className="grid grid-cols-7 gap-1">
+          <div className="grid grid-cols-7 gap-0.5 md:gap-1">
             {/* Empty cells for days before month start */}
             {Array.from({ length: (monthStart.getDay() + 6) % 7 }).map((_, i) => (
-              <div key={`empty-${i}`} className="min-h-[100px] bg-muted/30 rounded-lg" />
+              <div key={`empty-${i}`} className="min-h-[50px] md:min-h-[100px] bg-muted/30 rounded" />
             ))}
 
             {/* Actual days */}
@@ -306,23 +306,29 @@ const IceCalendar = () => {
               return (
                 <div
                   key={day.toISOString()}
-                  className={`min-h-[100px] border rounded-lg p-2 ${
+                  className={`min-h-[50px] md:min-h-[100px] border rounded p-1 md:p-2 ${
                     isToday ? 'border-primary bg-primary/5' : 'border-border'
                   }`}
                 >
-                  <div className={`text-sm font-medium mb-1 ${isToday ? 'text-primary' : ''}`}>
+                  <div className={`text-[10px] md:text-sm font-medium mb-0.5 md:mb-1 ${isToday ? 'text-primary' : ''}`}>
                     {format(day, 'd')}
                   </div>
-                  <div className="space-y-1">
-                    {dayEvents.map((event) => (
+                  <div className="space-y-0.5">
+                    {dayEvents.slice(0, 2).map((event) => (
                       <div
                         key={event.id}
-                        className={`text-xs p-1 rounded truncate ${eventTypeColors[event.event_type]}`}
+                        className={`text-[8px] md:text-xs p-0.5 md:p-1 rounded truncate ${eventTypeColors[event.event_type]}`}
                         title={`${event.title} - ${format(new Date(event.start_time), 'HH:mm')} - ${format(new Date(event.end_time), 'HH:mm')}`}
                       >
-                        {format(new Date(event.start_time), 'HH:mm')} {event.title}
+                        <span className="hidden md:inline">{format(new Date(event.start_time), 'HH:mm')} </span>
+                        {event.title}
                       </div>
                     ))}
+                    {dayEvents.length > 2 && (
+                      <div className="text-[8px] md:text-xs text-muted-foreground">
+                        +{dayEvents.length - 2}
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -333,38 +339,39 @@ const IceCalendar = () => {
 
       {/* Upcoming Events List */}
       <Card>
-        <CardHeader>
-          <CardTitle>Nadcházející události</CardTitle>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg md:text-xl">Nadcházející události</CardTitle>
           <CardDescription>Seznam všech plánovaných akcí</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="space-y-4">
+          <div className="space-y-3">
             {events
               .filter(e => new Date(e.start_time) >= new Date())
               .slice(0, 10)
               .map((event) => (
-                <div key={event.id} className="flex items-center justify-between p-4 rounded-lg bg-accent/50">
-                  <div className="flex items-center gap-4">
-                    <div className={`w-4 h-4 rounded ${eventTypeColors[event.event_type]}`} />
-                    <div>
-                      <p className="font-medium">{event.title}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {format(new Date(event.start_time), 'EEEE d. MMMM yyyy, HH:mm', { locale: cs })} - {format(new Date(event.end_time), 'HH:mm')}
+                <div key={event.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 md:p-4 rounded-lg bg-accent/50 gap-3">
+                  <div className="flex items-start gap-3">
+                    <div className={`w-3 h-3 md:w-4 md:h-4 rounded mt-1.5 flex-shrink-0 ${eventTypeColors[event.event_type]}`} />
+                    <div className="min-w-0">
+                      <p className="font-medium text-sm md:text-base">{event.title}</p>
+                      <p className="text-xs md:text-sm text-muted-foreground">
+                        {format(new Date(event.start_time), 'EEE d. MMM, HH:mm', { locale: cs })} - {format(new Date(event.end_time), 'HH:mm')}
                       </p>
                       {event.description && (
-                        <p className="text-sm text-muted-foreground mt-1">{event.description}</p>
+                        <p className="text-xs md:text-sm text-muted-foreground mt-1 line-clamp-2">{event.description}</p>
                       )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline">{eventTypeLabels[event.event_type]}</Badge>
+                  <div className="flex items-center gap-2 flex-wrap ml-6 sm:ml-0">
+                    <Badge variant="outline" className="text-xs">{eventTypeLabels[event.event_type]}</Badge>
                     {event.required_staff && event.required_staff > 0 && (
-                      <Badge variant="secondary">{event.required_staff} brigádníků</Badge>
+                      <Badge variant="secondary" className="text-xs">{event.required_staff} brig.</Badge>
                     )}
                     {isAdmin && (
                       <Button
                         variant="ghost"
                         size="icon"
+                        className="h-8 w-8"
                         onClick={() => handleDeleteEvent(event.id)}
                         disabled={isDeleting}
                       >

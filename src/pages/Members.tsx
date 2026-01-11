@@ -142,26 +142,26 @@ const Members = () => {
   }
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 md:p-6 space-y-4 md:space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold">Správa členů</h1>
-        <p className="text-muted-foreground mt-1">
-          Přehled všech registrovaných uživatelů a jejich rolí
+        <h1 className="text-2xl md:text-3xl font-bold">Správa členů</h1>
+        <p className="text-muted-foreground mt-1 text-sm md:text-base">
+          Přehled všech registrovaných uživatelů
         </p>
       </div>
 
       {/* Stats */}
-      <div className="grid gap-4 md:grid-cols-5">
+      <div className="grid gap-2 grid-cols-3 md:grid-cols-5">
         {(Object.keys(roleLabels) as AppRole[]).map((role) => (
           <Card key={role}>
-            <CardContent className="flex items-center gap-3 p-4">
-              <div className={`w-3 h-3 rounded-full ${roleColors[role]}`} />
+            <CardContent className="flex items-center gap-2 p-3">
+              <div className={`w-2.5 h-2.5 rounded-full ${roleColors[role]}`} />
               <div>
-                <p className="text-2xl font-bold">
+                <p className="text-lg md:text-2xl font-bold">
                   {members.filter(m => m.role === role).length}
                 </p>
-                <p className="text-xs text-muted-foreground">{roleLabels[role]}</p>
+                <p className="text-[10px] md:text-xs text-muted-foreground">{roleLabels[role]}</p>
               </div>
             </CardContent>
           </Card>
@@ -169,19 +169,19 @@ const Members = () => {
       </div>
 
       {/* Filters */}
-      <div className="flex gap-4">
-        <div className="relative flex-1 max-w-sm">
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Hledat podle jména nebo telefonu..."
+            placeholder="Hledat..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-10"
           />
         </div>
         <Select value={roleFilter} onValueChange={setRoleFilter}>
-          <SelectTrigger className="w-48">
-            <SelectValue placeholder="Filtrovat podle role" />
+          <SelectTrigger className="w-full sm:w-40">
+            <SelectValue placeholder="Role" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Všechny role</SelectItem>

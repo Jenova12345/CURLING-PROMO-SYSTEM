@@ -41,19 +41,19 @@ const Dashboard = () => {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 md:p-6 space-y-4 md:space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold">
+        <h1 className="text-2xl md:text-3xl font-bold">
           Vítejte, {profile?.full_name || 'uživateli'}! 👋
         </h1>
-        <p className="text-muted-foreground mt-1">
+        <p className="text-muted-foreground mt-1 text-sm md:text-base">
           Přehled vašeho účtu a nadcházejících událostí
         </p>
       </div>
 
       {/* Stats Grid */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Vaše role</CardTitle>
@@ -127,7 +127,7 @@ const Dashboard = () => {
       </div>
 
       {/* Content Grid */}
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-4 md:gap-6 lg:grid-cols-2">
         {/* Upcoming Events */}
         <Card>
           <CardHeader>

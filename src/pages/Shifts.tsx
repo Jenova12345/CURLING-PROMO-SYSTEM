@@ -128,18 +128,18 @@ const Shifts = () => {
   }
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 md:p-6 space-y-4 md:space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold">Správa směn</h1>
-        <p className="text-muted-foreground mt-1">
+        <h1 className="text-2xl md:text-3xl font-bold">Správa směn</h1>
+        <p className="text-muted-foreground mt-1 text-sm md:text-base">
           {isAdmin ? 'Přehled všech směn a brigádníků' : 'Volné směny a vaše přiřazení'}
         </p>
       </div>
 
       {/* Stats for Staff */}
       {isStaff && (
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-3 grid-cols-1 sm:grid-cols-3">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Volné směny</CardTitle>
@@ -176,11 +176,11 @@ const Shifts = () => {
       )}
 
       {/* Tabs */}
-      <Tabs defaultValue={isStaff ? 'available' : 'all'}>
-        <TabsList>
-          {isStaff && <TabsTrigger value="available">Volné směny</TabsTrigger>}
-          {isStaff && <TabsTrigger value="my">Moje směny</TabsTrigger>}
-          {isAdmin && <TabsTrigger value="all">Všechny směny</TabsTrigger>}
+      <Tabs defaultValue={isStaff ? 'available' : 'all'} className="w-full">
+        <TabsList className="w-full sm:w-auto grid grid-cols-2 sm:flex">
+          {isStaff && <TabsTrigger value="available" className="text-xs sm:text-sm">Volné směny</TabsTrigger>}
+          {isStaff && <TabsTrigger value="my" className="text-xs sm:text-sm">Moje směny</TabsTrigger>}
+          {isAdmin && <TabsTrigger value="all" className="text-xs sm:text-sm">Všechny směny</TabsTrigger>}
         </TabsList>
 
         {/* Available Shifts */}
@@ -196,25 +196,29 @@ const Shifts = () => {
             ) : (
               openShifts.map((shift) => (
                 <Card key={shift.id}>
-                  <CardContent className="flex items-center justify-between p-6">
-                    <div className="flex items-center gap-4">
-                      <div className={`w-3 h-3 rounded-full ${statusColors.open}`} />
+                  <CardContent className="flex flex-col sm:flex-row sm:items-center justify-between p-4 md:p-6 gap-4">
+                    <div className="flex items-start gap-3">
+                      <div className={`w-3 h-3 rounded-full mt-1.5 flex-shrink-0 ${statusColors.open}`} />
                       <div>
-                        <p className="font-medium text-lg">{shift.event?.title || 'Směna'}</p>
-                        <p className="text-muted-foreground">
-                          {shift.event && format(new Date(shift.event.start_time), 'EEEE d. MMMM yyyy', { locale: cs })}
+                        <p className="font-medium text-base md:text-lg">{shift.event?.title || 'Směna'}</p>
+                        <p className="text-muted-foreground text-sm">
+                          {shift.event && format(new Date(shift.event.start_time), 'EEE d. MMM yyyy', { locale: cs })}
                         </p>
-                        <p className="text-sm text-muted-foreground">
+                        <p className="text-xs md:text-sm text-muted-foreground">
                           {shift.event && `${format(new Date(shift.event.start_time), 'HH:mm')} - ${format(new Date(shift.event.end_time), 'HH:mm')}`}
                         </p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-4">
-                      <div className="text-right">
-                        <p className="text-sm text-muted-foreground">Hodinová sazba</p>
-                        <p className="font-medium">{shift.hourly_rate} Kč/h</p>
+                    <div className="flex items-center justify-between sm:justify-end gap-4 ml-6 sm:ml-0">
+                      <div className="text-left sm:text-right">
+                        <p className="text-xs text-muted-foreground">Sazba</p>
+                        <p className="font-medium text-sm">{shift.hourly_rate} Kč/h</p>
                       </div>
-                      <Button onClick={() => handleClaimShift(shift.id)} disabled={isClaiming}>
+                      <Button 
+                        onClick={() => handleClaimShift(shift.id)} 
+                        disabled={isClaiming}
+                        className="whitespace-nowrap"
+                      >
                         {isClaiming ? 'Zpracování...' : 'Vzít směnu'}
                       </Button>
                     </div>
@@ -238,25 +242,25 @@ const Shifts = () => {
             ) : (
               myShifts.map((shift) => (
                 <Card key={shift.id}>
-                  <CardContent className="flex items-center justify-between p-6">
-                    <div className="flex items-center gap-4">
-                      <div className={`w-3 h-3 rounded-full ${statusColors[shift.status]}`} />
+                  <CardContent className="flex flex-col sm:flex-row sm:items-center justify-between p-4 md:p-6 gap-4">
+                    <div className="flex items-start gap-3">
+                      <div className={`w-3 h-3 rounded-full mt-1.5 flex-shrink-0 ${statusColors[shift.status]}`} />
                       <div>
-                        <p className="font-medium text-lg">{shift.event?.title || 'Směna'}</p>
-                        <p className="text-muted-foreground">
-                          {shift.event && format(new Date(shift.event.start_time), 'EEEE d. MMMM yyyy', { locale: cs })}
+                        <p className="font-medium text-base md:text-lg">{shift.event?.title || 'Směna'}</p>
+                        <p className="text-muted-foreground text-sm">
+                          {shift.event && format(new Date(shift.event.start_time), 'EEE d. MMM yyyy', { locale: cs })}
                         </p>
-                        <p className="text-sm text-muted-foreground">
+                        <p className="text-xs md:text-sm text-muted-foreground">
                           {shift.event && `${format(new Date(shift.event.start_time), 'HH:mm')} - ${format(new Date(shift.event.end_time), 'HH:mm')}`}
                         </p>
                         {shift.status === 'completed' && shift.hours_worked && (
-                          <p className="text-sm text-green-600 mt-1">
+                          <p className="text-xs md:text-sm text-green-600 mt-1">
                             Odpracováno: {shift.hours_worked} h ({(Number(shift.hours_worked) * Number(shift.hourly_rate)).toLocaleString('cs-CZ')} Kč)
                           </p>
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap ml-6 sm:ml-0">
                       <Badge variant={shift.status === 'completed' ? 'default' : 'secondary'}>
                         {statusLabels[shift.status]}
                       </Badge>
@@ -266,16 +270,18 @@ const Shifts = () => {
                             variant="outline" 
                             size="sm"
                             onClick={() => handleCancelShift(shift.id)}
+                            className="h-8"
                           >
                             <XCircle className="h-4 w-4 mr-1" />
-                            Zrušit
+                            <span className="hidden sm:inline">Zrušit</span>
                           </Button>
                           <Button 
                             size="sm"
                             onClick={() => openCompleteDialog(shift.id)}
+                            className="h-8"
                           >
                             <CheckCircle className="h-4 w-4 mr-1" />
-                            Dokončit
+                            <span className="hidden sm:inline">Dokončit</span>
                           </Button>
                         </>
                       )}
