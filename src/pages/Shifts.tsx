@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
-import { Clock, CheckCircle, XCircle, TrendingUp, Calendar } from 'lucide-react';
+import { Clock, CheckCircle, XCircle, TrendingUp, Calendar, UserCheck, AlertCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { cs } from 'date-fns/locale';
 
@@ -19,11 +19,17 @@ const Shifts = () => {
   const { 
     shifts, 
     openShifts, 
-    myShifts, 
-    claimShift, 
+    myShifts,
+    pendingShifts,
+    requestShift,
+    approveShift,
+    rejectShift,
     completeShift, 
+    cancelRequest,
     cancelShift,
-    isClaiming,
+    isRequesting,
+    isApproving,
+    isRejecting,
     totalHoursWorked,
     totalEarnings,
     isLoading 
@@ -35,15 +41,66 @@ const Shifts = () => {
   const [hoursWorked, setHoursWorked] = useState('');
   const [notes, setNotes] = useState('');
 
-  const handleClaimShift = async (shiftId: string) => {
+  const handleRequestShift = async (shiftId: string) => {
     try {
-      await claimShift(shiftId);
+      await requestShift(shiftId);
       toast({
-        title: 'Směna přijata!',
-        description: 'Úspěšně jste si vzali tuto směnu.',
+        title: 'Přihláška odeslána!',
+        description: 'Čeká na schválení adminem.',
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Nepodařilo se převzít směnu.';
+      const message = error instanceof Error ? error.message : 'Nepodařilo se přihlásit na směnu.';
+      toast({
+        title: 'Chyba',
+        description: message,
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleApproveShift = async (shiftId: string) => {
+    try {
+      await approveShift(shiftId);
+      toast({
+        title: 'Směna schválena!',
+        description: 'Brigádník byl přiřazen na směnu.',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nepodařilo se schválit směnu.';
+      toast({
+        title: 'Chyba',
+        description: message,
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleRejectShift = async (shiftId: string) => {
+    try {
+      await rejectShift(shiftId);
+      toast({
+        title: 'Přihláška odmítnuta',
+        description: 'Směna je opět volná.',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nepodařilo se odmítnout přihlášku.';
+      toast({
+        title: 'Chyba',
+        description: message,
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleCancelRequest = async (shiftId: string) => {
+    try {
+      await cancelRequest(shiftId);
+      toast({
+        title: 'Přihláška zrušena',
+        description: 'Směna je nyní opět volná.',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nepodařilo se zrušit přihlášku.';
       toast({
         title: 'Chyba',
         description: message,
@@ -109,16 +166,22 @@ const Shifts = () => {
 
   const statusLabels: Record<string, string> = {
     open: 'Volná',
-    claimed: 'Obsazená',
+    pending: 'Čeká na schválení',
+    claimed: 'Schválená',
     completed: 'Dokončená',
     cancelled: 'Zrušená',
   };
 
   const statusColors: Record<string, string> = {
     open: 'bg-green-500',
+    pending: 'bg-yellow-500',
     claimed: 'bg-blue-500',
     completed: 'bg-gray-500',
     cancelled: 'bg-red-500',
+  };
+
+  const getStaffName = (shift: any) => {
+    return shift.claimed_profile?.full_name || 'Neznámý brigádník';
   };
 
   if (isLoading) {
@@ -149,7 +212,7 @@ const Shifts = () => {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-green-600">{openShifts.length}</div>
-              <p className="text-xs text-muted-foreground">k dispozici k převzetí</p>
+              <p className="text-xs text-muted-foreground">k dispozici k přihlášení</p>
             </CardContent>
           </Card>
 
@@ -178,10 +241,20 @@ const Shifts = () => {
       )}
 
       {/* Tabs */}
-      <Tabs defaultValue={isStaff ? 'available' : 'all'} className="w-full">
+      <Tabs defaultValue={isAdmin ? (pendingShifts.length > 0 ? 'pending' : 'all') : 'available'} className="w-full">
         <TabsList className="w-full sm:w-auto grid grid-cols-2 sm:flex">
           {isStaff && <TabsTrigger value="available" className="text-xs sm:text-sm">Volné směny</TabsTrigger>}
           {isStaff && <TabsTrigger value="my" className="text-xs sm:text-sm">Moje směny</TabsTrigger>}
+          {isAdmin && (
+            <TabsTrigger value="pending" className="text-xs sm:text-sm relative">
+              Čekající
+              {pendingShifts.length > 0 && (
+                <span className="ml-1 inline-flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-yellow-500 rounded-full">
+                  {pendingShifts.length}
+                </span>
+              )}
+            </TabsTrigger>
+          )}
           {isAdmin && <TabsTrigger value="all" className="text-xs sm:text-sm">Všechny směny</TabsTrigger>}
         </TabsList>
 
@@ -217,11 +290,11 @@ const Shifts = () => {
                         <p className="font-medium text-sm">{shift.hourly_rate} Kč/h</p>
                       </div>
                       <Button 
-                        onClick={() => handleClaimShift(shift.id)} 
-                        disabled={isClaiming}
+                        onClick={() => handleRequestShift(shift.id)} 
+                        disabled={isRequesting}
                         className="whitespace-nowrap"
                       >
-                        {isClaiming ? 'Zpracování...' : 'Vzít směnu'}
+                        {isRequesting ? 'Zpracování...' : 'Přihlásit se'}
                       </Button>
                     </div>
                   </CardContent>
@@ -263,9 +336,23 @@ const Shifts = () => {
                       </div>
                     </div>
                     <div className="flex items-center gap-2 flex-wrap ml-6 sm:ml-0">
-                      <Badge variant={shift.status === 'completed' ? 'default' : 'secondary'}>
+                      <Badge 
+                        variant={shift.status === 'completed' ? 'default' : shift.status === 'pending' ? 'outline' : 'secondary'}
+                        className={shift.status === 'pending' ? 'border-yellow-500 text-yellow-600' : ''}
+                      >
                         {statusLabels[shift.status]}
                       </Badge>
+                      {shift.status === 'pending' && (
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          onClick={() => handleCancelRequest(shift.id)}
+                          className="h-8"
+                        >
+                          <XCircle className="h-4 w-4 mr-1" />
+                          <span className="hidden sm:inline">Zrušit přihlášku</span>
+                        </Button>
+                      )}
                       {shift.status === 'claimed' && (
                         <>
                           <Button 
@@ -295,6 +382,69 @@ const Shifts = () => {
           </TabsContent>
         )}
 
+        {/* Pending Shifts (Admin) */}
+        {isAdmin && (
+          <TabsContent value="pending" className="space-y-4">
+            {pendingShifts.length === 0 ? (
+              <Card>
+                <CardContent className="flex flex-col items-center justify-center py-12">
+                  <UserCheck className="h-12 w-12 text-muted-foreground mb-4" />
+                  <p className="text-muted-foreground">Žádné přihlášky čekající na schválení.</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <AlertCircle className="h-5 w-5 text-yellow-500" />
+                    Čekající přihlášky
+                  </CardTitle>
+                  <CardDescription>Brigádníci čekající na schválení směny</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {pendingShifts.map((shift) => (
+                    <div key={shift.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-lg bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-900 gap-4">
+                      <div className="flex items-start gap-4">
+                        <div className={`w-3 h-3 rounded-full mt-1.5 ${statusColors.pending}`} />
+                        <div>
+                          <p className="font-medium">{shift.event?.title || 'Směna'}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {shift.event && format(new Date(shift.event.start_time), 'd. MMMM yyyy, HH:mm', { locale: cs })}
+                          </p>
+                          <p className="text-sm font-medium text-yellow-700 dark:text-yellow-400 mt-1">
+                            Brigádník: {getStaffName(shift)}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 ml-7 sm:ml-0">
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          onClick={() => handleRejectShift(shift.id)}
+                          disabled={isRejecting}
+                          className="text-red-600 border-red-300 hover:bg-red-50"
+                        >
+                          <XCircle className="h-4 w-4 mr-1" />
+                          Odmítnout
+                        </Button>
+                        <Button 
+                          size="sm"
+                          onClick={() => handleApproveShift(shift.id)}
+                          disabled={isApproving}
+                          className="bg-green-600 hover:bg-green-700"
+                        >
+                          <CheckCircle className="h-4 w-4 mr-1" />
+                          Schválit
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+        )}
+
         {/* All Shifts (Admin) */}
         {isAdmin && (
           <TabsContent value="all" className="space-y-4">
@@ -306,7 +456,7 @@ const Shifts = () => {
               <CardContent>
                 <div className="space-y-4">
                   {shifts.map((shift) => (
-                    <div key={shift.id} className="flex items-center justify-between p-4 rounded-lg bg-accent/50">
+                    <div key={shift.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-lg bg-accent/50 gap-2">
                       <div className="flex items-center gap-4">
                         <div className={`w-3 h-3 rounded-full ${statusColors[shift.status]}`} />
                         <div>
@@ -314,9 +464,14 @@ const Shifts = () => {
                           <p className="text-sm text-muted-foreground">
                             {shift.event && format(new Date(shift.event.start_time), 'd. MMMM yyyy, HH:mm', { locale: cs })}
                           </p>
+                          {shift.claimed_by && (
+                            <p className="text-sm text-muted-foreground">
+                              Brigádník: {getStaffName(shift)}
+                            </p>
+                          )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-4 ml-7 sm:ml-0">
                         <Badge variant="outline">{statusLabels[shift.status]}</Badge>
                         {shift.hours_worked && (
                           <span className="text-sm">{shift.hours_worked} h</span>
