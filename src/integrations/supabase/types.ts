@@ -122,6 +122,51 @@ export type Database = {
         }
         Relationships: []
       }
+      payouts: {
+        Row: {
+          amount: number
+          created_at: string | null
+          created_by: string | null
+          id: string
+          notes: string | null
+          paid_at: string | null
+          user_id: string
+        }
+        Insert: {
+          amount: number
+          created_at?: string | null
+          created_by?: string | null
+          id?: string
+          notes?: string | null
+          paid_at?: string | null
+          user_id: string
+        }
+        Update: {
+          amount?: number
+          created_at?: string | null
+          created_by?: string | null
+          id?: string
+          notes?: string | null
+          paid_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "payouts_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "payouts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           avatar_url: string | null
@@ -156,36 +201,42 @@ export type Database = {
         Row: {
           claimed_at: string | null
           claimed_by: string | null
+          completed_at: string | null
           created_at: string
           event_id: string
           hourly_rate: number | null
           hours_worked: number | null
           id: string
           notes: string | null
+          payout_id: string | null
           status: Database["public"]["Enums"]["shift_status"]
           updated_at: string
         }
         Insert: {
           claimed_at?: string | null
           claimed_by?: string | null
+          completed_at?: string | null
           created_at?: string
           event_id: string
           hourly_rate?: number | null
           hours_worked?: number | null
           id?: string
           notes?: string | null
+          payout_id?: string | null
           status?: Database["public"]["Enums"]["shift_status"]
           updated_at?: string
         }
         Update: {
           claimed_at?: string | null
           claimed_by?: string | null
+          completed_at?: string | null
           created_at?: string
           event_id?: string
           hourly_rate?: number | null
           hours_worked?: number | null
           id?: string
           notes?: string | null
+          payout_id?: string | null
           status?: Database["public"]["Enums"]["shift_status"]
           updated_at?: string
         }
@@ -195,6 +246,13 @@ export type Database = {
             columns: ["event_id"]
             isOneToOne: false
             referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "shifts_payout_id_fkey"
+            columns: ["payout_id"]
+            isOneToOne: false
+            referencedRelation: "payouts"
             referencedColumns: ["id"]
           },
         ]
