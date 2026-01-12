@@ -37,10 +37,23 @@ export const useShifts = () => {
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        // Parse specific error messages from trigger
+        if (error.message.includes('již byla obsazena')) {
+          throw new Error('Směna již byla obsazena někým jiným.');
+        }
+        if (error.message.includes('již máte jinou směnu')) {
+          throw new Error('Na této akci již máte jinou směnu.');
+        }
+        throw new Error('Nepodařilo se převzít směnu.');
+      }
       return data;
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['shifts'] });
+    },
+    onError: () => {
+      // Refetch to sync state after error
       queryClient.invalidateQueries({ queryKey: ['shifts'] });
     },
   });
@@ -62,7 +75,7 @@ export const useShifts = () => {
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) throw new Error('Nepodařilo se dokončit směnu.');
       return data;
     },
     onSuccess: () => {
@@ -83,10 +96,18 @@ export const useShifts = () => {
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        if (error.message.includes('cizí směnu')) {
+          throw new Error('Nemůžete zrušit cizí směnu.');
+        }
+        throw new Error('Nepodařilo se zrušit směnu.');
+      }
       return data;
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['shifts'] });
+    },
+    onError: () => {
       queryClient.invalidateQueries({ queryKey: ['shifts'] });
     },
   });

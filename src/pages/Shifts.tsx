@@ -43,9 +43,10 @@ const Shifts = () => {
         description: 'Úspěšně jste si vzali tuto směnu.',
       });
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nepodařilo se převzít směnu.';
       toast({
         title: 'Chyba',
-        description: 'Směna již byla obsazena někým jiným.',
+        description: message,
         variant: 'destructive',
       });
     }
@@ -59,9 +60,10 @@ const Shifts = () => {
         description: 'Směna je nyní opět volná.',
       });
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nepodařilo se zrušit směnu.';
       toast({
         title: 'Chyba',
-        description: 'Nepodařilo se zrušit směnu.',
+        description: message,
         variant: 'destructive',
       });
     }
