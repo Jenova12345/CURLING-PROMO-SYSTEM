@@ -10,10 +10,12 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
-import { Clock, CheckCircle, XCircle, TrendingUp, Calendar, UserCheck, AlertCircle, Wallet, DollarSign, History } from 'lucide-react';
-import { format } from 'date-fns';
+import { Clock, CheckCircle, XCircle, TrendingUp, Calendar, UserCheck, AlertCircle, Wallet, DollarSign, History, Users, BarChart3, Download } from 'lucide-react';
+import { format, startOfMonth, endOfMonth, subMonths, isWithinInterval } from 'date-fns';
 import { cs } from 'date-fns/locale';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
 const Shifts = () => {
   const { isAdmin, isStaff, user } = useAuth();
@@ -25,6 +27,7 @@ const Shifts = () => {
     pendingShifts,
     shiftsToComplete,
     staffUnpaidAmounts,
+    adminStats,
     requestShift,
     approveShift,
     rejectShift,
@@ -339,6 +342,7 @@ const Shifts = () => {
               )}
             </TabsTrigger>
           )}
+          {isAdmin && <TabsTrigger value="stats" className="text-xs sm:text-sm">Statistiky</TabsTrigger>}
           {isAdmin && <TabsTrigger value="all" className="text-xs sm:text-sm">Všechny směny</TabsTrigger>}
         </TabsList>
 
@@ -721,6 +725,222 @@ const Shifts = () => {
                         </div>
                       </div>
                     ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
+
+        {/* Statistics (Admin) */}
+        {isAdmin && (
+          <TabsContent value="stats" className="space-y-6">
+            {/* Overview Cards */}
+            <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Celkem vyplaceno</CardTitle>
+                  <DollarSign className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-green-600">
+                    {payouts.reduce((sum, p) => sum + Number(p.amount), 0).toLocaleString('cs-CZ')} Kč
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Celkem odpracováno</CardTitle>
+                  <Clock className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{adminStats.totalHoursAllStaff} h</div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">K vyplacení</CardTitle>
+                  <Wallet className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-orange-600">
+                    {adminStats.unpaidTotal.toLocaleString('cs-CZ')} Kč
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Aktivní brigádníci</CardTitle>
+                  <Users className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{adminStats.activeStaffCount}</div>
+                  <p className="text-xs text-muted-foreground">{adminStats.completedShiftsCount} směn celkem</p>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Charts */}
+            <div className="grid gap-6 lg:grid-cols-2">
+              {/* Hours by Staff */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <BarChart3 className="h-5 w-5" />
+                    Odpracované hodiny
+                  </CardTitle>
+                  <CardDescription>Rozložení hodin mezi brigádníky</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {adminStats.staffStats.length === 0 ? (
+                    <p className="text-muted-foreground text-center py-8">Zatím nejsou žádná data.</p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={250}>
+                      <BarChart data={adminStats.staffStats}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="staffName" tick={{ fontSize: 12 }} />
+                        <YAxis tick={{ fontSize: 12 }} />
+                        <Tooltip 
+                          formatter={(value: number) => [`${value} h`, 'Hodiny']}
+                          labelFormatter={(label) => label}
+                        />
+                        <Bar dataKey="hoursWorked" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Earnings Distribution */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <TrendingUp className="h-5 w-5" />
+                    Výdělky brigádníků
+                  </CardTitle>
+                  <CardDescription>Rozdělení celkových výdělků</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {adminStats.staffStats.length === 0 ? (
+                    <p className="text-muted-foreground text-center py-8">Zatím nejsou žádná data.</p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={250}>
+                      <PieChart>
+                        <Pie
+                          data={adminStats.staffStats}
+                          dataKey="totalEarnings"
+                          nameKey="staffName"
+                          cx="50%"
+                          cy="50%"
+                          outerRadius={80}
+                          label={({ staffName, percent }) => `${staffName}: ${(percent * 100).toFixed(0)}%`}
+                        >
+                          {adminStats.staffStats.map((_, index) => (
+                            <Cell 
+                              key={`cell-${index}`} 
+                              fill={[
+                                'hsl(var(--primary))',
+                                'hsl(var(--secondary))',
+                                '#22c55e',
+                                '#f59e0b',
+                                '#ef4444',
+                                '#8b5cf6',
+                              ][index % 6]} 
+                            />
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(value: number) => `${value.toLocaleString('cs-CZ')} Kč`} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Staff Table */}
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle>Přehled brigádníků</CardTitle>
+                  <CardDescription>Detailní statistiky pro každého brigádníka</CardDescription>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const csv = [
+                      ['Brigádník', 'Směn', 'Hodin', 'Celkem Kč', 'Vyplaceno Kč', 'K výplatě Kč'],
+                      ...adminStats.staffStats.map(s => [
+                        s.staffName,
+                        s.shiftsCount,
+                        s.hoursWorked,
+                        s.totalEarnings,
+                        s.paidAmount,
+                        s.unpaidAmount,
+                      ])
+                    ].map(row => row.join(',')).join('\n');
+                    
+                    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(blob);
+                    link.download = `brigádníci-statistiky-${format(new Date(), 'yyyy-MM-dd')}.csv`;
+                    link.click();
+                  }}
+                >
+                  <Download className="h-4 w-4 mr-1" />
+                  Export CSV
+                </Button>
+              </CardHeader>
+              <CardContent>
+                {adminStats.staffStats.length === 0 ? (
+                  <p className="text-muted-foreground text-center py-8">Zatím nejsou žádní brigádníci s dokončenými směnami.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Brigádník</TableHead>
+                          <TableHead className="text-right">Směn</TableHead>
+                          <TableHead className="text-right">Hodin</TableHead>
+                          <TableHead className="text-right">Celkem</TableHead>
+                          <TableHead className="text-right">Vyplaceno</TableHead>
+                          <TableHead className="text-right">K výplatě</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {adminStats.staffStats.map((staff) => (
+                          <TableRow key={staff.staffId}>
+                            <TableCell className="font-medium">{staff.staffName}</TableCell>
+                            <TableCell className="text-right">{staff.shiftsCount}</TableCell>
+                            <TableCell className="text-right">{staff.hoursWorked} h</TableCell>
+                            <TableCell className="text-right">{staff.totalEarnings.toLocaleString('cs-CZ')} Kč</TableCell>
+                            <TableCell className="text-right text-green-600">{staff.paidAmount.toLocaleString('cs-CZ')} Kč</TableCell>
+                            <TableCell className="text-right">
+                              {staff.unpaidAmount > 0 ? (
+                                <span className="text-orange-600 font-medium">{staff.unpaidAmount.toLocaleString('cs-CZ')} Kč</span>
+                              ) : (
+                                <span className="text-muted-foreground">0 Kč</span>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                        <TableRow className="font-bold bg-accent/50">
+                          <TableCell>Celkem</TableCell>
+                          <TableCell className="text-right">{adminStats.completedShiftsCount}</TableCell>
+                          <TableCell className="text-right">{adminStats.totalHoursAllStaff} h</TableCell>
+                          <TableCell className="text-right">{adminStats.totalEarningsAllStaff.toLocaleString('cs-CZ')} Kč</TableCell>
+                          <TableCell className="text-right text-green-600">
+                            {payouts.reduce((sum, p) => sum + Number(p.amount), 0).toLocaleString('cs-CZ')} Kč
+                          </TableCell>
+                          <TableCell className="text-right text-orange-600">
+                            {adminStats.unpaidTotal.toLocaleString('cs-CZ')} Kč
+                          </TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
                   </div>
                 )}
               </CardContent>
