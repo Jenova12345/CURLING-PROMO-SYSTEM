@@ -91,8 +91,19 @@ export const useShifts = () => {
     },
   });
 
-  const openShifts = shifts.filter(s => s.status === 'open');
   const myShifts = shifts.filter(s => s.claimed_by === user?.id);
+  
+  // Get event IDs where the user already has a claimed or completed shift
+  const myEventIds = new Set(
+    myShifts
+      .filter(s => s.status === 'claimed' || s.status === 'completed')
+      .map(s => s.event_id)
+  );
+  
+  // Filter open shifts - exclude events where user already has a shift
+  const openShifts = shifts.filter(s => 
+    s.status === 'open' && !myEventIds.has(s.event_id)
+  );
   const myCompletedShifts = myShifts.filter(s => s.status === 'completed');
   
   const totalHoursWorked = myCompletedShifts.reduce(
