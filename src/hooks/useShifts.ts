@@ -3,7 +3,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 
 export const useShifts = () => {
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   const queryClient = useQueryClient();
 
   const { data: shifts = [], isLoading } = useQuery({
@@ -13,7 +13,8 @@ export const useShifts = () => {
         .from('shifts')
         .select(`
           *,
-          event:events(*)
+          event:events(*),
+          claimed_profile:profiles!shifts_claimed_by_fkey(full_name)
         `)
         .order('created_at', { ascending: false });
 
@@ -23,12 +24,13 @@ export const useShifts = () => {
     enabled: !!user,
   });
 
-  const claimShift = useMutation({
+  // Staff requests a shift (open -> pending)
+  const requestShift = useMutation({
     mutationFn: async (shiftId: string) => {
       const { data, error } = await supabase
         .from('shifts')
         .update({
-          status: 'claimed',
+          status: 'pending',
           claimed_by: user?.id,
           claimed_at: new Date().toISOString(),
         })
@@ -38,14 +40,13 @@ export const useShifts = () => {
         .single();
 
       if (error) {
-        // Parse specific error messages from trigger
         if (error.message.includes('již byla obsazena')) {
           throw new Error('Směna již byla obsazena někým jiným.');
         }
         if (error.message.includes('již máte jinou směnu')) {
           throw new Error('Na této akci již máte jinou směnu.');
         }
-        throw new Error('Nepodařilo se převzít směnu.');
+        throw new Error('Nepodařilo se přihlásit na směnu.');
       }
       return data;
     },
@@ -53,7 +54,54 @@ export const useShifts = () => {
       queryClient.invalidateQueries({ queryKey: ['shifts'] });
     },
     onError: () => {
-      // Refetch to sync state after error
+      queryClient.invalidateQueries({ queryKey: ['shifts'] });
+    },
+  });
+
+  // Admin approves shift (pending -> claimed)
+  const approveShift = useMutation({
+    mutationFn: async (shiftId: string) => {
+      const { data, error } = await supabase
+        .from('shifts')
+        .update({
+          status: 'claimed',
+        })
+        .eq('id', shiftId)
+        .eq('status', 'pending')
+        .select()
+        .single();
+
+      if (error) {
+        throw new Error('Nepodařilo se schválit směnu.');
+      }
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['shifts'] });
+    },
+  });
+
+  // Admin rejects shift (pending -> open)
+  const rejectShift = useMutation({
+    mutationFn: async (shiftId: string) => {
+      const { data, error } = await supabase
+        .from('shifts')
+        .update({
+          status: 'open',
+          claimed_by: null,
+          claimed_at: null,
+        })
+        .eq('id', shiftId)
+        .eq('status', 'pending')
+        .select()
+        .single();
+
+      if (error) {
+        throw new Error('Nepodařilo se odmítnout přihlášku.');
+      }
+      return data;
+    },
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['shifts'] });
     },
   });
@@ -83,6 +131,37 @@ export const useShifts = () => {
     },
   });
 
+  // Staff cancels their pending request
+  const cancelRequest = useMutation({
+    mutationFn: async (shiftId: string) => {
+      const { data, error } = await supabase
+        .from('shifts')
+        .update({
+          status: 'open',
+          claimed_by: null,
+          claimed_at: null,
+        })
+        .eq('id', shiftId)
+        .select()
+        .single();
+
+      if (error) {
+        if (error.message.includes('cizí přihlášku')) {
+          throw new Error('Nemůžete zrušit cizí přihlášku.');
+        }
+        throw new Error('Nepodařilo se zrušit přihlášku.');
+      }
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['shifts'] });
+    },
+    onError: () => {
+      queryClient.invalidateQueries({ queryKey: ['shifts'] });
+    },
+  });
+
+  // Cancel claimed shift
   const cancelShift = useMutation({
     mutationFn: async (shiftId: string) => {
       const { data, error } = await supabase
@@ -114,10 +193,10 @@ export const useShifts = () => {
 
   const myShifts = shifts.filter(s => s.claimed_by === user?.id);
   
-  // Get event IDs where the user already has a claimed or completed shift
+  // Get event IDs where the user already has a pending, claimed or completed shift
   const myEventIds = new Set(
     myShifts
-      .filter(s => s.status === 'claimed' || s.status === 'completed')
+      .filter(s => s.status === 'pending' || s.status === 'claimed' || s.status === 'completed')
       .map(s => s.event_id)
   );
   
@@ -125,6 +204,10 @@ export const useShifts = () => {
   const openShifts = shifts.filter(s => 
     s.status === 'open' && !myEventIds.has(s.event_id)
   );
+  
+  // Pending shifts for admin approval
+  const pendingShifts = shifts.filter(s => s.status === 'pending');
+  
   const myCompletedShifts = myShifts.filter(s => s.status === 'completed');
   
   const totalHoursWorked = myCompletedShifts.reduce(
@@ -141,11 +224,17 @@ export const useShifts = () => {
     shifts,
     openShifts,
     myShifts,
+    pendingShifts,
     isLoading,
-    claimShift: claimShift.mutateAsync,
+    requestShift: requestShift.mutateAsync,
+    approveShift: approveShift.mutateAsync,
+    rejectShift: rejectShift.mutateAsync,
     completeShift: completeShift.mutateAsync,
+    cancelRequest: cancelRequest.mutateAsync,
     cancelShift: cancelShift.mutateAsync,
-    isClaiming: claimShift.isPending,
+    isRequesting: requestShift.isPending,
+    isApproving: approveShift.isPending,
+    isRejecting: rejectShift.isPending,
     totalHoursWorked,
     totalEarnings,
   };
