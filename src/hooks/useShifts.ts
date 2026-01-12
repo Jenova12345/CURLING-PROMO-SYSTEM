@@ -293,6 +293,51 @@ export const useShifts = () => {
       return acc;
     }, {} as Record<string, { staffId: string; staffName: string; amount: number; shiftCount: number }>);
 
+  // Admin statistics
+  const allCompletedShifts = shifts.filter(s => s.status === 'completed');
+  
+  const adminStats = {
+    totalPaidOut: 0, // Will be calculated from payouts in component
+    totalHoursAllStaff: allCompletedShifts.reduce((sum, s) => sum + (Number(s.hours_worked) || 0), 0),
+    totalEarningsAllStaff: allCompletedShifts.reduce((sum, s) => sum + (Number(s.hours_worked) || 0) * (Number(s.hourly_rate) || 150), 0),
+    unpaidTotal: allCompletedShifts.filter(s => !s.payout_id).reduce((sum, s) => sum + (Number(s.hours_worked) || 0) * (Number(s.hourly_rate) || 150), 0),
+    activeStaffCount: new Set(allCompletedShifts.map(s => s.claimed_by)).size,
+    completedShiftsCount: allCompletedShifts.length,
+    
+    // Per-staff breakdown
+    staffStats: allCompletedShifts.reduce((acc, shift) => {
+      const staffId = shift.claimed_by;
+      if (!staffId) return acc;
+      
+      const hours = Number(shift.hours_worked) || 0;
+      const earnings = hours * (Number(shift.hourly_rate) || 150);
+      const isPaid = !!shift.payout_id;
+      
+      if (!acc[staffId]) {
+        acc[staffId] = {
+          staffId,
+          staffName: shift.claimed_profile?.full_name || 'Neznámý',
+          shiftsCount: 0,
+          hoursWorked: 0,
+          totalEarnings: 0,
+          paidAmount: 0,
+          unpaidAmount: 0,
+        };
+      }
+      
+      acc[staffId].shiftsCount += 1;
+      acc[staffId].hoursWorked += hours;
+      acc[staffId].totalEarnings += earnings;
+      if (isPaid) {
+        acc[staffId].paidAmount += earnings;
+      } else {
+        acc[staffId].unpaidAmount += earnings;
+      }
+      
+      return acc;
+    }, {} as Record<string, { staffId: string; staffName: string; shiftsCount: number; hoursWorked: number; totalEarnings: number; paidAmount: number; unpaidAmount: number }>),
+  };
+
   return {
     shifts,
     openShifts,
@@ -301,6 +346,10 @@ export const useShifts = () => {
     pendingShifts,
     shiftsToComplete,
     staffUnpaidAmounts: Object.values(staffUnpaidAmounts),
+    adminStats: {
+      ...adminStats,
+      staffStats: Object.values(adminStats.staffStats),
+    },
     isLoading,
     requestShift: requestShift.mutateAsync,
     approveShift: approveShift.mutateAsync,

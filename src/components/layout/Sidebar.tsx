@@ -46,6 +46,18 @@ const Sidebar = () => {
       roles: ['admin', 'part_time_staff']
     },
     { 
+      path: '/shift-calendar', 
+      label: 'Kalendář směn', 
+      icon: Calendar,
+      roles: ['admin', 'part_time_staff']
+    },
+    { 
+      path: '/profile', 
+      label: 'Můj profil', 
+      icon: User,
+      roles: ['admin', 'trainer', 'part_time_staff', 'pro_player', 'hobby_player']
+    },
+    { 
       path: '/notifications', 
       label: 'Oznámení', 
       icon: Bell,
