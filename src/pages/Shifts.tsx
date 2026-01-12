@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useShifts } from '@/hooks/useShifts';
+import { usePayouts } from '@/hooks/usePayouts';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -10,7 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
-import { Clock, CheckCircle, XCircle, TrendingUp, Calendar, UserCheck, AlertCircle } from 'lucide-react';
+import { Clock, CheckCircle, XCircle, TrendingUp, Calendar, UserCheck, AlertCircle, Wallet, DollarSign, History } from 'lucide-react';
 import { format } from 'date-fns';
 import { cs } from 'date-fns/locale';
 
@@ -20,7 +21,10 @@ const Shifts = () => {
     shifts, 
     openShifts, 
     myShifts,
+    myUnpaidShifts,
     pendingShifts,
+    shiftsToComplete,
+    staffUnpaidAmounts,
     requestShift,
     approveShift,
     rejectShift,
@@ -30,16 +34,25 @@ const Shifts = () => {
     isRequesting,
     isApproving,
     isRejecting,
+    isCompleting,
     totalHoursWorked,
-    totalEarnings,
+    unpaidEarnings,
     isLoading 
   } = useShifts();
+  const { payouts, myPayouts, createPayout, isCreatingPayout } = usePayouts();
   const { toast } = useToast();
 
+  // Complete shift dialog (admin)
   const [completeDialogOpen, setCompleteDialogOpen] = useState(false);
-  const [selectedShiftId, setSelectedShiftId] = useState<string | null>(null);
+  const [selectedShift, setSelectedShift] = useState<any>(null);
   const [hoursWorked, setHoursWorked] = useState('');
+  const [hourlyRate, setHourlyRate] = useState('');
   const [notes, setNotes] = useState('');
+
+  // Payout dialog (admin)
+  const [payoutDialogOpen, setPayoutDialogOpen] = useState(false);
+  const [selectedStaff, setSelectedStaff] = useState<{ staffId: string; staffName: string; amount: number } | null>(null);
+  const [payoutNotes, setPayoutNotes] = useState('');
 
   const handleRequestShift = async (shiftId: string) => {
     try {
@@ -126,16 +139,25 @@ const Shifts = () => {
     }
   };
 
-  const openCompleteDialog = (shiftId: string) => {
-    setSelectedShiftId(shiftId);
+  const openCompleteDialog = (shift: any) => {
+    setSelectedShift(shift);
+    // Pre-fill with event duration
+    if (shift.event?.start_time && shift.event?.end_time) {
+      const start = new Date(shift.event.start_time);
+      const end = new Date(shift.event.end_time);
+      const hours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
+      setHoursWorked(hours.toFixed(1));
+    }
+    setHourlyRate(shift.hourly_rate?.toString() || '150');
+    setNotes('');
     setCompleteDialogOpen(true);
   };
 
   const handleCompleteShift = async () => {
-    if (!selectedShiftId || !hoursWorked) {
+    if (!selectedShift || !hoursWorked || !hourlyRate) {
       toast({
         title: 'Chyba',
-        description: 'Vyplňte počet odpracovaných hodin.',
+        description: 'Vyplňte počet odpracovaných hodin a hodinovou sazbu.',
         variant: 'destructive',
       });
       return;
@@ -143,22 +165,57 @@ const Shifts = () => {
 
     try {
       await completeShift({
-        shiftId: selectedShiftId,
+        shiftId: selectedShift.id,
         hoursWorked: parseFloat(hoursWorked),
+        hourlyRate: parseFloat(hourlyRate),
         notes: notes || undefined,
       });
       toast({
         title: 'Směna dokončena',
-        description: 'Hodiny byly zaznamenány.',
+        description: 'Hodiny a částka byly zaznamenány.',
       });
       setCompleteDialogOpen(false);
+      setSelectedShift(null);
       setHoursWorked('');
+      setHourlyRate('');
       setNotes('');
-      setSelectedShiftId(null);
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nepodařilo se dokončit směnu.';
       toast({
         title: 'Chyba',
-        description: 'Nepodařilo se dokončit směnu.',
+        description: message,
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const openPayoutDialog = (staff: { staffId: string; staffName: string; amount: number }) => {
+    setSelectedStaff(staff);
+    setPayoutNotes('');
+    setPayoutDialogOpen(true);
+  };
+
+  const handlePayout = async () => {
+    if (!selectedStaff) return;
+
+    try {
+      await createPayout({
+        userId: selectedStaff.staffId,
+        amount: selectedStaff.amount,
+        notes: payoutNotes || undefined,
+      });
+      toast({
+        title: 'Výplata provedena!',
+        description: `${selectedStaff.staffName} obdržel ${selectedStaff.amount.toLocaleString('cs-CZ')} Kč.`,
+      });
+      setPayoutDialogOpen(false);
+      setSelectedStaff(null);
+      setPayoutNotes('');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nepodařilo se provést výplatu.';
+      toast({
+        title: 'Chyba',
+        description: message,
         variant: 'destructive',
       });
     }
@@ -182,6 +239,12 @@ const Shifts = () => {
 
   const getStaffName = (shift: any) => {
     return shift.claimed_profile?.full_name || 'Neznámý brigádník';
+  };
+
+  const calculateTotal = () => {
+    const hours = parseFloat(hoursWorked) || 0;
+    const rate = parseFloat(hourlyRate) || 0;
+    return (hours * rate).toLocaleString('cs-CZ');
   };
 
   if (isLoading) {
@@ -223,28 +286,29 @@ const Shifts = () => {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{totalHoursWorked} h</div>
-              <p className="text-xs text-muted-foreground">tento měsíc</p>
+              <p className="text-xs text-muted-foreground">celkem dokončeno</p>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">K výplatě</CardTitle>
-              <CheckCircle className="h-4 w-4 text-muted-foreground" />
+              <Wallet className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{totalEarnings.toLocaleString('cs-CZ')} Kč</div>
-              <p className="text-xs text-muted-foreground">tento měsíc</p>
+              <div className="text-2xl font-bold text-green-600">{unpaidEarnings.toLocaleString('cs-CZ')} Kč</div>
+              <p className="text-xs text-muted-foreground">{myUnpaidShifts.length} nevyplacených směn</p>
             </CardContent>
           </Card>
         </div>
       )}
 
       {/* Tabs */}
-      <Tabs defaultValue={isAdmin ? (pendingShifts.length > 0 ? 'pending' : 'all') : 'available'} className="w-full">
-        <TabsList className="w-full sm:w-auto grid grid-cols-2 sm:flex">
+      <Tabs defaultValue={isAdmin ? (pendingShifts.length > 0 ? 'pending' : shiftsToComplete.length > 0 ? 'complete' : 'all') : 'available'} className="w-full">
+        <TabsList className="w-full sm:w-auto grid grid-cols-2 sm:flex flex-wrap">
           {isStaff && <TabsTrigger value="available" className="text-xs sm:text-sm">Volné směny</TabsTrigger>}
           {isStaff && <TabsTrigger value="my" className="text-xs sm:text-sm">Moje směny</TabsTrigger>}
+          {isStaff && <TabsTrigger value="payouts" className="text-xs sm:text-sm">Výplaty</TabsTrigger>}
           {isAdmin && (
             <TabsTrigger value="pending" className="text-xs sm:text-sm relative">
               Čekající
@@ -255,10 +319,30 @@ const Shifts = () => {
               )}
             </TabsTrigger>
           )}
+          {isAdmin && (
+            <TabsTrigger value="complete" className="text-xs sm:text-sm relative">
+              K dokončení
+              {shiftsToComplete.length > 0 && (
+                <span className="ml-1 inline-flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-orange-500 rounded-full">
+                  {shiftsToComplete.length}
+                </span>
+              )}
+            </TabsTrigger>
+          )}
+          {isAdmin && (
+            <TabsTrigger value="payouts" className="text-xs sm:text-sm relative">
+              Výplaty
+              {staffUnpaidAmounts.length > 0 && (
+                <span className="ml-1 inline-flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-green-500 rounded-full">
+                  {staffUnpaidAmounts.length}
+                </span>
+              )}
+            </TabsTrigger>
+          )}
           {isAdmin && <TabsTrigger value="all" className="text-xs sm:text-sm">Všechny směny</TabsTrigger>}
         </TabsList>
 
-        {/* Available Shifts */}
+        {/* Available Shifts (Staff) */}
         {isStaff && (
           <TabsContent value="available" className="space-y-4">
             {openShifts.length === 0 ? (
@@ -304,7 +388,7 @@ const Shifts = () => {
           </TabsContent>
         )}
 
-        {/* My Shifts */}
+        {/* My Shifts (Staff) */}
         {isStaff && (
           <TabsContent value="my" className="space-y-4">
             {myShifts.length === 0 ? (
@@ -315,46 +399,69 @@ const Shifts = () => {
                 </CardContent>
               </Card>
             ) : (
-              myShifts.map((shift) => (
-                <Card key={shift.id}>
-                  <CardContent className="flex flex-col sm:flex-row sm:items-center justify-between p-4 md:p-6 gap-4">
-                    <div className="flex items-start gap-3">
-                      <div className={`w-3 h-3 rounded-full mt-1.5 flex-shrink-0 ${statusColors[shift.status]}`} />
-                      <div>
-                        <p className="font-medium text-base md:text-lg">{shift.event?.title || 'Směna'}</p>
-                        <p className="text-muted-foreground text-sm">
-                          {shift.event && format(new Date(shift.event.start_time), 'EEE d. MMM yyyy', { locale: cs })}
-                        </p>
-                        <p className="text-xs md:text-sm text-muted-foreground">
-                          {shift.event && `${format(new Date(shift.event.start_time), 'HH:mm')} - ${format(new Date(shift.event.end_time), 'HH:mm')}`}
-                        </p>
-                        {shift.status === 'completed' && shift.hours_worked && (
-                          <p className="text-xs md:text-sm text-green-600 mt-1">
-                            Odpracováno: {shift.hours_worked} h ({(Number(shift.hours_worked) * Number(shift.hourly_rate)).toLocaleString('cs-CZ')} Kč)
+              myShifts.map((shift) => {
+                const isPastEvent = shift.event?.end_time && new Date(shift.event.end_time) < new Date();
+                const showWaitingBadge = shift.status === 'claimed' && isPastEvent;
+                
+                return (
+                  <Card key={shift.id}>
+                    <CardContent className="flex flex-col sm:flex-row sm:items-center justify-between p-4 md:p-6 gap-4">
+                      <div className="flex items-start gap-3">
+                        <div className={`w-3 h-3 rounded-full mt-1.5 flex-shrink-0 ${statusColors[shift.status]}`} />
+                        <div>
+                          <p className="font-medium text-base md:text-lg">{shift.event?.title || 'Směna'}</p>
+                          <p className="text-muted-foreground text-sm">
+                            {shift.event && format(new Date(shift.event.start_time), 'EEE d. MMM yyyy', { locale: cs })}
                           </p>
-                        )}
+                          <p className="text-xs md:text-sm text-muted-foreground">
+                            {shift.event && `${format(new Date(shift.event.start_time), 'HH:mm')} - ${format(new Date(shift.event.end_time), 'HH:mm')}`}
+                          </p>
+                          {shift.status === 'completed' && shift.hours_worked && (
+                            <div className="mt-1">
+                              <p className="text-xs md:text-sm text-green-600">
+                                Odpracováno: {shift.hours_worked} h ({(Number(shift.hours_worked) * Number(shift.hourly_rate)).toLocaleString('cs-CZ')} Kč)
+                              </p>
+                              {shift.payout_id ? (
+                                <Badge variant="outline" className="text-xs mt-1 border-green-500 text-green-600">
+                                  <CheckCircle className="h-3 w-3 mr-1" />
+                                  Vyplaceno
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="text-xs mt-1 border-orange-500 text-orange-600">
+                                  <Clock className="h-3 w-3 mr-1" />
+                                  Čeká na výplatu
+                                </Badge>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-2 flex-wrap ml-6 sm:ml-0">
-                      <Badge 
-                        variant={shift.status === 'completed' ? 'default' : shift.status === 'pending' ? 'outline' : 'secondary'}
-                        className={shift.status === 'pending' ? 'border-yellow-500 text-yellow-600' : ''}
-                      >
-                        {statusLabels[shift.status]}
-                      </Badge>
-                      {shift.status === 'pending' && (
-                        <Button 
-                          variant="outline" 
-                          size="sm"
-                          onClick={() => handleCancelRequest(shift.id)}
-                          className="h-8"
-                        >
-                          <XCircle className="h-4 w-4 mr-1" />
-                          <span className="hidden sm:inline">Zrušit přihlášku</span>
-                        </Button>
-                      )}
-                      {shift.status === 'claimed' && (
-                        <>
+                      <div className="flex items-center gap-2 flex-wrap ml-6 sm:ml-0">
+                        {showWaitingBadge ? (
+                          <Badge variant="outline" className="border-orange-500 text-orange-600">
+                            <Clock className="h-3 w-3 mr-1" />
+                            Čeká na dokončení adminem
+                          </Badge>
+                        ) : (
+                          <Badge 
+                            variant={shift.status === 'completed' ? 'default' : shift.status === 'pending' ? 'outline' : 'secondary'}
+                            className={shift.status === 'pending' ? 'border-yellow-500 text-yellow-600' : ''}
+                          >
+                            {statusLabels[shift.status]}
+                          </Badge>
+                        )}
+                        {shift.status === 'pending' && (
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            onClick={() => handleCancelRequest(shift.id)}
+                            className="h-8"
+                          >
+                            <XCircle className="h-4 w-4 mr-1" />
+                            <span className="hidden sm:inline">Zrušit přihlášku</span>
+                          </Button>
+                        )}
+                        {shift.status === 'claimed' && !isPastEvent && (
                           <Button 
                             variant="outline" 
                             size="sm"
@@ -364,21 +471,56 @@ const Shifts = () => {
                             <XCircle className="h-4 w-4 mr-1" />
                             <span className="hidden sm:inline">Zrušit</span>
                           </Button>
-                          <Button 
-                            size="sm"
-                            onClick={() => openCompleteDialog(shift.id)}
-                            className="h-8"
-                          >
-                            <CheckCircle className="h-4 w-4 mr-1" />
-                            <span className="hidden sm:inline">Dokončit</span>
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              ))
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })
             )}
+          </TabsContent>
+        )}
+
+        {/* Payouts (Staff) */}
+        {isStaff && (
+          <TabsContent value="payouts" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <History className="h-5 w-5" />
+                  Historie výplat
+                </CardTitle>
+                <CardDescription>Přehled všech vašich výplat</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {myPayouts.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-8">
+                    <Wallet className="h-12 w-12 text-muted-foreground mb-4" />
+                    <p className="text-muted-foreground">Zatím nemáte žádné výplaty.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {myPayouts.map((payout) => (
+                      <div key={payout.id} className="flex items-center justify-between p-4 rounded-lg bg-accent/50">
+                        <div>
+                          <p className="font-medium">{payout.amount.toLocaleString('cs-CZ')} Kč</p>
+                          <p className="text-sm text-muted-foreground">
+                            {format(new Date(payout.paid_at), 'd. MMMM yyyy', { locale: cs })}
+                          </p>
+                          {payout.notes && (
+                            <p className="text-xs text-muted-foreground mt-1">{payout.notes}</p>
+                          )}
+                        </div>
+                        <Badge variant="outline" className="border-green-500 text-green-600">
+                          <CheckCircle className="h-3 w-3 mr-1" />
+                          Vyplaceno
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </TabsContent>
         )}
 
@@ -445,6 +587,147 @@ const Shifts = () => {
           </TabsContent>
         )}
 
+        {/* Shifts to Complete (Admin) */}
+        {isAdmin && (
+          <TabsContent value="complete" className="space-y-4">
+            {shiftsToComplete.length === 0 ? (
+              <Card>
+                <CardContent className="flex flex-col items-center justify-center py-12">
+                  <CheckCircle className="h-12 w-12 text-muted-foreground mb-4" />
+                  <p className="text-muted-foreground">Žádné směny čekající na dokončení.</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Clock className="h-5 w-5 text-orange-500" />
+                    Směny k dokončení
+                  </CardTitle>
+                  <CardDescription>Směny po skončení akce čekající na zadání hodin</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {shiftsToComplete.map((shift) => (
+                    <div key={shift.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-lg bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-900 gap-4">
+                      <div className="flex items-start gap-4">
+                        <div className={`w-3 h-3 rounded-full mt-1.5 bg-orange-500`} />
+                        <div>
+                          <p className="font-medium">{shift.event?.title || 'Směna'}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {shift.event && format(new Date(shift.event.start_time), 'd. MMMM yyyy, HH:mm', { locale: cs })}
+                          </p>
+                          <p className="text-sm font-medium text-orange-700 dark:text-orange-400 mt-1">
+                            Brigádník: {getStaffName(shift)}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            Sazba: {shift.hourly_rate} Kč/h
+                          </p>
+                        </div>
+                      </div>
+                      <Button 
+                        size="sm"
+                        onClick={() => openCompleteDialog(shift)}
+                        className="ml-7 sm:ml-0"
+                      >
+                        <CheckCircle className="h-4 w-4 mr-1" />
+                        Dokončit směnu
+                      </Button>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+        )}
+
+        {/* Payouts (Admin) */}
+        {isAdmin && (
+          <TabsContent value="payouts" className="space-y-4">
+            {/* Unpaid staff */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <DollarSign className="h-5 w-5 text-green-500" />
+                  K vyplacení
+                </CardTitle>
+                <CardDescription>Brigádníci s nevyplacenými směnami</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {staffUnpaidAmounts.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-8">
+                    <Wallet className="h-12 w-12 text-muted-foreground mb-4" />
+                    <p className="text-muted-foreground">Všichni brigádníci jsou vyplaceni.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {staffUnpaidAmounts.map((staff) => (
+                      <div key={staff.staffId} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-900 gap-4">
+                        <div>
+                          <p className="font-medium">{staff.staffName}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {staff.shiftCount} dokončených směn
+                          </p>
+                          <p className="text-lg font-bold text-green-600 mt-1">
+                            {staff.amount.toLocaleString('cs-CZ')} Kč
+                          </p>
+                        </div>
+                        <Button 
+                          onClick={() => openPayoutDialog(staff)}
+                          className="bg-green-600 hover:bg-green-700"
+                        >
+                          <Wallet className="h-4 w-4 mr-1" />
+                          Vyplatit
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Payout history */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <History className="h-5 w-5" />
+                  Historie výplat
+                </CardTitle>
+                <CardDescription>Přehled všech provedených výplat</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {payouts.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-8">
+                    <History className="h-12 w-12 text-muted-foreground mb-4" />
+                    <p className="text-muted-foreground">Zatím nebyly provedeny žádné výplaty.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {payouts.map((payout) => (
+                      <div key={payout.id} className="flex items-center justify-between p-4 rounded-lg bg-accent/50">
+                        <div>
+                          <p className="font-medium">{(payout as any).profile?.full_name || 'Neznámý'}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {format(new Date(payout.paid_at), 'd. MMMM yyyy, HH:mm', { locale: cs })}
+                          </p>
+                          {payout.notes && (
+                            <p className="text-xs text-muted-foreground mt-1">{payout.notes}</p>
+                          )}
+                        </div>
+                        <div className="text-right">
+                          <p className="text-lg font-bold">{Number(payout.amount).toLocaleString('cs-CZ')} Kč</p>
+                          <p className="text-xs text-muted-foreground">
+                            vyplatil: {(payout as any).created_by_profile?.full_name || 'Systém'}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
+
         {/* All Shifts (Admin) */}
         {isAdmin && (
           <TabsContent value="all" className="space-y-4">
@@ -474,7 +757,7 @@ const Shifts = () => {
                       <div className="flex items-center gap-4 ml-7 sm:ml-0">
                         <Badge variant="outline">{statusLabels[shift.status]}</Badge>
                         {shift.hours_worked && (
-                          <span className="text-sm">{shift.hours_worked} h</span>
+                          <span className="text-sm">{shift.hours_worked} h • {(Number(shift.hours_worked) * Number(shift.hourly_rate)).toLocaleString('cs-CZ')} Kč</span>
                         )}
                       </div>
                     </div>
@@ -486,47 +769,121 @@ const Shifts = () => {
         )}
       </Tabs>
 
-      {/* Complete Shift Dialog */}
+      {/* Complete Shift Dialog (Admin) */}
       <Dialog open={completeDialogOpen} onOpenChange={setCompleteDialogOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Dokončit směnu</DialogTitle>
             <DialogDescription>
-              Zadejte počet skutečně odpracovaných hodin.
+              Zadejte skutečně odpracované hodiny a hodinovou sazbu.
             </DialogDescription>
           </DialogHeader>
           
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="hours">Počet hodin</Label>
-              <Input
-                id="hours"
-                type="number"
-                step="0.5"
-                min="0"
-                value={hoursWorked}
-                onChange={(e) => setHoursWorked(e.target.value)}
-                placeholder="Např. 4.5"
-              />
+          {selectedShift && (
+            <div className="space-y-4">
+              <div className="p-3 rounded-lg bg-accent/50">
+                <p className="font-medium">{selectedShift.event?.title}</p>
+                <p className="text-sm text-muted-foreground">
+                  Brigádník: {getStaffName(selectedShift)}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="hours">Počet hodin</Label>
+                  <Input
+                    id="hours"
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    value={hoursWorked}
+                    onChange={(e) => setHoursWorked(e.target.value)}
+                    placeholder="Např. 4.5"
+                  />
+                </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="rate">Hodinová sazba (Kč)</Label>
+                  <Input
+                    id="rate"
+                    type="number"
+                    min="0"
+                    value={hourlyRate}
+                    onChange={(e) => setHourlyRate(e.target.value)}
+                    placeholder="Např. 150"
+                  />
+                </div>
+              </div>
+
+              <div className="p-3 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-900">
+                <p className="text-sm text-muted-foreground">Výsledná částka</p>
+                <p className="text-2xl font-bold text-green-600">{calculateTotal()} Kč</p>
+              </div>
+              
+              <div className="space-y-2">
+                <Label htmlFor="notes">Poznámky (volitelné)</Label>
+                <Textarea
+                  id="notes"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="Případné poznámky ke směně..."
+                />
+              </div>
             </div>
-            
-            <div className="space-y-2">
-              <Label htmlFor="notes">Poznámky (volitelné)</Label>
-              <Textarea
-                id="notes"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Případné poznámky ke směně..."
-              />
-            </div>
-          </div>
+          )}
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setCompleteDialogOpen(false)}>
               Zrušit
             </Button>
-            <Button onClick={handleCompleteShift}>
-              Dokončit směnu
+            <Button onClick={handleCompleteShift} disabled={isCompleting}>
+              {isCompleting ? 'Zpracování...' : 'Dokončit směnu'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Payout Dialog (Admin) */}
+      <Dialog open={payoutDialogOpen} onOpenChange={setPayoutDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Vyplatit brigádníka</DialogTitle>
+            <DialogDescription>
+              Potvrďte výplatu pro brigádníka. Všechny jeho nevyplacené směny budou označeny jako vyplacené.
+            </DialogDescription>
+          </DialogHeader>
+          
+          {selectedStaff && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-900">
+                <p className="font-medium text-lg">{selectedStaff.staffName}</p>
+                <p className="text-3xl font-bold text-green-600 mt-2">
+                  {selectedStaff.amount.toLocaleString('cs-CZ')} Kč
+                </p>
+              </div>
+              
+              <div className="space-y-2">
+                <Label htmlFor="payoutNotes">Poznámka k výplatě (volitelné)</Label>
+                <Textarea
+                  id="payoutNotes"
+                  value={payoutNotes}
+                  onChange={(e) => setPayoutNotes(e.target.value)}
+                  placeholder="Např. Výplata za leden 2026..."
+                />
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPayoutDialogOpen(false)}>
+              Zrušit
+            </Button>
+            <Button 
+              onClick={handlePayout} 
+              disabled={isCreatingPayout}
+              className="bg-green-600 hover:bg-green-700"
+            >
+              {isCreatingPayout ? 'Zpracování...' : 'Potvrdit výplatu'}
             </Button>
           </DialogFooter>
         </DialogContent>

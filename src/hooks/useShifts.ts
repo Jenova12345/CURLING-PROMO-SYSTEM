@@ -9,17 +9,41 @@ export const useShifts = () => {
   const { data: shifts = [], isLoading } = useQuery({
     queryKey: ['shifts'],
     queryFn: async () => {
-      const { data, error } = await supabase
+      // First get shifts with events
+      const { data: shiftsData, error } = await supabase
         .from('shifts')
         .select(`
           *,
-          event:events(*),
-          claimed_profile:profiles!shifts_claimed_by_fkey(full_name)
+          event:events(*)
         `)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      return data;
+      
+      // Get unique claimed_by user IDs
+      const userIds = [...new Set(shiftsData.filter(s => s.claimed_by).map(s => s.claimed_by!))];
+      
+      // Fetch profiles for those users
+      let profilesMap: Record<string, string> = {};
+      if (userIds.length > 0) {
+        const { data: profiles } = await supabase
+          .from('profiles')
+          .select('user_id, full_name')
+          .in('user_id', userIds);
+        
+        if (profiles) {
+          profilesMap = profiles.reduce((acc, p) => {
+            acc[p.user_id] = p.full_name || 'Neznámý';
+            return acc;
+          }, {} as Record<string, string>);
+        }
+      }
+      
+      // Merge profile names into shifts
+      return shiftsData.map(shift => ({
+        ...shift,
+        claimed_profile: shift.claimed_by ? { full_name: profilesMap[shift.claimed_by] || 'Neznámý' } : null,
+      }));
     },
     enabled: !!user,
   });
@@ -106,10 +130,12 @@ export const useShifts = () => {
     },
   });
 
+  // Admin completes shift (claimed -> completed)
   const completeShift = useMutation({
-    mutationFn: async ({ shiftId, hoursWorked, notes }: { 
+    mutationFn: async ({ shiftId, hoursWorked, hourlyRate, notes }: { 
       shiftId: string; 
       hoursWorked: number;
+      hourlyRate: number;
       notes?: string;
     }) => {
       const { data, error } = await supabase
@@ -117,13 +143,24 @@ export const useShifts = () => {
         .update({
           status: 'completed',
           hours_worked: hoursWorked,
+          hourly_rate: hourlyRate,
           notes,
+          completed_at: new Date().toISOString(),
         })
         .eq('id', shiftId)
+        .eq('status', 'claimed')
         .select()
         .single();
 
-      if (error) throw new Error('Nepodařilo se dokončit směnu.');
+      if (error) {
+        if (error.message.includes('Pouze admin')) {
+          throw new Error('Pouze admin může dokončit směnu.');
+        }
+        if (error.message.includes('odpracované hodiny')) {
+          throw new Error('Musíte zadat odpracované hodiny.');
+        }
+        throw new Error('Nepodařilo se dokončit směnu.');
+      }
       return data;
     },
     onSuccess: () => {
@@ -208,6 +245,16 @@ export const useShifts = () => {
   // Pending shifts for admin approval
   const pendingShifts = shifts.filter(s => s.status === 'pending');
   
+  // Claimed shifts ready to be completed (event has passed)
+  const shiftsToComplete = shifts.filter(s => {
+    if (s.status !== 'claimed') return false;
+    if (!s.event?.end_time) return false;
+    return new Date(s.event.end_time) < new Date();
+  });
+  
+  // My completed unpaid shifts
+  const myUnpaidShifts = myShifts.filter(s => s.status === 'completed' && !s.payout_id);
+  
   const myCompletedShifts = myShifts.filter(s => s.status === 'completed');
   
   const totalHoursWorked = myCompletedShifts.reduce(
@@ -215,16 +262,45 @@ export const useShifts = () => {
     0
   );
   
+  // Unpaid earnings (only completed shifts without payout_id)
+  const unpaidEarnings = myUnpaidShifts.reduce(
+    (sum, shift) => sum + (Number(shift.hours_worked) || 0) * (Number(shift.hourly_rate) || 150),
+    0
+  );
+  
+  // Total earnings (all completed shifts)
   const totalEarnings = myCompletedShifts.reduce(
     (sum, shift) => sum + (Number(shift.hours_worked) || 0) * (Number(shift.hourly_rate) || 150),
     0
   );
 
+  // Get unpaid amounts per staff member (for admin)
+  const staffUnpaidAmounts = shifts
+    .filter(s => s.status === 'completed' && !s.payout_id && s.claimed_by)
+    .reduce((acc, shift) => {
+      const staffId = shift.claimed_by!;
+      const amount = (Number(shift.hours_worked) || 0) * (Number(shift.hourly_rate) || 150);
+      if (!acc[staffId]) {
+        acc[staffId] = {
+          staffId,
+          staffName: shift.claimed_profile?.full_name || 'Neznámý',
+          amount: 0,
+          shiftCount: 0,
+        };
+      }
+      acc[staffId].amount += amount;
+      acc[staffId].shiftCount += 1;
+      return acc;
+    }, {} as Record<string, { staffId: string; staffName: string; amount: number; shiftCount: number }>);
+
   return {
     shifts,
     openShifts,
     myShifts,
+    myUnpaidShifts,
     pendingShifts,
+    shiftsToComplete,
+    staffUnpaidAmounts: Object.values(staffUnpaidAmounts),
     isLoading,
     requestShift: requestShift.mutateAsync,
     approveShift: approveShift.mutateAsync,
@@ -235,7 +311,9 @@ export const useShifts = () => {
     isRequesting: requestShift.isPending,
     isApproving: approveShift.isPending,
     isRejecting: rejectShift.isPending,
+    isCompleting: completeShift.isPending,
     totalHoursWorked,
+    unpaidEarnings,
     totalEarnings,
   };
 };
