@@ -46,7 +46,7 @@ const IceCalendar = () => {
   // Form state
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [eventType, setEventType] = useState<EventType>('free');
+  const [eventType, setEventType] = useState<EventType>('commercial');
   const [startTime, setStartTime] = useState('09:00');
   const [endTime, setEndTime] = useState('11:00');
   const [requiredStaff, setRequiredStaff] = useState('0');
@@ -98,18 +98,16 @@ const IceCalendar = () => {
     return format(currentMonth, 'LLLL yyyy', { locale: cs });
   };
 
-  const eventTypeColors: Record<EventType, string> = {
+  const eventTypeColors: Record<string, string> = {
     commercial: 'bg-green-500 text-white',
     training: 'bg-blue-500 text-white',
     maintenance: 'bg-orange-500 text-white',
-    free: 'bg-gray-300 text-gray-700',
   };
 
-  const eventTypeLabels: Record<EventType, string> = {
+  const eventTypeLabels: Record<string, string> = {
     commercial: 'Komerční akce',
     training: 'Trénink',
     maintenance: 'Údržba ledu',
-    free: 'Volný termín',
   };
 
   const statusColors: Record<string, string> = {
@@ -316,7 +314,7 @@ const IceCalendar = () => {
   const resetForm = () => {
     setTitle('');
     setDescription('');
-    setEventType('free');
+    setEventType('commercial');
     setStartTime('09:00');
     setEndTime('11:00');
     setRequiredStaff('0');
@@ -460,7 +458,6 @@ const IceCalendar = () => {
                       <SelectItem value="commercial">Komerční akce</SelectItem>
                       <SelectItem value="training">Trénink</SelectItem>
                       <SelectItem value="maintenance">Údržba ledu</SelectItem>
-                      <SelectItem value="free">Volný termín</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -841,11 +838,10 @@ const IceCalendar = () => {
                   const eventShifts = selectedDayShifts.filter(shift => shift.event_id === event.id);
                   
                   // Define border color based on event type
-                  const borderColors: Record<EventType, string> = {
+                  const borderColors: Record<string, string> = {
                     commercial: 'border-l-green-500',
                     training: 'border-l-blue-500',
                     maintenance: 'border-l-orange-500',
-                    free: 'border-l-gray-400',
                   };
                   
                   return (
@@ -1067,7 +1063,6 @@ const IceCalendar = () => {
                   <SelectItem value="commercial">Komerční akce</SelectItem>
                   <SelectItem value="training">Trénink</SelectItem>
                   <SelectItem value="maintenance">Údržba ledu</SelectItem>
-                  <SelectItem value="free">Volný termín</SelectItem>
                 </SelectContent>
               </Select>
             </div>
