@@ -49,7 +49,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     // Fetch role
-    const { data: roleData } = await supabase
+    const { data: roleData, error: roleError } = await supabase
       .from('user_roles')
       .select('role')
       .eq('user_id', userId)
@@ -57,8 +57,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       .limit(1)
       .single();
     
+    console.log('[AuthContext] Fetched role for user:', userId, 'roleData:', roleData, 'error:', roleError);
+    
     if (roleData) {
       setRole(roleData.role as AppRole);
+      console.log('[AuthContext] Role set to:', roleData.role);
+    } else {
+      console.log('[AuthContext] No role found for user');
     }
   };
 
