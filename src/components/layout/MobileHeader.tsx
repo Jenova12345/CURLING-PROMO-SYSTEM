@@ -15,6 +15,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { Separator } from '@/components/ui/separator';
+import logo from '@/assets/logo.png';
 
 const MobileHeader = () => {
   const { profile, role, signOut } = useAuth();
@@ -74,7 +75,7 @@ const MobileHeader = () => {
     <header className="sticky top-0 z-50 flex h-14 items-center justify-between border-b bg-card px-4 md:hidden">
       {/* Logo */}
       <Link to="/" className="flex items-center gap-2">
-        <span className="text-xl">🥌</span>
+        <img src={logo} alt="Mladé Kameny" className="h-8 w-auto" />
         <span className="font-bold">Mladé kameny</span>
       </Link>
 
@@ -88,7 +89,7 @@ const MobileHeader = () => {
         <SheetContent side="right" className="w-[280px] p-0">
           <SheetHeader className="p-4 border-b">
             <SheetTitle className="flex items-center gap-2 text-left">
-              <span className="text-xl">🥌</span>
+              <img src={logo} alt="Mladé Kameny" className="h-10 w-auto" />
               <div>
                 <div className="font-bold">Mladé kameny</div>
                 <div className="text-xs text-muted-foreground font-normal">Curlingová hala</div>
