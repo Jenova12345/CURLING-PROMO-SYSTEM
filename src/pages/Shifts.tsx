@@ -13,7 +13,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
-import { Clock, CheckCircle, XCircle, TrendingUp, Calendar, UserCheck, AlertCircle, Wallet, DollarSign, History, Users, BarChart3, Download, UserPlus } from 'lucide-react';
+import { Clock, CheckCircle, XCircle, TrendingUp, Calendar, UserCheck, AlertCircle, Wallet, DollarSign, History, Users, BarChart3, Download, UserPlus, Landmark, Copy } from 'lucide-react';
 import { format, startOfMonth, endOfMonth, subMonths, isWithinInterval } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
@@ -78,7 +78,7 @@ const Shifts = () => {
 
   // Payout dialog (admin)
   const [payoutDialogOpen, setPayoutDialogOpen] = useState(false);
-  const [selectedStaff, setSelectedStaff] = useState<{ staffId: string; staffName: string; amount: number } | null>(null);
+  const [selectedStaff, setSelectedStaff] = useState<{ staffId: string; staffName: string; amount: number; bankAccount: string | null } | null>(null);
   const [payoutNotes, setPayoutNotes] = useState('');
 
   // Assign shift dialog (admin)
@@ -266,7 +266,7 @@ const Shifts = () => {
     }
   };
 
-  const openPayoutDialog = (staff: { staffId: string; staffName: string; amount: number }) => {
+  const openPayoutDialog = (staff: { staffId: string; staffName: string; amount: number; bankAccount: string | null }) => {
     setSelectedStaff(staff);
     setPayoutNotes('');
     setPayoutDialogOpen(true);
@@ -1354,6 +1354,40 @@ const Shifts = () => {
                 <p className="text-3xl font-bold text-green-600 mt-2">
                   {selectedStaff.amount.toLocaleString('cs-CZ')} Kč
                 </p>
+              </div>
+
+              {/* Bank account section */}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2">
+                  <Landmark className="h-4 w-4" />
+                  Číslo účtu
+                </Label>
+                {selectedStaff.bankAccount ? (
+                  <div className="flex items-center gap-2 p-3 rounded-lg bg-accent/50 border">
+                    <span className="font-mono text-base flex-1">{selectedStaff.bankAccount}</span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => {
+                        navigator.clipboard.writeText(selectedStaff.bankAccount!);
+                        toast({
+                          title: 'Zkopírováno',
+                          description: 'Číslo účtu bylo zkopírováno do schránky.',
+                        });
+                      }}
+                    >
+                      <Copy className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="p-3 rounded-lg bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-900 flex items-center gap-2">
+                    <AlertCircle className="h-4 w-4 text-orange-600" />
+                    <span className="text-sm text-orange-700 dark:text-orange-400">
+                      Brigádník nemá vyplněné číslo účtu!
+                    </span>
+                  </div>
+                )}
               </div>
               
               <div className="space-y-2">

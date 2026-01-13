@@ -56,25 +56,31 @@ export const useShifts = () => {
       const userIds = [...new Set(shiftsData.filter(s => s.claimed_by).map(s => s.claimed_by!))];
       
       // Fetch profiles for those users
-      let profilesMap: Record<string, string> = {};
+      let profilesMap: Record<string, { full_name: string; bank_account: string | null }> = {};
       if (userIds.length > 0) {
         const { data: profiles } = await supabase
           .from('profiles')
-          .select('user_id, full_name')
+          .select('user_id, full_name, bank_account')
           .in('user_id', userIds);
         
         if (profiles) {
           profilesMap = profiles.reduce((acc, p) => {
-            acc[p.user_id] = p.full_name || 'Neznámý';
+            acc[p.user_id] = { 
+              full_name: p.full_name || 'Neznámý',
+              bank_account: p.bank_account 
+            };
             return acc;
-          }, {} as Record<string, string>);
+          }, {} as Record<string, { full_name: string; bank_account: string | null }>);
         }
       }
       
       // Merge profile names into shifts
       return shiftsData.map(shift => ({
         ...shift,
-        claimed_profile: shift.claimed_by ? { full_name: profilesMap[shift.claimed_by] || 'Neznámý' } : null,
+        claimed_profile: shift.claimed_by ? { 
+          full_name: profilesMap[shift.claimed_by]?.full_name || 'Neznámý',
+          bank_account: profilesMap[shift.claimed_by]?.bank_account || null
+        } : null,
       }));
     },
     enabled: !!user,
@@ -415,6 +421,7 @@ export const useShifts = () => {
         acc[staffId] = {
           staffId,
           staffName: shift.claimed_profile?.full_name || 'Neznámý',
+          bankAccount: shift.claimed_profile?.bank_account || null,
           amount: 0,
           shiftCount: 0,
         };
@@ -422,7 +429,7 @@ export const useShifts = () => {
       acc[staffId].amount += amount;
       acc[staffId].shiftCount += 1;
       return acc;
-    }, {} as Record<string, { staffId: string; staffName: string; amount: number; shiftCount: number }>);
+    }, {} as Record<string, { staffId: string; staffName: string; bankAccount: string | null; amount: number; shiftCount: number }>);
 
   // Admin statistics
   const allCompletedShifts = shifts.filter(s => s.status === 'completed');
