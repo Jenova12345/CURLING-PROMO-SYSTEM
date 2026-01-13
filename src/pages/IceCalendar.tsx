@@ -822,117 +822,131 @@ const IceCalendar = () => {
           </DialogHeader>
 
           <div className="space-y-4">
-            {/* Events section */}
-            {selectedDayEvents.length > 0 && (
-              <div>
-                <h3 className="font-medium text-sm text-muted-foreground mb-2">Události</h3>
-                <div className="space-y-2">
-                  {selectedDayEvents.map((event) => (
-                    <div key={event.id} className="flex items-start justify-between p-3 rounded-lg bg-accent/50 gap-3">
-                      <div className="flex items-start gap-3">
-                        <div className={`w-3 h-3 rounded mt-1 flex-shrink-0 ${eventTypeColors[event.event_type]}`} />
-                        <div className="min-w-0">
-                          <p className="font-medium text-sm">{event.title}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {format(new Date(event.start_time), 'HH:mm')} - {format(new Date(event.end_time), 'HH:mm')}
-                          </p>
-                          {event.description && (
-                            <p className="text-xs text-muted-foreground mt-1">{event.description}</p>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Badge variant="outline" className="text-xs whitespace-nowrap">{eventTypeLabels[event.event_type]}</Badge>
-                        {isAdmin && (
-                          <div className="flex items-center gap-1">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7"
-                              onClick={() => {
-                                setIsDayDetailOpen(false);
-                                handleOpenEditDialog(event);
-                              }}
-                            >
-                              <Pencil className="h-3 w-3" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7"
-                              onClick={() => handleDeleteEvent(event.id)}
-                              disabled={isDeleting}
-                            >
-                              <Trash2 className="h-3 w-3 text-destructive" />
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Shifts section - only for staff/admin */}
-            {(isAdmin || isStaff) && selectedDayShifts.length > 0 && (
-              <div>
-                <h3 className="font-medium text-sm text-muted-foreground mb-2">Směny</h3>
-                <div className="space-y-2">
-                  {selectedDayShifts.map((shift) => {
-                    const isGrouped = shift._isGrouped;
-                    const shiftIdToRequest = isGrouped ? shift._availableShiftIds[0] : shift.id;
-                    
-                    return (
-                      <div 
-                        key={isGrouped ? `grouped-${shift.event_id}` : shift.id} 
-                        className="p-3 rounded-lg border bg-card"
-                      >
+            {/* Events with nested shifts */}
+            {selectedDayEvents.length > 0 ? (
+              <div className="space-y-3">
+                {selectedDayEvents.map((event) => {
+                  // Filter shifts for this specific event
+                  const eventShifts = selectedDayShifts.filter(shift => shift.event_id === event.id);
+                  
+                  // Define border color based on event type
+                  const borderColors: Record<EventType, string> = {
+                    commercial: 'border-l-green-500',
+                    training: 'border-l-blue-500',
+                    maintenance: 'border-l-orange-500',
+                    free: 'border-l-gray-400',
+                  };
+                  
+                  return (
+                    <div 
+                      key={event.id} 
+                      className={`border-l-4 rounded-lg overflow-hidden bg-card border ${borderColors[event.event_type]}`}
+                    >
+                      {/* Event header */}
+                      <div className="p-3 bg-accent/30">
                         <div className="flex items-start justify-between gap-3">
                           <div className="flex items-start gap-3">
-                            <div className={`w-3 h-3 rounded-full mt-1 flex-shrink-0 ${statusColors[shift.status]}`} />
-                            <div>
-                              <p className="font-medium text-sm">{shift.event?.title || 'Směna'}</p>
+                            <div className={`w-3 h-3 rounded mt-1 flex-shrink-0 ${eventTypeColors[event.event_type]}`} />
+                            <div className="min-w-0">
+                              <p className="font-medium text-sm">{event.title}</p>
                               <p className="text-xs text-muted-foreground">
-                                {shift.event && `${format(new Date(shift.event.start_time), 'HH:mm')} - ${format(new Date(shift.event.end_time), 'HH:mm')}`}
+                                {format(new Date(event.start_time), 'HH:mm')} - {format(new Date(event.end_time), 'HH:mm')}
                               </p>
-                              <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                                <Badge variant="outline" className="text-xs">
-                                  {isGrouped ? 'Volná' : statusLabels[shift.status]}
-                                </Badge>
-                                <span className="text-xs text-muted-foreground">
-                                  {shift.hourly_rate} Kč/h
-                                </span>
-                                {isGrouped && (
-                                  <span className="text-xs font-medium text-green-600">
-                                    Volná místa: {shift._openCount}/{shift._totalSlots}
-                                  </span>
-                                )}
-                              </div>
-                              {!isGrouped && shift.claimed_by && shift.claimed_profile && (
-                                <div className="flex items-center gap-1 mt-1.5 text-xs text-muted-foreground">
-                                  <User className="h-3 w-3" />
-                                  {shift.claimed_profile.full_name}
-                                </div>
+                              {event.description && (
+                                <p className="text-xs text-muted-foreground mt-1">{event.description}</p>
                               )}
                             </div>
                           </div>
-
-                          {isStaff && canRequestShift(shift) && (
-                            <Button 
-                              size="sm"
-                              onClick={() => handleRequestShift(shiftIdToRequest)}
-                              disabled={isRequesting}
-                            >
-                              {isRequesting ? 'Zpracování...' : 'Přihlásit'}
-                            </Button>
-                          )}
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <Badge variant="outline" className="text-xs whitespace-nowrap">{eventTypeLabels[event.event_type]}</Badge>
+                            {isAdmin && (
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7"
+                                  onClick={() => {
+                                    setIsDayDetailOpen(false);
+                                    handleOpenEditDialog(event);
+                                  }}
+                                >
+                                  <Pencil className="h-3 w-3" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7"
+                                  onClick={() => handleDeleteEvent(event.id)}
+                                  disabled={isDeleting}
+                                >
+                                  <Trash2 className="h-3 w-3 text-destructive" />
+                                </Button>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
+
+                      {/* Nested shifts for this event */}
+                      {(isAdmin || isStaff) && eventShifts.length > 0 && (
+                        <div className="border-t bg-background p-3 space-y-2">
+                          <p className="text-xs font-medium text-muted-foreground">
+                            Směny ({eventShifts.length})
+                          </p>
+                          {eventShifts.map((shift) => {
+                            const isGrouped = shift._isGrouped;
+                            const shiftIdToRequest = isGrouped ? shift._availableShiftIds[0] : shift.id;
+                            
+                            return (
+                              <div 
+                                key={isGrouped ? `grouped-${shift.event_id}` : shift.id} 
+                                className="p-2 rounded-md bg-muted/50 flex items-start justify-between gap-3"
+                              >
+                                <div className="flex items-start gap-2">
+                                  <div className={`w-2.5 h-2.5 rounded-full mt-1 flex-shrink-0 ${statusColors[shift.status]}`} />
+                                  <div>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <Badge variant="outline" className="text-xs">
+                                        {isGrouped ? 'Volná' : statusLabels[shift.status]}
+                                      </Badge>
+                                      <span className="text-xs text-muted-foreground">
+                                        {shift.hourly_rate} Kč/h
+                                      </span>
+                                      {isGrouped && (
+                                        <span className="text-xs font-medium text-green-600">
+                                          Volná místa: {shift._openCount}/{shift._totalSlots}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {!isGrouped && shift.claimed_by && shift.claimed_profile && (
+                                      <div className="flex items-center gap-1 mt-1 text-xs text-muted-foreground">
+                                        <User className="h-3 w-3" />
+                                        {shift.claimed_profile.full_name}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {isStaff && canRequestShift(shift) && (
+                                  <Button 
+                                    size="sm"
+                                    onClick={() => handleRequestShift(shiftIdToRequest)}
+                                    disabled={isRequesting}
+                                  >
+                                    {isRequesting ? 'Zpracování...' : 'Přihlásit'}
+                                  </Button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">Žádné události v tento den.</p>
             )}
           </div>
         </DialogContent>
