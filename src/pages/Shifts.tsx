@@ -1435,29 +1435,35 @@ const Shifts = () => {
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
+                    <div className="flex items-center justify-between pt-2 border-t border-dashed">
+                      <label 
+                        htmlFor={`manual-${staff.shiftId}`} 
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-md cursor-pointer transition-colors ${
+                          staff.useManualAmount 
+                            ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300' 
+                            : 'bg-muted hover:bg-accent'
+                        }`}
+                      >
                         <Switch
                           id={`manual-${staff.shiftId}`}
                           checked={staff.useManualAmount}
                           onCheckedChange={(checked) => updateStaffData(staff.shiftId, 'useManualAmount', checked)}
                         />
-                        <Label htmlFor={`manual-${staff.shiftId}`} className="text-xs cursor-pointer">
-                          Ruční odměna
-                        </Label>
-                      </div>
+                        <DollarSign className="h-4 w-4" />
+                        <span className="text-sm font-medium">Ruční odměna</span>
+                      </label>
                       
                       {staff.useManualAmount && (
                         <div className="flex items-center gap-2">
-                          <Label className="text-xs">Částka:</Label>
                           <Input
                             type="number"
                             min="0"
                             value={staff.manualAmount}
                             onChange={(e) => updateStaffData(staff.shiftId, 'manualAmount', e.target.value)}
-                            placeholder="Kč"
-                            className="w-28 h-8"
+                            placeholder="Zadejte částku"
+                            className="w-32 h-9 font-medium"
                           />
+                          <span className="text-sm font-medium">Kč</span>
                         </div>
                       )}
                     </div>
