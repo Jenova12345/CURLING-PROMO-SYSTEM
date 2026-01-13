@@ -990,7 +990,7 @@ const IceCalendar = () => {
                   </div>
                   <div className="flex items-center gap-2 flex-wrap ml-6 sm:ml-0">
                     <Badge variant="outline" className="text-xs">{eventTypeLabels[event.event_type]}</Badge>
-                    {event.required_staff && event.required_staff > 0 && (
+                    {event.event_type === 'commercial' && event.required_staff && event.required_staff > 0 && (
                       <Badge variant="secondary" className="text-xs">{event.required_staff} brig.</Badge>
                     )}
                     {isAdmin && (
