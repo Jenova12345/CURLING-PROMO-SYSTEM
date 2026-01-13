@@ -35,7 +35,7 @@ const Sidebar = () => {
     },
     { 
       path: '/calendar', 
-      label: 'Kalendář ledu', 
+      label: 'Kalendář', 
       icon: Calendar,
       roles: ['admin', 'trainer', 'part_time_staff', 'pro_player', 'hobby_player']
     },
@@ -43,12 +43,6 @@ const Sidebar = () => {
       path: '/shifts', 
       label: 'Směny', 
       icon: Clock,
-      roles: ['admin', 'part_time_staff']
-    },
-    { 
-      path: '/shift-calendar', 
-      label: 'Kalendář směn', 
-      icon: Calendar,
       roles: ['admin', 'part_time_staff']
     },
     { 
