@@ -50,6 +50,7 @@ const Profile = () => {
   const [bankAccount, setBankAccount] = useState(profile?.bank_account || '');
   const [isUploading, setIsUploading] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
   const roleLabels: Record<string, string> = {
     admin: 'Správce',
@@ -104,10 +105,13 @@ const Profile = () => {
     
     try {
       await updateProfile(validation.data);
+      setSaveSuccess(true);
       toast({
-        title: 'Profil uložen',
-        description: 'Vaše údaje byly aktualizovány.',
+        title: '✓ Profil uložen',
+        description: 'Vaše údaje byly úspěšně aktualizovány.',
       });
+      // Reset success state after animation
+      setTimeout(() => setSaveSuccess(false), 2000);
     } catch {
       toast({
         title: 'Chyba',
@@ -317,9 +321,18 @@ const Profile = () => {
               <Button 
                 onClick={handleSaveProfile} 
                 disabled={isUpdating || profileRateLimit.isLimited}
-                className="w-full"
+                className={`w-full transition-all duration-300 ${saveSuccess ? 'bg-green-600 hover:bg-green-600' : ''}`}
               >
-                {isUpdating ? 'Ukládání...' : 'Uložit změny'}
+                {isUpdating ? (
+                  'Ukládání...'
+                ) : saveSuccess ? (
+                  <span className="flex items-center gap-2">
+                    <CheckCircle className="h-4 w-4" />
+                    Uloženo!
+                  </span>
+                ) : (
+                  'Uložit změny'
+                )}
               </Button>
             </div>
           </CardContent>
