@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { Calendar } from '@/components/ui/calendar';
 import { useToast } from '@/hooks/use-toast';
-import { Plus, ChevronLeft, ChevronRight, Trash2, User, Clock } from 'lucide-react';
+import { Plus, ChevronLeft, ChevronRight, Trash2, User, Clock, Pencil } from 'lucide-react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths, startOfWeek, addDays, addWeeks, subWeeks } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { Database } from '@/integrations/supabase/types';
@@ -22,10 +22,11 @@ import { useRateLimit } from '@/hooks/useRateLimit';
 
 type EventType = Database['public']['Enums']['event_type'];
 type ViewMode = 'twoWeeks' | 'month';
+type Event = Database['public']['Tables']['events']['Row'];
 
 const IceCalendar = () => {
   const { isAdmin, isStaff, user } = useAuth();
-  const { events, createEvent, deleteEvent, isCreating, isDeleting } = useEvents();
+  const { events, createEvent, updateEvent, deleteEvent, isCreating, isUpdating, isDeleting } = useEvents();
   const { shifts, requestShift, isRequesting } = useShifts();
   const { toast } = useToast();
   const { retryAfter, checkLimit } = useRateLimit('createEvent');
@@ -34,11 +35,18 @@ const IceCalendar = () => {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [editingEvent, setEditingEvent] = useState<Event | null>(null);
   const [isDayDetailOpen, setIsDayDetailOpen] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('twoWeeks');
   const [twoWeekStart, setTwoWeekStart] = useState(() => 
     startOfWeek(new Date(), { weekStartsOn: 1 })
   );
+  
+  // Swipe gesture state
+  const [touchStart, setTouchStart] = useState<number | null>(null);
+  const [touchEnd, setTouchEnd] = useState<number | null>(null);
+  const minSwipeDistance = 50;
   
   // Form state
   const [title, setTitle] = useState('');
@@ -318,6 +326,105 @@ const IceCalendar = () => {
     setEndTime('11:00');
     setRequiredStaff('0');
     setSelectedDate(null);
+    setEditingEvent(null);
+  };
+
+  // Open edit dialog with pre-filled data
+  const handleOpenEditDialog = (event: Event) => {
+    setEditingEvent(event);
+    setTitle(event.title);
+    setDescription(event.description || '');
+    setEventType(event.event_type);
+    setStartTime(format(new Date(event.start_time), 'HH:mm'));
+    setEndTime(format(new Date(event.end_time), 'HH:mm'));
+    setRequiredStaff(event.required_staff?.toString() || '0');
+    setSelectedDate(new Date(event.start_time));
+    setIsEditDialogOpen(true);
+  };
+
+  // Update event handler
+  const handleUpdateEvent = async () => {
+    if (!editingEvent || !selectedDate) return;
+
+    const startDateTime = new Date(selectedDate);
+    const [startHours, startMinutes] = startTime.split(':');
+    startDateTime.setHours(parseInt(startHours), parseInt(startMinutes));
+
+    const endDateTime = new Date(selectedDate);
+    const [endHours, endMinutes] = endTime.split(':');
+    endDateTime.setHours(parseInt(endHours), parseInt(endMinutes));
+
+    const validation = safeValidate(eventSchema, {
+      title: sanitizeText(title),
+      description: sanitizeText(description) || undefined,
+      event_type: eventType,
+      start_time: startDateTime.toISOString(),
+      end_time: endDateTime.toISOString(),
+      required_staff: eventType === 'commercial' ? parseInt(requiredStaff) || 0 : 0,
+    });
+
+    if (!validation.success) {
+      toast({
+        title: 'Chyba validace',
+        description: validation.error,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    try {
+      await updateEvent({
+        id: editingEvent.id,
+        title: validation.data.title,
+        description: validation.data.description,
+        event_type: validation.data.event_type,
+        start_time: validation.data.start_time,
+        end_time: validation.data.end_time,
+        required_staff: validation.data.required_staff,
+      });
+
+      toast({
+        title: 'Událost aktualizována',
+        description: 'Změny byly úspěšně uloženy.',
+      });
+
+      setIsEditDialogOpen(false);
+      resetForm();
+    } catch (error) {
+      toast({
+        title: 'Chyba',
+        description: 'Nepodařilo se aktualizovat událost',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  // Swipe gesture handlers
+  const onTouchStart = (e: React.TouchEvent) => {
+    setTouchEnd(null);
+    setTouchStart(e.targetTouches[0].clientX);
+  };
+
+  const onTouchMove = (e: React.TouchEvent) => {
+    setTouchEnd(e.targetTouches[0].clientX);
+  };
+
+  const onTouchEnd = () => {
+    if (!touchStart || !touchEnd) return;
+    
+    const distance = touchStart - touchEnd;
+    const isLeftSwipe = distance > minSwipeDistance;
+    const isRightSwipe = distance < -minSwipeDistance;
+    
+    if (isLeftSwipe) {
+      handleNextNav();
+    }
+    if (isRightSwipe) {
+      handlePrevNav();
+    }
+    
+    setTouchStart(null);
+    setTouchEnd(null);
   };
 
   const dayNames = ['Po', 'Út', 'St', 'Čt', 'Pá', 'So', 'Ne'];
@@ -532,7 +639,12 @@ const IceCalendar = () => {
 
       {/* Calendar Grid */}
       <Card>
-        <CardContent className="p-2 md:p-4">
+        <CardContent 
+          className="p-2 md:p-4"
+          onTouchStart={onTouchStart}
+          onTouchMove={onTouchMove}
+          onTouchEnd={onTouchEnd}
+        >
           {/* Day headers */}
           <div className="grid grid-cols-7 gap-0.5 md:gap-1 mb-2">
             {dayNames.map((day) => (
@@ -674,15 +786,28 @@ const IceCalendar = () => {
                       <div className="flex items-center gap-2">
                         <Badge variant="outline" className="text-xs whitespace-nowrap">{eventTypeLabels[event.event_type]}</Badge>
                         {isAdmin && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            onClick={() => handleDeleteEvent(event.id)}
-                            disabled={isDeleting}
-                          >
-                            <Trash2 className="h-3 w-3 text-destructive" />
-                          </Button>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              onClick={() => {
+                                setIsDayDetailOpen(false);
+                                handleOpenEditDialog(event);
+                              }}
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              onClick={() => handleDeleteEvent(event.id)}
+                              disabled={isDeleting}
+                            >
+                              <Trash2 className="h-3 w-3 text-destructive" />
+                            </Button>
+                          </div>
                         )}
                       </div>
                     </div>
@@ -786,15 +911,25 @@ const IceCalendar = () => {
                       <Badge variant="secondary" className="text-xs">{event.required_staff} brig.</Badge>
                     )}
                     {isAdmin && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => handleDeleteEvent(event.id)}
-                        disabled={isDeleting}
-                      >
-                        <Trash2 className="h-4 w-4 text-destructive" />
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() => handleOpenEditDialog(event)}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() => handleDeleteEvent(event.id)}
+                          disabled={isDeleting}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -802,6 +937,115 @@ const IceCalendar = () => {
           </div>
         </CardContent>
       </Card>
+
+      {/* Edit Event Dialog */}
+      <Dialog open={isEditDialogOpen} onOpenChange={(open) => {
+        setIsEditDialogOpen(open);
+        if (!open) resetForm();
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Upravit událost</DialogTitle>
+            <DialogDescription>
+              Upravte detaily události.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4">
+            <div>
+              <Label>Vyberte datum</Label>
+              <Calendar
+                mode="single"
+                selected={selectedDate || undefined}
+                onSelect={(date) => setSelectedDate(date || null)}
+                className="rounded-md border mt-2"
+                locale={cs}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="edit-title">Název události</Label>
+              <Input
+                id="edit-title"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Např. Firemní teambuilding"
+                maxLength={VALIDATION_LIMITS.TITLE_MAX}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="edit-type">Typ události</Label>
+              <Select value={eventType} onValueChange={(v) => setEventType(v as EventType)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="commercial">Komerční akce</SelectItem>
+                  <SelectItem value="training">Trénink</SelectItem>
+                  <SelectItem value="maintenance">Údržba ledu</SelectItem>
+                  <SelectItem value="free">Volný termín</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit-start">Začátek</Label>
+                <Input
+                  id="edit-start"
+                  type="time"
+                  value={startTime}
+                  onChange={(e) => setStartTime(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-end">Konec</Label>
+                <Input
+                  id="edit-end"
+                  type="time"
+                  value={endTime}
+                  onChange={(e) => setEndTime(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {eventType === 'commercial' && (
+              <div className="space-y-2">
+                <Label htmlFor="edit-staff">Počet potřebných brigádníků</Label>
+                <Input
+                  id="edit-staff"
+                  type="number"
+                  min="0"
+                  max={VALIDATION_LIMITS.STAFF_COUNT_MAX}
+                  value={requiredStaff}
+                  onChange={(e) => setRequiredStaff(e.target.value)}
+                />
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label htmlFor="edit-description">Popis (volitelné)</Label>
+              <Textarea
+                id="edit-description"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Další informace o události..."
+                maxLength={VALIDATION_LIMITS.DESCRIPTION_MAX}
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>
+              Zrušit
+            </Button>
+            <Button onClick={handleUpdateEvent} disabled={isUpdating}>
+              {isUpdating ? 'Ukládání...' : 'Uložit změny'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
