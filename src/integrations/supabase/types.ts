@@ -89,39 +89,6 @@ export type Database = {
         }
         Relationships: []
       }
-      notifications: {
-        Row: {
-          created_at: string
-          id: string
-          link: string | null
-          message: string
-          read: boolean | null
-          title: string
-          type: string | null
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          id?: string
-          link?: string | null
-          message: string
-          read?: boolean | null
-          title: string
-          type?: string | null
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          id?: string
-          link?: string | null
-          message?: string
-          read?: boolean | null
-          title?: string
-          type?: string | null
-          user_id?: string
-        }
-        Relationships: []
-      }
       payouts: {
         Row: {
           amount: number

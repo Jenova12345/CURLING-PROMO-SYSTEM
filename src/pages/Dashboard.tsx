@@ -1,10 +1,9 @@
 import { useAuth } from '@/contexts/AuthContext';
 import { useEvents } from '@/hooks/useEvents';
 import { useShifts } from '@/hooks/useShifts';
-import { useNotifications } from '@/hooks/useNotifications';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Calendar, Clock, Bell, TrendingUp } from 'lucide-react';
+import { Calendar, Clock, TrendingUp } from 'lucide-react';
 import { format } from 'date-fns';
 import { cs } from 'date-fns/locale';
 
@@ -12,7 +11,6 @@ const Dashboard = () => {
   const { profile, role, isAdmin, isStaff } = useAuth();
   const { events } = useEvents();
   const { openShifts, myShifts, totalHoursWorked, totalEarnings } = useShifts();
-  const { notifications, unreadCount } = useNotifications();
 
   const roleLabels: Record<string, string> = {
     admin: 'Správce',
@@ -109,21 +107,6 @@ const Dashboard = () => {
             </Card>
           </>
         )}
-
-        {!isStaff && (
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Oznámení</CardTitle>
-              <Bell className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{unreadCount}</div>
-              <p className="text-xs text-muted-foreground">
-                nepřečtených
-              </p>
-            </CardContent>
-          </Card>
-        )}
       </div>
 
       {/* Content Grid */}
@@ -158,66 +141,36 @@ const Dashboard = () => {
           </CardContent>
         </Card>
 
-        {/* Recent Notifications */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Poslední oznámení</CardTitle>
-            <CardDescription>Vaše nedávná upozornění</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {notifications.length === 0 ? (
-              <p className="text-muted-foreground text-sm">Žádná oznámení</p>
-            ) : (
+        {/* Staff Shifts Section */}
+        {isStaff && myShifts.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Moje směny</CardTitle>
+              <CardDescription>Přehled vašich přiřazených směn</CardDescription>
+            </CardHeader>
+            <CardContent>
               <div className="space-y-4">
-                {notifications.slice(0, 5).map((notification) => (
-                  <div key={notification.id} className="flex items-start gap-4">
-                    <div className={`w-2 h-2 rounded-full mt-2 ${notification.read ? 'bg-muted' : 'bg-primary'}`} />
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium truncate">{notification.title}</p>
-                      <p className="text-sm text-muted-foreground line-clamp-2">
-                        {notification.message}
-                      </p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {format(new Date(notification.created_at), 'd. MMMM HH:mm', { locale: cs })}
+                {myShifts.slice(0, 5).map((shift) => (
+                  <div key={shift.id} className="flex items-center justify-between p-3 rounded-lg bg-accent/50">
+                    <div>
+                      <p className="font-medium">{shift.event?.title || 'Směna'}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {shift.event && format(new Date(shift.event.start_time), 'EEEE d. MMMM, HH:mm', { locale: cs })}
                       </p>
                     </div>
+                    <Badge 
+                      variant={shift.status === 'completed' ? 'default' : 'secondary'}
+                    >
+                      {shift.status === 'claimed' ? 'Přijato' : 
+                       shift.status === 'completed' ? 'Dokončeno' : shift.status}
+                    </Badge>
                   </div>
                 ))}
               </div>
-            )}
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        )}
       </div>
-
-      {/* Staff Shifts Section */}
-      {isStaff && myShifts.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Moje směny</CardTitle>
-            <CardDescription>Přehled vašich přiřazených směn</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {myShifts.slice(0, 5).map((shift) => (
-                <div key={shift.id} className="flex items-center justify-between p-3 rounded-lg bg-accent/50">
-                  <div>
-                    <p className="font-medium">{shift.event?.title || 'Směna'}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {shift.event && format(new Date(shift.event.start_time), 'EEEE d. MMMM, HH:mm', { locale: cs })}
-                    </p>
-                  </div>
-                  <Badge 
-                    variant={shift.status === 'completed' ? 'default' : 'secondary'}
-                  >
-                    {shift.status === 'claimed' ? 'Přijato' : 
-                     shift.status === 'completed' ? 'Dokončeno' : shift.status}
-                  </Badge>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 };
