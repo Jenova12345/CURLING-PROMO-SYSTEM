@@ -77,6 +77,14 @@ const IceCalendar = () => {
     return events.filter(event => isSameDay(new Date(event.start_time), day));
   };
 
+  // Get shift fill stats for an event
+  const getEventShiftStats = (eventId: string) => {
+    const eventShifts = shifts.filter(s => s.event_id === eventId);
+    const total = eventShifts.length;
+    const filled = eventShifts.filter(s => s.status === 'claimed' || s.status === 'pending' || s.status === 'completed').length;
+    return { filled, total };
+  };
+
   // Get shifts for a specific day
   const getShiftsForDay = (day: Date) => {
     return shifts.filter(shift => {
@@ -491,16 +499,28 @@ const IceCalendar = () => {
                   
                   {/* Events */}
                   <div className="space-y-0.5">
-                    {dayEvents.slice(0, 2).map((event) => (
-                      <div
-                        key={event.id}
-                        className={`text-[8px] md:text-xs p-0.5 md:p-1 rounded truncate ${eventTypeColors[event.event_type]}`}
-                        title={`${event.title} - ${format(new Date(event.start_time), 'HH:mm')} - ${format(new Date(event.end_time), 'HH:mm')}`}
-                      >
-                        <span className="hidden md:inline">{format(new Date(event.start_time), 'HH:mm')} </span>
-                        {event.title}
-                      </div>
-                    ))}
+                    {dayEvents.slice(0, 2).map((event) => {
+                      const stats = event.event_type === 'commercial' ? getEventShiftStats(event.id) : null;
+                      return (
+                        <div
+                          key={event.id}
+                          className={`text-[8px] md:text-xs p-0.5 md:p-1 rounded truncate ${eventTypeColors[event.event_type]}`}
+                          title={`${event.title} - ${format(new Date(event.start_time), 'HH:mm')} - ${format(new Date(event.end_time), 'HH:mm')}${stats ? ` (${stats.filled}/${stats.total} obsazeno)` : ''}`}
+                        >
+                          <span className="hidden md:inline">{format(new Date(event.start_time), 'HH:mm')} </span>
+                          {event.title}
+                          {(isAdmin || isStaff) && stats && stats.total > 0 && (
+                            <span className={`ml-1 px-1 rounded text-[7px] md:text-[10px] font-medium ${
+                              stats.filled === stats.total 
+                                ? 'bg-white/30 text-white' 
+                                : 'bg-white/80 text-green-700'
+                            }`}>
+                              {stats.filled}/{stats.total}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
                     {dayEvents.length > 2 && (
                       <div className="text-[8px] md:text-xs text-muted-foreground">
                         +{dayEvents.length - 2} dalších
