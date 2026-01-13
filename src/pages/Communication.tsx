@@ -1,3 +1,13 @@
+/**
+ * Communication Page - WhatsApp Groups Management
+ * 
+ * Security Features:
+ * - Schema-based validation for chat group forms
+ * - Strict URL validation (WhatsApp links only)
+ * - Length limits on all text inputs
+ * - XSS prevention via React's built-in escaping
+ */
+
 import { useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useChatGroups } from '@/hooks/useChatGroups';
@@ -12,7 +22,14 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ExternalLink, Plus, Pencil, Trash2, icons } from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
 import type { Database } from '@/integrations/supabase/types';
+import { 
+  chatGroupSchema, 
+  safeValidate, 
+  VALIDATION_LIMITS,
+  sanitizeText 
+} from '@/lib/validation';
 
 type AppRole = Database['public']['Enums']['app_role'];
 
@@ -44,7 +61,9 @@ const AVAILABLE_ICONS = [
 // Dynamic icon component
 const DynamicIcon = ({ name, className }: { name: string; className?: string }) => {
   // Convert kebab-case to PascalCase for lucide icons lookup
-  const iconName = name
+  // Sanitize the name to prevent any injection
+  const safeName = name.replace(/[^a-z-]/gi, '').slice(0, 50);
+  const iconName = safeName
     .split('-')
     .map(part => part.charAt(0).toUpperCase() + part.slice(1))
     .join('') as keyof typeof icons;
@@ -74,47 +93,77 @@ const defaultFormData: ChatGroupFormData = {
 const Communication = () => {
   const { isAdmin } = useAuth();
   const { chatGroups, isLoading, createGroup, updateGroup, deleteGroup } = useChatGroups();
+  const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<string | null>(null);
   const [formData, setFormData] = useState<ChatGroupFormData>(defaultFormData);
+  const [validationError, setValidationError] = useState<string | null>(null);
 
   const handleOpenWhatsApp = (url: string) => {
+    // Validate URL before opening - security check
+    if (!url.startsWith('https://chat.whatsapp.com/') && !url.startsWith('https://wa.me/')) {
+      toast({
+        title: 'Neplatný odkaz',
+        description: 'Tento odkaz není platný WhatsApp odkaz.',
+        variant: 'destructive',
+      });
+      return;
+    }
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   const handleCreateOrUpdate = async () => {
-    if (!formData.name || !formData.whatsapp_url) {
-      return;
-    }
-
+    // Clear previous validation error
+    setValidationError(null);
+    
     // If public, authorized_roles should be empty array
     const authorizedRoles = formData.isPublic ? [] : formData.authorized_roles;
 
     // Validate: either public or has at least one role
     if (!formData.isPublic && authorizedRoles.length === 0) {
+      setValidationError('Vyberte alespoň jednu roli nebo označte skupinu jako veřejnou.');
       return;
     }
 
+    // Prepare payload with sanitized data
     const payload = {
-      name: formData.name,
-      description: formData.description || undefined,
-      whatsapp_url: formData.whatsapp_url,
+      name: sanitizeText(formData.name),
+      description: sanitizeText(formData.description),
+      whatsapp_url: formData.whatsapp_url.trim(),
       icon_slug: formData.icon_slug,
       authorized_roles: authorizedRoles,
     };
 
-    if (editingGroup) {
-      await updateGroup.mutateAsync({
-        id: editingGroup,
-        ...payload,
+    // Validate with schema
+    const validation = safeValidate(chatGroupSchema, payload);
+    
+    if (!validation.success) {
+      setValidationError(validation.error);
+      toast({
+        title: 'Chyba validace',
+        description: validation.error,
+        variant: 'destructive',
       });
-    } else {
-      await createGroup.mutateAsync(payload);
+      return;
     }
 
-    setIsDialogOpen(false);
-    setEditingGroup(null);
-    setFormData(defaultFormData);
+    try {
+      if (editingGroup) {
+        await updateGroup.mutateAsync({
+          id: editingGroup,
+          ...validation.data,
+        });
+      } else {
+        await createGroup.mutateAsync(validation.data);
+      }
+
+      setIsDialogOpen(false);
+      setEditingGroup(null);
+      setFormData(defaultFormData);
+      setValidationError(null);
+    } catch {
+      // Error is handled by the hook
+    }
   };
 
   const handleEdit = (group: typeof chatGroups[0]) => {
@@ -128,6 +177,7 @@ const Communication = () => {
       isPublic,
     });
     setEditingGroup(group.id);
+    setValidationError(null);
     setIsDialogOpen(true);
   };
 
@@ -142,6 +192,7 @@ const Communication = () => {
         ? prev.authorized_roles.filter(r => r !== role)
         : [...prev.authorized_roles, role],
     }));
+    setValidationError(null);
   };
 
   const handlePublicToggle = (checked: boolean) => {
@@ -151,15 +202,17 @@ const Communication = () => {
       // Clear roles when making public
       authorized_roles: checked ? [] : prev.authorized_roles,
     }));
+    setValidationError(null);
   };
 
   const handleCloseDialog = () => {
     setIsDialogOpen(false);
     setEditingGroup(null);
     setFormData(defaultFormData);
+    setValidationError(null);
   };
 
-  const isFormValid = formData.name && formData.whatsapp_url && (formData.isPublic || formData.authorized_roles.length > 0);
+  const isFormValid = formData.name.trim() && formData.whatsapp_url.trim() && (formData.isPublic || formData.authorized_roles.length > 0);
 
   if (isLoading) {
     return (
@@ -209,6 +262,13 @@ const Communication = () => {
                     : 'Přidejte odkaz na novou WhatsApp skupinu'}
                 </DialogDescription>
               </DialogHeader>
+              
+              {validationError && (
+                <div className="p-3 text-sm text-destructive bg-destructive/10 rounded-md">
+                  {validationError}
+                </div>
+              )}
+              
               <div className="grid gap-4 py-4">
                 <div className="grid gap-2">
                   <Label>Ikona skupiny</Label>
@@ -241,8 +301,12 @@ const Communication = () => {
                   <Input
                     id="name"
                     value={formData.name}
-                    onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+                    onChange={(e) => {
+                      setFormData(prev => ({ ...prev, name: e.target.value }));
+                      setValidationError(null);
+                    }}
                     placeholder="Např. Brigádníci"
+                    maxLength={VALIDATION_LIMITS.TITLE_MAX}
                   />
                 </div>
                 <div className="grid gap-2">
@@ -253,6 +317,7 @@ const Communication = () => {
                     onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
                     placeholder="Krátký popis skupiny..."
                     rows={2}
+                    maxLength={VALIDATION_LIMITS.DESCRIPTION_MAX}
                   />
                 </div>
                 <div className="grid gap-2">
@@ -260,9 +325,16 @@ const Communication = () => {
                   <Input
                     id="whatsapp_url"
                     value={formData.whatsapp_url}
-                    onChange={(e) => setFormData(prev => ({ ...prev, whatsapp_url: e.target.value }))}
+                    onChange={(e) => {
+                      setFormData(prev => ({ ...prev, whatsapp_url: e.target.value }));
+                      setValidationError(null);
+                    }}
                     placeholder="https://chat.whatsapp.com/..."
+                    maxLength={VALIDATION_LIMITS.URL_MAX}
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Musí být ve formátu https://chat.whatsapp.com/... nebo https://wa.me/...
+                  </p>
                 </div>
                 <div className="grid gap-2">
                   <Label>Přístup ke skupině *</Label>

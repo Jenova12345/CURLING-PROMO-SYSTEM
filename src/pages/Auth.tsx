@@ -1,3 +1,13 @@
+/**
+ * Authentication Page
+ * 
+ * Security Features:
+ * - Schema-based input validation with Zod
+ * - Client-side rate limiting for login/register attempts
+ * - Strict length limits on all inputs
+ * - No sensitive data logged to console
+ */
+
 import { useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
@@ -7,16 +17,22 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
-import { z } from 'zod';
-
-const emailSchema = z.string().email('Neplatný formát e-mailu');
-const passwordSchema = z.string().min(6, 'Heslo musí mít alespoň 6 znaků');
-const nameSchema = z.string().min(2, 'Jméno musí mít alespoň 2 znaky');
+import { 
+  loginFormSchema, 
+  registerFormSchema, 
+  safeValidate,
+  VALIDATION_LIMITS 
+} from '@/lib/validation';
+import { useRateLimit } from '@/hooks/useRateLimit';
 
 const Auth = () => {
   const { user, loading, signIn, signUp } = useAuth();
   const { toast } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  // Rate limiting for auth actions
+  const loginRateLimit = useRateLimit('login');
+  const registerRateLimit = useRateLimit('register');
   
   // Login state
   const [loginEmail, setLoginEmail] = useState('');
@@ -42,22 +58,34 @@ const Auth = () => {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    try {
-      emailSchema.parse(loginEmail);
-      passwordSchema.parse(loginPassword);
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        toast({
-          title: 'Chyba validace',
-          description: err.errors[0].message,
-          variant: 'destructive',
-        });
-        return;
-      }
+    // Check rate limit first
+    if (!loginRateLimit.checkLimit()) {
+      toast({
+        title: 'Příliš mnoho pokusů',
+        description: `Zkuste to znovu za ${loginRateLimit.retryAfter}.`,
+        variant: 'destructive',
+      });
+      return;
     }
-
+    
+    // Validate inputs with schema
+    const validation = safeValidate(loginFormSchema, {
+      email: loginEmail,
+      password: loginPassword,
+    });
+    
+    if (!validation.success) {
+      toast({
+        title: 'Chyba validace',
+        description: validation.error,
+        variant: 'destructive',
+      });
+      return;
+    }
+    
+    const validatedData = validation.data;
     setIsSubmitting(true);
-    const { error } = await signIn(loginEmail, loginPassword);
+    const { error } = await signIn(validatedData.email, validatedData.password);
     setIsSubmitting(false);
 
     if (error) {
@@ -68,29 +96,49 @@ const Auth = () => {
           : error.message,
         variant: 'destructive',
       });
+    } else {
+      // Reset rate limit on successful login
+      loginRateLimit.reset();
     }
   };
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    try {
-      nameSchema.parse(registerName);
-      emailSchema.parse(registerEmail);
-      passwordSchema.parse(registerPassword);
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        toast({
-          title: 'Chyba validace',
-          description: err.errors[0].message,
-          variant: 'destructive',
-        });
-        return;
-      }
+    // Check rate limit first
+    if (!registerRateLimit.checkLimit()) {
+      toast({
+        title: 'Příliš mnoho pokusů',
+        description: `Zkuste to znovu za ${registerRateLimit.retryAfter}.`,
+        variant: 'destructive',
+      });
+      return;
     }
+    
+    // Validate inputs with schema
+    const validation = safeValidate(registerFormSchema, {
+      name: registerName,
+      email: registerEmail,
+      password: registerPassword,
+    });
+    
+    if (!validation.success) {
+      toast({
+        title: 'Chyba validace',
+        description: validation.error,
+        variant: 'destructive',
+      });
+      return;
+    }
+    
+    const validatedData = validation.data;
 
     setIsSubmitting(true);
-    const { error } = await signUp(registerEmail, registerPassword, registerName);
+    const { error } = await signUp(
+      validatedData.email, 
+      validatedData.password, 
+      validatedData.name
+    );
     setIsSubmitting(false);
 
     if (error) {
@@ -108,12 +156,18 @@ const Auth = () => {
         });
       }
     } else {
+      // Reset rate limit on successful registration
+      registerRateLimit.reset();
       toast({
         title: 'Registrace úspěšná!',
         description: 'Váš účet byl vytvořen. Nyní jste přihlášeni.',
       });
     }
   };
+
+  // Check if rate limited to disable buttons
+  const isLoginDisabled = isSubmitting || loginRateLimit.isLimited;
+  const isRegisterDisabled = isSubmitting || registerRateLimit.isLimited;
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-primary/5 via-background to-secondary/5 p-4">
@@ -134,6 +188,11 @@ const Auth = () => {
             
             <TabsContent value="login">
               <form onSubmit={handleLogin} className="space-y-4">
+                {loginRateLimit.isLimited && (
+                  <div className="p-3 text-sm text-destructive bg-destructive/10 rounded-md">
+                    Příliš mnoho pokusů. Zkuste to za {loginRateLimit.retryAfter}.
+                  </div>
+                )}
                 <div className="space-y-2">
                   <Label htmlFor="login-email">E-mail</Label>
                   <Input
@@ -142,7 +201,9 @@ const Auth = () => {
                     placeholder="vas@email.cz"
                     value={loginEmail}
                     onChange={(e) => setLoginEmail(e.target.value)}
+                    maxLength={VALIDATION_LIMITS.EMAIL_MAX}
                     required
+                    autoComplete="email"
                   />
                 </div>
                 <div className="space-y-2">
@@ -153,10 +214,12 @@ const Auth = () => {
                     placeholder="••••••••"
                     value={loginPassword}
                     onChange={(e) => setLoginPassword(e.target.value)}
+                    maxLength={VALIDATION_LIMITS.PASSWORD_MAX}
                     required
+                    autoComplete="current-password"
                   />
                 </div>
-                <Button type="submit" className="w-full" disabled={isSubmitting}>
+                <Button type="submit" className="w-full" disabled={isLoginDisabled}>
                   {isSubmitting ? 'Přihlašování...' : 'Přihlásit se'}
                 </Button>
               </form>
@@ -164,6 +227,11 @@ const Auth = () => {
             
             <TabsContent value="register">
               <form onSubmit={handleRegister} className="space-y-4">
+                {registerRateLimit.isLimited && (
+                  <div className="p-3 text-sm text-destructive bg-destructive/10 rounded-md">
+                    Příliš mnoho pokusů. Zkuste to za {registerRateLimit.retryAfter}.
+                  </div>
+                )}
                 <div className="space-y-2">
                   <Label htmlFor="register-name">Celé jméno</Label>
                   <Input
@@ -172,7 +240,9 @@ const Auth = () => {
                     placeholder="Jan Novák"
                     value={registerName}
                     onChange={(e) => setRegisterName(e.target.value)}
+                    maxLength={VALIDATION_LIMITS.NAME_MAX}
                     required
+                    autoComplete="name"
                   />
                 </div>
                 <div className="space-y-2">
@@ -183,7 +253,9 @@ const Auth = () => {
                     placeholder="vas@email.cz"
                     value={registerEmail}
                     onChange={(e) => setRegisterEmail(e.target.value)}
+                    maxLength={VALIDATION_LIMITS.EMAIL_MAX}
                     required
+                    autoComplete="email"
                   />
                 </div>
                 <div className="space-y-2">
@@ -194,10 +266,15 @@ const Auth = () => {
                     placeholder="••••••••"
                     value={registerPassword}
                     onChange={(e) => setRegisterPassword(e.target.value)}
+                    maxLength={VALIDATION_LIMITS.PASSWORD_MAX}
                     required
+                    autoComplete="new-password"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Minimálně {VALIDATION_LIMITS.PASSWORD_MIN} znaků
+                  </p>
                 </div>
-                <Button type="submit" className="w-full" disabled={isSubmitting}>
+                <Button type="submit" className="w-full" disabled={isRegisterDisabled}>
                   {isSubmitting ? 'Registrace...' : 'Zaregistrovat se'}
                 </Button>
               </form>
