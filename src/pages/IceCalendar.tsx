@@ -15,6 +15,8 @@ import { Plus, ChevronLeft, ChevronRight, Trash2, Edit } from 'lucide-react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isSameDay, addMonths, subMonths } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { Database } from '@/integrations/supabase/types';
+import { eventSchema, safeValidate, VALIDATION_LIMITS, sanitizeText } from '@/lib/validation';
+import { useRateLimit, checkRateLimit } from '@/hooks/useRateLimit';
 
 type EventType = Database['public']['Enums']['event_type'];
 
@@ -22,6 +24,7 @@ const IceCalendar = () => {
   const { isAdmin } = useAuth();
   const { events, createEvent, deleteEvent, isCreating, isDeleting } = useEvents();
   const { toast } = useToast();
+  const { isLimited, retryAfter, checkLimit } = useRateLimit('createEvent');
   
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
@@ -58,10 +61,20 @@ const IceCalendar = () => {
   };
 
   const handleCreateEvent = async () => {
-    if (!selectedDate || !title) {
+    // Rate limiting check
+    if (!checkLimit()) {
+      toast({
+        title: 'Příliš mnoho požadavků',
+        description: `Zkuste to znovu za ${retryAfter}.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (!selectedDate) {
       toast({
         title: 'Chyba',
-        description: 'Vyplňte prosím název události',
+        description: 'Vyberte prosím datum události',
         variant: 'destructive',
       });
       return;
@@ -75,14 +88,33 @@ const IceCalendar = () => {
     const [endHours, endMinutes] = endTime.split(':');
     endDateTime.setHours(parseInt(endHours), parseInt(endMinutes));
 
+    // Validate input using schema
+    const validation = safeValidate(eventSchema, {
+      title: sanitizeText(title),
+      description: sanitizeText(description) || undefined,
+      event_type: eventType,
+      start_time: startDateTime.toISOString(),
+      end_time: endDateTime.toISOString(),
+      required_staff: eventType === 'commercial' ? parseInt(requiredStaff) || 0 : 0,
+    });
+
+    if (!validation.success) {
+      toast({
+        title: 'Chyba validace',
+        description: validation.error,
+        variant: 'destructive',
+      });
+      return;
+    }
+
     try {
       await createEvent({
-        title,
-        description: description || undefined,
-        event_type: eventType,
-        start_time: startDateTime.toISOString(),
-        end_time: endDateTime.toISOString(),
-        required_staff: eventType === 'commercial' ? parseInt(requiredStaff) : 0,
+        title: validation.data.title,
+        description: validation.data.description,
+        event_type: validation.data.event_type,
+        start_time: validation.data.start_time,
+        end_time: validation.data.end_time,
+        required_staff: validation.data.required_staff,
       });
 
       toast({
@@ -177,6 +209,7 @@ const IceCalendar = () => {
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
                     placeholder="Např. Firemní teambuilding"
+                    maxLength={VALIDATION_LIMITS.TITLE_MAX}
                   />
                 </div>
 
@@ -223,6 +256,7 @@ const IceCalendar = () => {
                       id="staff"
                       type="number"
                       min="0"
+                      max={VALIDATION_LIMITS.STAFF_COUNT_MAX}
                       value={requiredStaff}
                       onChange={(e) => setRequiredStaff(e.target.value)}
                     />
@@ -239,6 +273,7 @@ const IceCalendar = () => {
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                     placeholder="Další informace o události..."
+                    maxLength={VALIDATION_LIMITS.DESCRIPTION_MAX}
                   />
                 </div>
               </div>
