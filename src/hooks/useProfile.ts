@@ -36,8 +36,6 @@ export const useProfile = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['profile'] });
-      // Force reload to update AuthContext
-      window.location.reload();
     },
   });
 
