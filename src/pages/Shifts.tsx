@@ -21,7 +21,8 @@ const Shifts = () => {
   const { isAdmin, isStaff, user } = useAuth();
   const { 
     shifts, 
-    openShifts, 
+    openShifts,
+    openShiftsByEvent, 
     myShifts,
     myUnpaidShifts,
     pendingShifts,
@@ -346,10 +347,10 @@ const Shifts = () => {
           {isAdmin && <TabsTrigger value="all" className="text-xs sm:text-sm">Všechny směny</TabsTrigger>}
         </TabsList>
 
-        {/* Available Shifts (Staff) */}
+        {/* Available Shifts (Staff) - Grouped by Event */}
         {isStaff && (
           <TabsContent value="available" className="space-y-4">
-            {openShifts.length === 0 ? (
+            {openShiftsByEvent.length === 0 ? (
               <Card>
                 <CardContent className="flex flex-col items-center justify-center py-12">
                   <Calendar className="h-12 w-12 text-muted-foreground mb-4" />
@@ -357,28 +358,32 @@ const Shifts = () => {
                 </CardContent>
               </Card>
             ) : (
-              openShifts.map((shift) => (
-                <Card key={shift.id}>
+              openShiftsByEvent.map((eventItem) => (
+                <Card key={eventItem.eventId}>
                   <CardContent className="flex flex-col sm:flex-row sm:items-center justify-between p-4 md:p-6 gap-4">
                     <div className="flex items-start gap-3">
                       <div className={`w-3 h-3 rounded-full mt-1.5 flex-shrink-0 ${statusColors.open}`} />
                       <div>
-                        <p className="font-medium text-base md:text-lg">{shift.event?.title || 'Směna'}</p>
+                        <p className="font-medium text-base md:text-lg">{eventItem.event?.title || 'Směna'}</p>
                         <p className="text-muted-foreground text-sm">
-                          {shift.event && format(new Date(shift.event.start_time), 'EEE d. MMM yyyy', { locale: cs })}
+                          {eventItem.event && format(new Date(eventItem.event.start_time), 'EEE d. MMM yyyy', { locale: cs })}
                         </p>
                         <p className="text-xs md:text-sm text-muted-foreground">
-                          {shift.event && `${format(new Date(shift.event.start_time), 'HH:mm')} - ${format(new Date(shift.event.end_time), 'HH:mm')}`}
+                          {eventItem.event && `${format(new Date(eventItem.event.start_time), 'HH:mm')} - ${format(new Date(eventItem.event.end_time), 'HH:mm')}`}
                         </p>
                       </div>
                     </div>
                     <div className="flex items-center justify-between sm:justify-end gap-4 ml-6 sm:ml-0">
                       <div className="text-left sm:text-right">
                         <p className="text-xs text-muted-foreground">Sazba</p>
-                        <p className="font-medium text-sm">{shift.hourly_rate} Kč/h</p>
+                        <p className="font-medium text-sm">{eventItem.hourlyRate} Kč/h</p>
+                      </div>
+                      <div className="text-left sm:text-right">
+                        <p className="text-xs text-muted-foreground">Volná místa</p>
+                        <p className="font-medium text-sm">{eventItem.openCount}/{eventItem.totalSlots}</p>
                       </div>
                       <Button 
-                        onClick={() => handleRequestShift(shift.id)} 
+                        onClick={() => handleRequestShift(eventItem.availableShiftIds[0])} 
                         disabled={isRequesting}
                         className="whitespace-nowrap"
                       >
