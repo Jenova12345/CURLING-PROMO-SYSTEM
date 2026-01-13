@@ -54,7 +54,7 @@ const Dashboard = () => {
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Vaše role</CardTitle>
+            <CardTitle className="text-sm font-medium whitespace-nowrap">Vaše role</CardTitle>
             <Badge variant="secondary">{role ? roleLabels[role] : 'Člen'}</Badge>
           </CardHeader>
           <CardContent>
