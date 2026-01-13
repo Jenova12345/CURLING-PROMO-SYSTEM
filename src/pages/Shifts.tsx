@@ -17,6 +17,17 @@ import { Clock, CheckCircle, XCircle, TrendingUp, Calendar, UserCheck, AlertCirc
 import { format, startOfMonth, endOfMonth, subMonths, isWithinInterval } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { 
+  completeShiftSchema, 
+  payoutSchema, 
+  assignShiftSchema, 
+  shiftRequestSchema,
+  safeValidate, 
+  parseNumericInput, 
+  sanitizeText,
+  VALIDATION_LIMITS 
+} from '@/lib/validation';
+import { useRateLimit } from '@/hooks/useRateLimit';
 
 const Shifts = () => {
   const { isAdmin, isStaff, user } = useAuth();
@@ -50,6 +61,12 @@ const Shifts = () => {
   const { payouts, myPayouts, createPayout, isCreatingPayout } = usePayouts();
   const { toast } = useToast();
 
+  // Rate limiting hooks
+  const shiftActionRateLimit = useRateLimit('shiftAction');
+  const completeShiftRateLimit = useRateLimit('completeShift');
+  const payoutRateLimit = useRateLimit('createPayout');
+  const assignRateLimit = useRateLimit('assignShift');
+
   // Complete shift dialog (admin)
   const [completeDialogOpen, setCompleteDialogOpen] = useState(false);
   const [selectedShift, setSelectedShift] = useState<any>(null);
@@ -68,8 +85,29 @@ const Shifts = () => {
   const [selectedStaffId, setSelectedStaffId] = useState<string>('');
 
   const handleRequestShift = async (shiftId: string) => {
+    // Rate limiting
+    if (!shiftActionRateLimit.checkLimit()) {
+      toast({
+        title: 'Příliš mnoho požadavků',
+        description: `Zkuste to znovu za ${shiftActionRateLimit.retryAfter}.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    // Validate shift ID
+    const validation = safeValidate(shiftRequestSchema, { shiftId });
+    if (!validation.success) {
+      toast({
+        title: 'Chyba validace',
+        description: validation.error,
+        variant: 'destructive',
+      });
+      return;
+    }
+
     try {
-      await requestShift(shiftId);
+      await requestShift(validation.data.shiftId);
       toast({
         title: 'Přihláška odeslána!',
         description: 'Čeká na schválení adminem.',
@@ -167,10 +205,33 @@ const Shifts = () => {
   };
 
   const handleCompleteShift = async () => {
-    if (!selectedShift || !hoursWorked || !hourlyRate) {
+    if (!selectedShift) return;
+
+    // Rate limiting
+    if (!completeShiftRateLimit.checkLimit()) {
       toast({
-        title: 'Chyba',
-        description: 'Vyplňte počet odpracovaných hodin a hodinovou sazbu.',
+        title: 'Příliš mnoho požadavků',
+        description: `Zkuste to znovu za ${completeShiftRateLimit.retryAfter}.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    // Parse and validate input
+    const parsedHours = parseNumericInput(hoursWorked, 0);
+    const parsedRate = parseNumericInput(hourlyRate, 0);
+
+    const validation = safeValidate(completeShiftSchema, {
+      shiftId: selectedShift.id,
+      hoursWorked: parsedHours,
+      hourlyRate: parsedRate,
+      notes: sanitizeText(notes) || undefined,
+    });
+
+    if (!validation.success) {
+      toast({
+        title: 'Chyba validace',
+        description: validation.error,
         variant: 'destructive',
       });
       return;
@@ -178,10 +239,10 @@ const Shifts = () => {
 
     try {
       await completeShift({
-        shiftId: selectedShift.id,
-        hoursWorked: parseFloat(hoursWorked),
-        hourlyRate: parseFloat(hourlyRate),
-        notes: notes || undefined,
+        shiftId: validation.data.shiftId,
+        hoursWorked: validation.data.hoursWorked,
+        hourlyRate: validation.data.hourlyRate,
+        notes: validation.data.notes,
       });
       toast({
         title: 'Směna dokončena',
@@ -211,11 +272,37 @@ const Shifts = () => {
   const handlePayout = async () => {
     if (!selectedStaff) return;
 
+    // Rate limiting
+    if (!payoutRateLimit.checkLimit()) {
+      toast({
+        title: 'Příliš mnoho požadavků',
+        description: `Zkuste to znovu za ${payoutRateLimit.retryAfter}.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    // Validate input
+    const validation = safeValidate(payoutSchema, {
+      userId: selectedStaff.staffId,
+      amount: selectedStaff.amount,
+      notes: sanitizeText(payoutNotes) || undefined,
+    });
+
+    if (!validation.success) {
+      toast({
+        title: 'Chyba validace',
+        description: validation.error,
+        variant: 'destructive',
+      });
+      return;
+    }
+
     try {
       await createPayout({
-        userId: selectedStaff.staffId,
-        amount: selectedStaff.amount,
-        notes: payoutNotes || undefined,
+        userId: validation.data.userId,
+        amount: validation.data.amount,
+        notes: validation.data.notes,
       });
       toast({
         title: 'Výplata provedena!',
@@ -241,17 +328,35 @@ const Shifts = () => {
   };
 
   const handleAssignShift = async () => {
-    if (!shiftToAssign || !selectedStaffId) {
+    if (!shiftToAssign) return;
+
+    // Rate limiting
+    if (!assignRateLimit.checkLimit()) {
       toast({
-        title: 'Chyba',
-        description: 'Vyberte brigádníka.',
+        title: 'Příliš mnoho požadavků',
+        description: `Zkuste to znovu za ${assignRateLimit.retryAfter}.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    // Validate input
+    const validation = safeValidate(assignShiftSchema, {
+      shiftId: shiftToAssign.id,
+      staffId: selectedStaffId,
+    });
+
+    if (!validation.success) {
+      toast({
+        title: 'Chyba validace',
+        description: validation.error,
         variant: 'destructive',
       });
       return;
     }
 
     try {
-      await assignShift({ shiftId: shiftToAssign.id, staffId: selectedStaffId });
+      await assignShift({ shiftId: validation.data.shiftId, staffId: validation.data.staffId });
       toast({
         title: 'Směna přiřazena!',
         description: 'Brigádník byl přiřazen na směnu.',

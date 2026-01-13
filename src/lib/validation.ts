@@ -244,16 +244,20 @@ export const chatGroupSchema = z.object({
 });
 
 /**
- * Event form validation
+ * Event form validation with datetime refinement
+ * Validates that end_time is after start_time
  */
 export const eventSchema = z.object({
   title: titleSchema,
   description: descriptionSchema,
   event_type: z.enum(['commercial', 'training', 'maintenance', 'free']),
-  start_time: z.string().datetime('Neplatný formát data/času'),
-  end_time: z.string().datetime('Neplatný formát data/času'),
+  start_time: z.string().refine((val) => !isNaN(Date.parse(val)), 'Neplatný formát data/času'),
+  end_time: z.string().refine((val) => !isNaN(Date.parse(val)), 'Neplatný formát data/času'),
   required_staff: staffCountSchema.optional(),
-});
+}).refine(
+  (data) => new Date(data.end_time) > new Date(data.start_time),
+  { message: 'Konec události musí být po jejím začátku', path: ['end_time'] }
+);
 
 /**
  * Complete shift form validation
@@ -272,6 +276,42 @@ export const payoutSchema = z.object({
   userId: uuidSchema,
   amount: amountSchema,
   notes: notesSchema,
+});
+
+// ============= Role & Assignment Schemas =============
+
+/**
+ * Valid app roles enum
+ */
+export const appRoleSchema = z.enum([
+  'admin',
+  'trainer',
+  'part_time_staff',
+  'pro_player',
+  'hobby_player',
+]);
+
+/**
+ * Role update validation - for admin changing user roles
+ */
+export const roleUpdateSchema = z.object({
+  userId: uuidSchema,
+  role: appRoleSchema,
+});
+
+/**
+ * Shift assignment validation - for admin assigning staff to shifts
+ */
+export const assignShiftSchema = z.object({
+  shiftId: uuidSchema,
+  staffId: uuidSchema,
+});
+
+/**
+ * Shift request validation - for staff requesting shifts
+ */
+export const shiftRequestSchema = z.object({
+  shiftId: uuidSchema,
 });
 
 // ============= Utility Functions =============

@@ -27,6 +27,12 @@ export const RATE_LIMIT_CONFIG = {
   updateProfile: { maxAttempts: 10, windowMs: 60 * 1000, cooldownMs: 30 * 1000 },
   shiftAction: { maxAttempts: 20, windowMs: 60 * 1000, cooldownMs: 15 * 1000 },
   
+  // Admin actions - moderate limits
+  updateRole: { maxAttempts: 15, windowMs: 60 * 1000, cooldownMs: 20 * 1000 },
+  createPayout: { maxAttempts: 10, windowMs: 60 * 1000, cooldownMs: 30 * 1000 },
+  completeShift: { maxAttempts: 20, windowMs: 60 * 1000, cooldownMs: 15 * 1000 },
+  assignShift: { maxAttempts: 15, windowMs: 60 * 1000, cooldownMs: 20 * 1000 },
+  
   // General API calls - lenient limits
   default: { maxAttempts: 30, windowMs: 60 * 1000, cooldownMs: 10 * 1000 },
 } as const;

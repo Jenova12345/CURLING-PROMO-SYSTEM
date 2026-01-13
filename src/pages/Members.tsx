@@ -13,6 +13,8 @@ import { Users, Search, Edit, User } from 'lucide-react';
 import { format } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { Database } from '@/integrations/supabase/types';
+import { roleUpdateSchema, safeValidate } from '@/lib/validation';
+import { useRateLimit } from '@/hooks/useRateLimit';
 
 type AppRole = Database['public']['Enums']['app_role'];
 
@@ -20,6 +22,7 @@ const Members = () => {
   const { isAdmin } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { isLimited, retryAfter, checkLimit } = useRateLimit('updateRole');
   
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('all');
@@ -122,7 +125,33 @@ const Members = () => {
 
   const handleUpdateRole = () => {
     if (!selectedMember) return;
-    updateRole.mutate({ userId: selectedMember.user_id, role: newRole });
+    
+    // Rate limiting check
+    if (!checkLimit()) {
+      toast({
+        title: 'Příliš mnoho požadavků',
+        description: `Zkuste to znovu za ${retryAfter}.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    // Validate input
+    const validation = safeValidate(roleUpdateSchema, {
+      userId: selectedMember.user_id,
+      role: newRole,
+    });
+
+    if (!validation.success) {
+      toast({
+        title: 'Chyba validace',
+        description: validation.error,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    updateRole.mutate({ userId: validation.data.userId, role: validation.data.role });
   };
 
   if (!isAdmin) {
