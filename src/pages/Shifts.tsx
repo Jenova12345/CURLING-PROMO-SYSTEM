@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/hooks/use-toast';
 import { Clock, CheckCircle, XCircle, TrendingUp, Calendar, UserCheck, AlertCircle, Wallet, DollarSign, History, Users, BarChart3, Download, UserPlus, Landmark, Copy } from 'lucide-react';
 import { format, startOfMonth, endOfMonth, subMonths, isWithinInterval } from 'date-fns';
@@ -47,7 +48,7 @@ const Shifts = () => {
     approveShift,
     rejectShift,
     completeShift,
-    completeEvent,
+    completeShiftsIndividually,
     cancelRequest,
     cancelShift,
     assignShift,
@@ -69,11 +70,18 @@ const Shifts = () => {
   const payoutRateLimit = useRateLimit('createPayout');
   const assignRateLimit = useRateLimit('assignShift');
 
-  // Complete event dialog (admin)
+  // Complete event dialog (admin) - individual staff data
+  interface StaffCompletionData {
+    shiftId: string;
+    staffName: string;
+    hours: string;
+    rate: string;
+    manualAmount: string;
+    useManualAmount: boolean;
+  }
   const [completeDialogOpen, setCompleteDialogOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<any>(null);
-  const [hoursWorked, setHoursWorked] = useState('');
-  const [hourlyRate, setHourlyRate] = useState('');
+  const [staffCompletionData, setStaffCompletionData] = useState<StaffCompletionData[]>([]);
   const [notes, setNotes] = useState('');
 
   // Payout dialog (admin)
@@ -221,20 +229,33 @@ const Shifts = () => {
 
   const openCompleteDialog = (eventItem: any) => {
     setSelectedEvent(eventItem);
-    // Pre-fill with event duration
+    
+    // Calculate default hours from event duration
+    let defaultHours = '';
     if (eventItem.event?.start_time && eventItem.event?.end_time) {
       const start = new Date(eventItem.event.start_time);
       const end = new Date(eventItem.event.end_time);
       const hours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
-      setHoursWorked(hours.toFixed(1));
+      defaultHours = hours.toFixed(1);
     }
-    setHourlyRate(eventItem.hourlyRate?.toString() || '150');
+    
+    // Initialize data for each staff member
+    const initialData: StaffCompletionData[] = eventItem.shifts.map((shift: any) => ({
+      shiftId: shift.id,
+      staffName: shift.claimed_profile?.full_name || 'Neznámý',
+      hours: defaultHours,
+      rate: shift.hourly_rate?.toString() || '150',
+      manualAmount: '',
+      useManualAmount: false,
+    }));
+    
+    setStaffCompletionData(initialData);
     setNotes('');
     setCompleteDialogOpen(true);
   };
 
   const handleCompleteEvent = async () => {
-    if (!selectedEvent) return;
+    if (!selectedEvent || staffCompletionData.length === 0) return;
 
     // Rate limiting
     if (!completeShiftRateLimit.checkLimit()) {
@@ -246,24 +267,41 @@ const Shifts = () => {
       return;
     }
 
-    // Parse and validate input
-    const parsedHours = parseNumericInput(hoursWorked, 0);
-    const parsedRate = parseNumericInput(hourlyRate, 0);
+    // Validate all inputs and prepare data
+    const shiftsToSubmit = staffCompletionData.map(staff => {
+      const hours = parseNumericInput(staff.hours, 0);
+      const rate = parseNumericInput(staff.rate, 0);
+      const manualAmount = parseNumericInput(staff.manualAmount, 0);
+      
+      return {
+        shiftId: staff.shiftId,
+        hoursWorked: hours,
+        hourlyRate: rate,
+        manualAmount: staff.useManualAmount ? manualAmount : undefined,
+      };
+    });
+    
+    // Validate - each must have valid values
+    const invalid = shiftsToSubmit.some(s => {
+      if (s.hoursWorked <= 0) return true;
+      if (s.manualAmount !== undefined) {
+        return s.manualAmount <= 0;
+      }
+      return s.hourlyRate <= 0;
+    });
 
-    if (parsedHours <= 0 || parsedRate <= 0) {
+    if (invalid) {
       toast({
         title: 'Chyba validace',
-        description: 'Zadejte platný počet hodin a sazbu.',
+        description: 'Zkontrolujte hodnoty pro všechny brigádníky. Hodiny a částky musí být větší než 0.',
         variant: 'destructive',
       });
       return;
     }
 
     try {
-      await completeEvent({
-        eventId: selectedEvent.eventId,
-        hoursWorked: parsedHours,
-        hourlyRate: parsedRate,
+      await completeShiftsIndividually({
+        shiftsData: shiftsToSubmit,
         notes: sanitizeText(notes) || undefined,
       });
       toast({
@@ -272,8 +310,7 @@ const Shifts = () => {
       });
       setCompleteDialogOpen(false);
       setSelectedEvent(null);
-      setHoursWorked('');
-      setHourlyRate('');
+      setStaffCompletionData([]);
       setNotes('');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Nepodařilo se dokončit akci.';
@@ -416,10 +453,38 @@ const Shifts = () => {
     return shift.claimed_profile?.full_name || 'Neznámý brigádník';
   };
 
-  const calculateTotal = () => {
-    const hours = parseFloat(hoursWorked) || 0;
-    const rate = parseFloat(hourlyRate) || 0;
-    return (hours * rate).toLocaleString('cs-CZ');
+  // Update individual staff completion data
+  const updateStaffData = (shiftId: string, field: keyof StaffCompletionData, value: string | boolean) => {
+    setStaffCompletionData(prev => 
+      prev.map(staff => 
+        staff.shiftId === shiftId 
+          ? { ...staff, [field]: value }
+          : staff
+      )
+    );
+  };
+
+  // Calculate total for all staff
+  const calculateTotalAmount = () => {
+    return staffCompletionData.reduce((sum, staff) => {
+      const hours = parseFloat(staff.hours) || 0;
+      const rate = parseFloat(staff.rate) || 0;
+      const manualAmount = parseFloat(staff.manualAmount) || 0;
+      return sum + (staff.useManualAmount ? manualAmount : hours * rate);
+    }, 0);
+  };
+
+  // Calculate individual staff amount
+  const calculateStaffAmount = (staff: StaffCompletionData) => {
+    const hours = parseFloat(staff.hours) || 0;
+    const rate = parseFloat(staff.rate) || 0;
+    const manualAmount = parseFloat(staff.manualAmount) || 0;
+    return staff.useManualAmount ? manualAmount : hours * rate;
+  };
+
+  // Set same values for all staff
+  const setAllStaffValues = (field: 'hours' | 'rate', value: string) => {
+    setStaffCompletionData(prev => prev.map(staff => ({ ...staff, [field]: value })));
   };
 
   // Get payouts for a specific staff member
@@ -1279,13 +1344,13 @@ const Shifts = () => {
         )}
       </Tabs>
 
-      {/* Complete Event Dialog (Admin) */}
+      {/* Complete Event Dialog (Admin) - Individual staff values */}
       <Dialog open={completeDialogOpen} onOpenChange={setCompleteDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Dokončit akci</DialogTitle>
             <DialogDescription>
-              Zadejte skutečně odpracované hodiny a hodinovou sazbu pro všechny brigádníky.
+              Zadejte hodiny a sazbu pro každého brigádníka zvlášť, nebo použijte ruční odměnu.
             </DialogDescription>
           </DialogHeader>
           
@@ -1294,43 +1359,129 @@ const Shifts = () => {
               <div className="p-3 rounded-lg bg-accent/50">
                 <p className="font-medium">{selectedEvent.event?.title}</p>
                 <p className="text-sm text-muted-foreground">
-                  Brigádníci ({selectedEvent.shifts.length}): {selectedEvent.staffNames.join(', ')}
+                  {selectedEvent.event && format(new Date(selectedEvent.event.start_time), 'EEEE d. MMMM yyyy', { locale: cs })}
+                  {selectedEvent.event && ` • ${format(new Date(selectedEvent.event.start_time), 'HH:mm')} - ${format(new Date(selectedEvent.event.end_time), 'HH:mm')}`}
                 </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="hours">Počet hodin</Label>
-                  <Input
-                    id="hours"
-                    type="number"
-                    step="0.5"
-                    min="0"
-                    value={hoursWorked}
-                    onChange={(e) => setHoursWorked(e.target.value)}
-                    placeholder="Např. 4.5"
-                  />
+              {/* Bulk set for all */}
+              {staffCompletionData.length > 1 && (
+                <div className="p-3 rounded-lg border border-dashed bg-muted/30 space-y-2">
+                  <p className="text-sm font-medium text-muted-foreground">Nastavit všem stejně:</p>
+                  <div className="flex gap-2 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <Label className="text-xs whitespace-nowrap">Hodiny:</Label>
+                      <Input
+                        type="number"
+                        step="0.5"
+                        min="0"
+                        className="w-20 h-8 text-sm"
+                        placeholder="h"
+                        onChange={(e) => setAllStaffValues('hours', e.target.value)}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Label className="text-xs whitespace-nowrap">Sazba:</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        className="w-20 h-8 text-sm"
+                        placeholder="Kč/h"
+                        onChange={(e) => setAllStaffValues('rate', e.target.value)}
+                      />
+                    </div>
+                  </div>
                 </div>
-                
-                <div className="space-y-2">
-                  <Label htmlFor="rate">Hodinová sazba (Kč)</Label>
-                  <Input
-                    id="rate"
-                    type="number"
-                    min="0"
-                    value={hourlyRate}
-                    onChange={(e) => setHourlyRate(e.target.value)}
-                    placeholder="Např. 150"
-                  />
-                </div>
+              )}
+
+              {/* Individual staff entries */}
+              <div className="space-y-3">
+                {staffCompletionData.map((staff, index) => (
+                  <div 
+                    key={staff.shiftId} 
+                    className={`p-4 rounded-lg border ${staff.useManualAmount ? 'border-orange-300 bg-orange-50/50 dark:border-orange-800 dark:bg-orange-950/20' : 'bg-accent/30'}`}
+                  >
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="font-medium">{index + 1}. {staff.staffName}</span>
+                      <span className="font-bold text-lg">
+                        {calculateStaffAmount(staff).toLocaleString('cs-CZ')} Kč
+                      </span>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-3 mb-3">
+                      <div className="space-y-1">
+                        <Label className="text-xs">Hodiny</Label>
+                        <Input
+                          type="number"
+                          step="0.5"
+                          min="0"
+                          value={staff.hours}
+                          onChange={(e) => updateStaffData(staff.shiftId, 'hours', e.target.value)}
+                          placeholder="Např. 4.5"
+                          className="h-9"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Sazba (Kč/h)</Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          value={staff.rate}
+                          onChange={(e) => updateStaffData(staff.shiftId, 'rate', e.target.value)}
+                          placeholder="Např. 150"
+                          className="h-9"
+                          disabled={staff.useManualAmount}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          id={`manual-${staff.shiftId}`}
+                          checked={staff.useManualAmount}
+                          onCheckedChange={(checked) => updateStaffData(staff.shiftId, 'useManualAmount', checked)}
+                        />
+                        <Label htmlFor={`manual-${staff.shiftId}`} className="text-xs cursor-pointer">
+                          Ruční odměna
+                        </Label>
+                      </div>
+                      
+                      {staff.useManualAmount && (
+                        <div className="flex items-center gap-2">
+                          <Label className="text-xs">Částka:</Label>
+                          <Input
+                            type="number"
+                            min="0"
+                            value={staff.manualAmount}
+                            onChange={(e) => updateStaffData(staff.shiftId, 'manualAmount', e.target.value)}
+                            placeholder="Kč"
+                            className="w-28 h-8"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
 
-              <div className="p-3 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-900">
-                <p className="text-sm text-muted-foreground">Výsledná částka na osobu</p>
-                <p className="text-2xl font-bold text-green-600">{calculateTotal()} Kč</p>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Celkem za {selectedEvent.shifts.length} brigádníky: {(parseFloat(hoursWorked || '0') * parseFloat(hourlyRate || '0') * selectedEvent.shifts.length).toLocaleString('cs-CZ')} Kč
-                </p>
+              {/* Total summary */}
+              <div className="p-4 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-900">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-muted-foreground">Celkem za {staffCompletionData.length} brigádníků</p>
+                    <p className="text-2xl font-bold text-green-600">
+                      {calculateTotalAmount().toLocaleString('cs-CZ')} Kč
+                    </p>
+                  </div>
+                  <div className="text-right text-sm text-muted-foreground">
+                    {staffCompletionData.filter(s => s.useManualAmount).length > 0 && (
+                      <p className="text-orange-600">
+                        {staffCompletionData.filter(s => s.useManualAmount).length}× ruční odměna
+                      </p>
+                    )}
+                  </div>
+                </div>
               </div>
               
               <div className="space-y-2">
@@ -1350,7 +1501,7 @@ const Shifts = () => {
               Zrušit
             </Button>
             <Button onClick={handleCompleteEvent} disabled={isCompleting}>
-              {isCompleting ? 'Zpracování...' : `Dokončit akci (${selectedEvent?.shifts.length || 0} brigádníků)`}
+              {isCompleting ? 'Zpracování...' : `Dokončit akci (${staffCompletionData.length} brigádníků)`}
             </Button>
           </DialogFooter>
         </DialogContent>
