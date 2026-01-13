@@ -645,112 +645,207 @@ const IceCalendar = () => {
           onTouchMove={onTouchMove}
           onTouchEnd={onTouchEnd}
         >
-          {/* Day headers */}
-          <div className="grid grid-cols-7 gap-0.5 md:gap-1 mb-2">
-            {dayNames.map((day) => (
-              <div key={day} className="text-center text-[10px] md:text-sm font-medium text-muted-foreground py-1 md:py-2">
-                {day}
-              </div>
-            ))}
-          </div>
+          {/* Vertical list for mobile two-week view */}
+          {isMobile && viewMode === 'twoWeeks' ? (
+            <div className="space-y-2">
+              {displayDays.map((day) => {
+                const dayEvents = getEventsForDay(day);
+                const dayShifts = (isAdmin || isStaff) ? getVisibleShiftsForDay(day) : [];
+                const isToday = isSameDay(day, new Date());
+                const hasContent = dayEvents.length > 0 || dayShifts.length > 0;
 
-          {/* Days grid */}
-          <div className="grid grid-cols-7 gap-0.5 md:gap-1">
-            {/* Empty cells for days before start - only for month view or desktop */}
-            {!(isMobile && viewMode === 'twoWeeks') && Array.from({ length: (monthStart.getDay() + 6) % 7 }).map((_, i) => (
-              <div key={`empty-${i}`} className="min-h-[60px] md:min-h-[100px] bg-muted/30 rounded" />
-            ))}
+                return (
+                  <div
+                    key={day.toISOString()}
+                    onClick={() => handleDayClick(day)}
+                    className={`rounded-lg border transition-colors ${
+                      isToday 
+                        ? 'border-primary bg-primary/5 ring-1 ring-primary/20' 
+                        : 'border-border'
+                    } ${hasContent ? 'cursor-pointer hover:bg-accent/50' : ''}`}
+                  >
+                    {/* Day header */}
+                    <div className={`flex items-center justify-between px-3 py-2 ${
+                      hasContent ? 'border-b border-border/50' : ''
+                    }`}>
+                      <div className="flex items-center gap-2">
+                        <span className={`font-semibold text-sm ${isToday ? 'text-primary' : ''}`}>
+                          {format(day, 'EEEE', { locale: cs })}
+                        </span>
+                        <span className={`text-sm ${isToday ? 'text-primary' : 'text-muted-foreground'}`}>
+                          {format(day, 'd. MMMM', { locale: cs })}
+                        </span>
+                      </div>
+                      {isToday && (
+                        <Badge variant="default" className="text-xs">Dnes</Badge>
+                      )}
+                    </div>
 
-            {/* Actual days */}
-            {displayDays.map((day) => {
-              const dayEvents = getEventsForDay(day);
-              const dayShifts = (isAdmin || isStaff) ? getVisibleShiftsForDay(day) : [];
-              const isToday = isSameDay(day, new Date());
-              const hasContent = dayEvents.length > 0 || dayShifts.length > 0;
-              const isTwoWeekMobile = isMobile && viewMode === 'twoWeeks';
+                    {/* Events and shifts */}
+                    {hasContent ? (
+                      <div className="p-2 space-y-1.5">
+                        {dayEvents.map((event) => {
+                          const stats = event.event_type === 'commercial' ? getEventShiftStats(event.id) : null;
+                          return (
+                            <div
+                              key={event.id}
+                              className={`flex items-center gap-2 p-2 rounded ${eventTypeColors[event.event_type]}`}
+                            >
+                              <Clock className="h-3.5 w-3.5 flex-shrink-0 opacity-80" />
+                              <span className="text-xs font-medium">
+                                {format(new Date(event.start_time), 'HH:mm')}-{format(new Date(event.end_time), 'HH:mm')}
+                              </span>
+                              <span className="text-sm font-medium truncate flex-1">
+                                {event.title}
+                              </span>
+                              {(isAdmin || isStaff) && stats && stats.total > 0 && (
+                                <span className={`px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 ${
+                                  stats.filled === stats.total 
+                                    ? 'bg-white/30 text-white' 
+                                    : 'bg-white/80 text-green-700'
+                                }`}>
+                                  {stats.filled}/{stats.total}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
 
-              // Count shifts by status
-              const statusCounts = dayShifts.reduce((acc, s) => {
-                acc[s.status] = (acc[s.status] || 0) + 1;
-                return acc;
-              }, {} as Record<string, number>);
-
-              return (
-                <div
-                  key={day.toISOString()}
-                  onClick={() => handleDayClick(day)}
-                  className={`${isTwoWeekMobile ? 'min-h-[90px]' : 'min-h-[60px]'} md:min-h-[100px] border rounded p-1 md:p-2 transition-colors ${
-                    isToday ? 'border-primary bg-primary/5' : 'border-border'
-                  } ${hasContent ? 'cursor-pointer hover:bg-accent/50' : ''}`}
-                >
-                  <div className={`text-[10px] md:text-sm font-medium mb-0.5 md:mb-1 ${isToday ? 'text-primary' : ''}`}>
-                    {format(day, 'd')}
-                  </div>
-                  
-                  {/* Events */}
-                  <div className="space-y-0.5">
-                    {dayEvents.slice(0, 2).map((event) => {
-                      const stats = event.event_type === 'commercial' ? getEventShiftStats(event.id) : null;
-                      return (
-                        <div
-                          key={event.id}
-                          className={`text-[8px] md:text-xs p-0.5 md:p-1 rounded truncate ${eventTypeColors[event.event_type]}`}
-                          title={`${event.title} - ${format(new Date(event.start_time), 'HH:mm')} - ${format(new Date(event.end_time), 'HH:mm')}${stats ? ` (${stats.filled}/${stats.total} obsazeno)` : ''}`}
-                        >
-                          <span className="hidden md:inline">{format(new Date(event.start_time), 'HH:mm')} </span>
-                          {event.title}
-                          {(isAdmin || isStaff) && stats && stats.total > 0 && (
-                            <span className={`ml-1 px-1 rounded text-[7px] md:text-[10px] font-medium ${
-                              stats.filled === stats.total 
-                                ? 'bg-white/30 text-white' 
-                                : 'bg-white/80 text-green-700'
-                            }`}>
-                              {stats.filled}/{stats.total}
-                            </span>
-                          )}
-                        </div>
-                      );
-                    })}
-                    {dayEvents.length > 2 && (
-                      <div className="text-[8px] md:text-xs text-muted-foreground">
-                        +{dayEvents.length - 2} dalších
+                        {/* Shift indicators for staff/admin */}
+                        {(isAdmin || isStaff) && dayShifts.length > 0 && (
+                          <div className="flex flex-wrap gap-1 pt-1">
+                            {dayShifts.map((shift, index) => (
+                              <div 
+                                key={shift._isGrouped ? `grouped-${shift.event_id}` : shift.id}
+                                className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-muted/50 text-xs"
+                              >
+                                <div className={`w-2 h-2 rounded-full ${statusColors[shift.status]}`} />
+                                <span className="text-muted-foreground">
+                                  {shift._isGrouped ? `${shift._openCount} volných` : statusLabels[shift.status]}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="px-3 py-1.5 text-xs text-muted-foreground">
+                        Žádné události
                       </div>
                     )}
                   </div>
+                );
+              })}
+            </div>
+          ) : (
+            <>
+              {/* Day headers - only for grid view */}
+              <div className="grid grid-cols-7 gap-0.5 md:gap-1 mb-2">
+                {dayNames.map((day) => (
+                  <div key={day} className="text-center text-[10px] md:text-sm font-medium text-muted-foreground py-1 md:py-2">
+                    {day}
+                  </div>
+                ))}
+              </div>
 
-                  {/* Shift indicators for staff/admin */}
-                  {(isAdmin || isStaff) && dayShifts.length > 0 && (
-                    <div className="flex flex-wrap gap-0.5 mt-1">
-                      {statusCounts.open && (
-                        <div className="flex items-center gap-0.5">
-                          {Array.from({ length: Math.min(statusCounts.open, 3) }).map((_, i) => (
-                            <div key={`open-${i}`} className="w-2 h-2 rounded-full bg-green-500" />
-                          ))}
-                          {statusCounts.open > 3 && (
-                            <span className="text-[8px] text-muted-foreground">+{statusCounts.open - 3}</span>
+              {/* Days grid */}
+              <div className="grid grid-cols-7 gap-0.5 md:gap-1">
+                {/* Empty cells for days before start */}
+                {Array.from({ length: (monthStart.getDay() + 6) % 7 }).map((_, i) => (
+                  <div key={`empty-${i}`} className="min-h-[60px] md:min-h-[100px] bg-muted/30 rounded" />
+                ))}
+
+                {/* Actual days */}
+                {displayDays.map((day) => {
+                  const dayEvents = getEventsForDay(day);
+                  const dayShifts = (isAdmin || isStaff) ? getVisibleShiftsForDay(day) : [];
+                  const isToday = isSameDay(day, new Date());
+                  const hasContent = dayEvents.length > 0 || dayShifts.length > 0;
+
+                  // Count shifts by status
+                  const statusCounts = dayShifts.reduce((acc, s) => {
+                    acc[s.status] = (acc[s.status] || 0) + 1;
+                    return acc;
+                  }, {} as Record<string, number>);
+
+                  return (
+                    <div
+                      key={day.toISOString()}
+                      onClick={() => handleDayClick(day)}
+                      className={`min-h-[60px] md:min-h-[100px] border rounded p-1 md:p-2 transition-colors ${
+                        isToday ? 'border-primary bg-primary/5' : 'border-border'
+                      } ${hasContent ? 'cursor-pointer hover:bg-accent/50' : ''}`}
+                    >
+                      <div className={`text-[10px] md:text-sm font-medium mb-0.5 md:mb-1 ${isToday ? 'text-primary' : ''}`}>
+                        {format(day, 'd')}
+                      </div>
+                      
+                      {/* Events */}
+                      <div className="space-y-0.5">
+                        {dayEvents.slice(0, 2).map((event) => {
+                          const stats = event.event_type === 'commercial' ? getEventShiftStats(event.id) : null;
+                          return (
+                            <div
+                              key={event.id}
+                              className={`text-[8px] md:text-xs p-0.5 md:p-1 rounded truncate ${eventTypeColors[event.event_type]}`}
+                              title={`${event.title} - ${format(new Date(event.start_time), 'HH:mm')} - ${format(new Date(event.end_time), 'HH:mm')}${stats ? ` (${stats.filled}/${stats.total} obsazeno)` : ''}`}
+                            >
+                              <span className="hidden md:inline">{format(new Date(event.start_time), 'HH:mm')} </span>
+                              {event.title}
+                              {(isAdmin || isStaff) && stats && stats.total > 0 && (
+                                <span className={`ml-1 px-1 rounded text-[7px] md:text-[10px] font-medium ${
+                                  stats.filled === stats.total 
+                                    ? 'bg-white/30 text-white' 
+                                    : 'bg-white/80 text-green-700'
+                                }`}>
+                                  {stats.filled}/{stats.total}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {dayEvents.length > 2 && (
+                          <div className="text-[8px] md:text-xs text-muted-foreground">
+                            +{dayEvents.length - 2} dalších
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Shift indicators for staff/admin */}
+                      {(isAdmin || isStaff) && dayShifts.length > 0 && (
+                        <div className="flex flex-wrap gap-0.5 mt-1">
+                          {statusCounts.open && (
+                            <div className="flex items-center gap-0.5">
+                              {Array.from({ length: Math.min(statusCounts.open, 3) }).map((_, i) => (
+                                <div key={`open-${i}`} className="w-2 h-2 rounded-full bg-green-500" />
+                              ))}
+                              {statusCounts.open > 3 && (
+                                <span className="text-[8px] text-muted-foreground">+{statusCounts.open - 3}</span>
+                              )}
+                            </div>
+                          )}
+                          {statusCounts.pending && (
+                            <div className="flex items-center gap-0.5">
+                              {Array.from({ length: Math.min(statusCounts.pending, 2) }).map((_, i) => (
+                                <div key={`pending-${i}`} className="w-2 h-2 rounded-full bg-yellow-500" />
+                              ))}
+                            </div>
+                          )}
+                          {statusCounts.claimed && (
+                            <div className="flex items-center gap-0.5">
+                              {Array.from({ length: Math.min(statusCounts.claimed, 2) }).map((_, i) => (
+                                <div key={`claimed-${i}`} className="w-2 h-2 rounded-full bg-blue-500" />
+                              ))}
+                            </div>
                           )}
                         </div>
                       )}
-                      {statusCounts.pending && (
-                        <div className="flex items-center gap-0.5">
-                          {Array.from({ length: Math.min(statusCounts.pending, 2) }).map((_, i) => (
-                            <div key={`pending-${i}`} className="w-2 h-2 rounded-full bg-yellow-500" />
-                          ))}
-                        </div>
-                      )}
-                      {statusCounts.claimed && (
-                        <div className="flex items-center gap-0.5">
-                          {Array.from({ length: Math.min(statusCounts.claimed, 2) }).map((_, i) => (
-                            <div key={`claimed-${i}`} className="w-2 h-2 rounded-full bg-blue-500" />
-                          ))}
-                        </div>
-                      )}
                     </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </CardContent>
       </Card>
 
