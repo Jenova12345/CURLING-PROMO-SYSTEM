@@ -86,6 +86,10 @@ const Shifts = () => {
   const [shiftToAssign, setShiftToAssign] = useState<any>(null);
   const [selectedStaffId, setSelectedStaffId] = useState<string>('');
 
+  // Staff payout history dialog (admin)
+  const [staffHistoryDialogOpen, setStaffHistoryDialogOpen] = useState(false);
+  const [selectedStaffHistory, setSelectedStaffHistory] = useState<{ staffId: string; staffName: string } | null>(null);
+
   // Active tab state
   const defaultTab = isAdmin ? (pendingShifts.length > 0 ? 'pending' : eventsToComplete.length > 0 ? 'complete' : 'all') : 'available';
   const [activeTab, setActiveTab] = useState<string>(defaultTab);
@@ -397,6 +401,21 @@ const Shifts = () => {
     const hours = parseFloat(hoursWorked) || 0;
     const rate = parseFloat(hourlyRate) || 0;
     return (hours * rate).toLocaleString('cs-CZ');
+  };
+
+  // Get payouts for a specific staff member
+  const getStaffPayouts = (staffId: string) => {
+    return payouts.filter(p => p.user_id === staffId);
+  };
+
+  // Get completed shifts for a specific staff member
+  const getStaffCompletedShifts = (staffId: string) => {
+    return shifts.filter(s => s.claimed_by === staffId && s.status === 'completed');
+  };
+
+  const openStaffHistoryDialog = (staffId: string, staffName: string) => {
+    setSelectedStaffHistory({ staffId, staffName });
+    setStaffHistoryDialogOpen(true);
   };
 
   if (isLoading) {
@@ -1090,11 +1109,16 @@ const Shifts = () => {
                           <TableHead className="text-right">Celkem</TableHead>
                           <TableHead className="text-right">Vyplaceno</TableHead>
                           <TableHead className="text-right">K výplatě</TableHead>
+                          <TableHead className="text-right">Akce</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {adminStats.staffStats.map((staff) => (
-                          <TableRow key={staff.staffId}>
+                          <TableRow 
+                            key={staff.staffId}
+                            className="cursor-pointer hover:bg-accent/70"
+                            onClick={() => openStaffHistoryDialog(staff.staffId, staff.staffName)}
+                          >
                             <TableCell className="font-medium">{staff.staffName}</TableCell>
                             <TableCell className="text-right">{staff.shiftsCount}</TableCell>
                             <TableCell className="text-right">{staff.hoursWorked} h</TableCell>
@@ -1106,6 +1130,18 @@ const Shifts = () => {
                               ) : (
                                 <span className="text-muted-foreground">0 Kč</span>
                               )}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openStaffHistoryDialog(staff.staffId, staff.staffName);
+                                }}
+                              >
+                                <History className="h-4 w-4" />
+                              </Button>
                             </TableCell>
                           </TableRow>
                         ))}
@@ -1120,6 +1156,7 @@ const Shifts = () => {
                           <TableCell className="text-right text-orange-600">
                             {adminStats.unpaidTotal.toLocaleString('cs-CZ')} Kč
                           </TableCell>
+                          <TableCell></TableCell>
                         </TableRow>
                       </TableBody>
                     </Table>
@@ -1399,6 +1436,129 @@ const Shifts = () => {
               disabled={isAssigning || !selectedStaffId}
             >
               {isAssigning ? 'Zpracování...' : 'Přiřadit brigádníka'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Staff Payout History Dialog (Admin) */}
+      <Dialog open={staffHistoryDialogOpen} onOpenChange={setStaffHistoryDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <History className="h-5 w-5" />
+              Historie výplat - {selectedStaffHistory?.staffName}
+            </DialogTitle>
+            <DialogDescription>
+              Detailní přehled všech výplat a dokončených směn brigádníka
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedStaffHistory && (
+            <div className="space-y-6">
+              {/* Payout summary */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="p-4 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-900">
+                  <p className="text-sm text-muted-foreground">Celkem vyplaceno</p>
+                  <p className="text-2xl font-bold text-green-600">
+                    {getStaffPayouts(selectedStaffHistory.staffId)
+                      .reduce((sum, p) => sum + Number(p.amount), 0)
+                      .toLocaleString('cs-CZ')} Kč
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {getStaffPayouts(selectedStaffHistory.staffId).length} výplat
+                  </p>
+                </div>
+                <div className="p-4 rounded-lg bg-accent/50 border">
+                  <p className="text-sm text-muted-foreground">Dokončené směny</p>
+                  <p className="text-2xl font-bold">
+                    {getStaffCompletedShifts(selectedStaffHistory.staffId).length}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {getStaffCompletedShifts(selectedStaffHistory.staffId)
+                      .reduce((sum, s) => sum + (Number(s.hours_worked) || 0), 0)
+                      .toFixed(1)} h odpracováno
+                  </p>
+                </div>
+              </div>
+
+              {/* Payouts list */}
+              <div>
+                <h4 className="font-medium mb-3 flex items-center gap-2">
+                  <Wallet className="h-4 w-4" />
+                  Výplaty
+                </h4>
+                {getStaffPayouts(selectedStaffHistory.staffId).length === 0 ? (
+                  <p className="text-muted-foreground text-sm py-4 text-center">Zatím žádné výplaty.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {getStaffPayouts(selectedStaffHistory.staffId).map((payout) => (
+                      <div key={payout.id} className="flex items-center justify-between p-3 rounded-lg bg-accent/50">
+                        <div>
+                          <p className="font-medium">{Number(payout.amount).toLocaleString('cs-CZ')} Kč</p>
+                          <p className="text-xs text-muted-foreground">
+                            {format(new Date(payout.paid_at), 'd. MMMM yyyy, HH:mm', { locale: cs })}
+                          </p>
+                          {payout.notes && (
+                            <p className="text-xs text-muted-foreground mt-1">{payout.notes}</p>
+                          )}
+                        </div>
+                        <Badge variant="outline" className="border-green-500 text-green-600">
+                          <CheckCircle className="h-3 w-3 mr-1" />
+                          Vyplaceno
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Completed shifts list */}
+              <div>
+                <h4 className="font-medium mb-3 flex items-center gap-2">
+                  <Clock className="h-4 w-4" />
+                  Dokončené směny
+                </h4>
+                {getStaffCompletedShifts(selectedStaffHistory.staffId).length === 0 ? (
+                  <p className="text-muted-foreground text-sm py-4 text-center">Zatím žádné dokončené směny.</p>
+                ) : (
+                  <div className="space-y-2 max-h-60 overflow-y-auto">
+                    {getStaffCompletedShifts(selectedStaffHistory.staffId).map((shift) => (
+                      <div key={shift.id} className="flex items-center justify-between p-3 rounded-lg bg-accent/30 border">
+                        <div>
+                          <p className="font-medium text-sm">{shift.event?.title || 'Směna'}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {shift.event && format(new Date(shift.event.start_time), 'd. MMM yyyy', { locale: cs })}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-medium text-sm">
+                            {(Number(shift.hours_worked) * Number(shift.hourly_rate)).toLocaleString('cs-CZ')} Kč
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {shift.hours_worked} h × {shift.hourly_rate} Kč
+                          </p>
+                          {shift.payout_id ? (
+                            <Badge variant="outline" className="text-[10px] mt-1 border-green-500 text-green-600">
+                              Vyplaceno
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-[10px] mt-1 border-orange-500 text-orange-600">
+                              Čeká
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setStaffHistoryDialogOpen(false)}>
+              Zavřít
             </Button>
           </DialogFooter>
         </DialogContent>
