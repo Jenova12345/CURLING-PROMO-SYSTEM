@@ -8,6 +8,7 @@ import {
   LogOut, 
   User,
   Calendar, 
+  CalendarDays,
   Clock, 
   Bell, 
   Users, 
@@ -51,6 +52,12 @@ const MobileHeader = () => {
       roles: ['admin', 'part_time_staff']
     },
     { 
+      path: '/shift-calendar', 
+      label: 'Kalendář směn', 
+      icon: CalendarDays,
+      roles: ['admin', 'part_time_staff']
+    },
+    {
       path: '/notifications', 
       label: 'Oznámení', 
       icon: Bell,

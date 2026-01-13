@@ -122,7 +122,26 @@ body.modal-open {
 
 /* Better touch targets on mobile */
 @media (max-width: 768px) {
-  button, a {
+  button, a, [role="button"] {
     min-height: 44px;
+  }
+  
+  /* Active state feedback for touch */
+  button:active, a:active, [role="button"]:active {
+    transform: scale(0.98);
+    transition: transform 0.1s ease-out;
+  }
+  
+  /* Better tap highlight */
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* Ensure dialogs are scrollable on mobile */
+@media (max-width: 640px) {
+  [role="dialog"] {
+    max-height: 90vh;
+    overflow-y: auto;
   }
 }

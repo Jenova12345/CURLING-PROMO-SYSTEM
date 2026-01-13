@@ -3,6 +3,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 import { 
   Calendar, 
+  CalendarDays,
   Clock, 
   Bell, 
   Users, 
@@ -34,6 +35,12 @@ const MobileNav = () => {
       roles: ['admin', 'part_time_staff']
     },
     { 
+      path: '/shift-calendar', 
+      label: 'Kalendář', 
+      icon: CalendarDays,
+      roles: ['admin', 'part_time_staff']
+    },
+    {
       path: '/notifications', 
       label: 'Oznámení', 
       icon: Bell,
