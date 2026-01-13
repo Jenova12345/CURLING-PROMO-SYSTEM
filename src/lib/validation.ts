@@ -283,7 +283,7 @@ export const payoutSchema = z.object({
 export function safeValidate<T>(
   schema: z.ZodSchema<T>,
   data: unknown
-): { success: true; data: T } | { success: false; error: string } {
+): { success: true; data: T; error?: undefined } | { success: false; error: string; data?: undefined } {
   const result = schema.safeParse(data);
   
   if (result.success) {

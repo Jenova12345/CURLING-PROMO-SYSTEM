@@ -148,13 +148,22 @@ const Communication = () => {
     }
 
     try {
+      // Type assertion - validation passed so data is valid
+      const validData = validation.data as {
+        name: string;
+        description?: string;
+        whatsapp_url: string;
+        icon_slug?: string;
+        authorized_roles: AppRole[];
+      };
+      
       if (editingGroup) {
         await updateGroup.mutateAsync({
           id: editingGroup,
-          ...validation.data,
+          ...validData,
         });
       } else {
-        await createGroup.mutateAsync(validation.data);
+        await createGroup.mutateAsync(validData);
       }
 
       setIsDialogOpen(false);
