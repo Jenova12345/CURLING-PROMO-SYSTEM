@@ -21,7 +21,7 @@ import { eventSchema, safeValidate, VALIDATION_LIMITS, sanitizeText } from '@/li
 import { useRateLimit } from '@/hooks/useRateLimit';
 
 type EventType = Database['public']['Enums']['event_type'];
-type ViewMode = 'twoWeeks' | 'month';
+type ViewMode = 'week' | 'month';
 type Event = Database['public']['Tables']['events']['Row'];
 
 const IceCalendar = () => {
@@ -38,15 +38,10 @@ const IceCalendar = () => {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState<Event | null>(null);
   const [isDayDetailOpen, setIsDayDetailOpen] = useState(false);
-  const [viewMode, setViewMode] = useState<ViewMode>('twoWeeks');
-  const [twoWeekStart, setTwoWeekStart] = useState(() => 
+  const [viewMode, setViewMode] = useState<ViewMode>('week');
+  const [weekStart, setWeekStart] = useState(() => 
     startOfWeek(new Date(), { weekStartsOn: 1 })
   );
-  
-  // Swipe gesture state
-  const [touchStart, setTouchStart] = useState<number | null>(null);
-  const [touchEnd, setTouchEnd] = useState<number | null>(null);
-  const minSwipeDistance = 50;
   
   // Form state
   const [title, setTitle] = useState('');
@@ -60,29 +55,29 @@ const IceCalendar = () => {
   const monthEnd = endOfMonth(currentMonth);
   const daysInMonth = eachDayOfInterval({ start: monthStart, end: monthEnd });
 
-  // Two week days calculation
-  const getTwoWeekDays = () => {
+  // Week days calculation
+  const getWeekDays = () => {
     return eachDayOfInterval({
-      start: twoWeekStart,
-      end: addDays(twoWeekStart, 13)
+      start: weekStart,
+      end: addDays(weekStart, 6)
     });
   };
 
-  const twoWeekDays = getTwoWeekDays();
-  const displayDays = isMobile && viewMode === 'twoWeeks' ? twoWeekDays : daysInMonth;
+  const weekDays = getWeekDays();
+  const displayDays = isMobile && viewMode === 'week' ? weekDays : daysInMonth;
 
   // Navigation handlers
   const handlePrevNav = () => {
-    if (isMobile && viewMode === 'twoWeeks') {
-      setTwoWeekStart(subWeeks(twoWeekStart, 2));
+    if (isMobile && viewMode === 'week') {
+      setWeekStart(subWeeks(weekStart, 1));
     } else {
       setCurrentMonth(subMonths(currentMonth, 1));
     }
   };
 
   const handleNextNav = () => {
-    if (isMobile && viewMode === 'twoWeeks') {
-      setTwoWeekStart(addWeeks(twoWeekStart, 2));
+    if (isMobile && viewMode === 'week') {
+      setWeekStart(addWeeks(weekStart, 1));
     } else {
       setCurrentMonth(addMonths(currentMonth, 1));
     }
@@ -90,15 +85,15 @@ const IceCalendar = () => {
 
   const handleGoToToday = () => {
     const today = new Date();
-    setTwoWeekStart(startOfWeek(today, { weekStartsOn: 1 }));
+    setWeekStart(startOfWeek(today, { weekStartsOn: 1 }));
     setCurrentMonth(today);
   };
 
   // Format header based on view mode
   const getCalendarHeader = () => {
-    if (isMobile && viewMode === 'twoWeeks') {
-      const endDate = addDays(twoWeekStart, 13);
-      return `${format(twoWeekStart, 'd.', { locale: cs })} - ${format(endDate, 'd. MMMM yyyy', { locale: cs })}`;
+    if (isMobile && viewMode === 'week') {
+      const endDate = addDays(weekStart, 6);
+      return `${format(weekStart, 'd.', { locale: cs })} - ${format(endDate, 'd. MMMM yyyy', { locale: cs })}`;
     }
     return format(currentMonth, 'LLLL yyyy', { locale: cs });
   };
@@ -399,33 +394,6 @@ const IceCalendar = () => {
     }
   };
 
-  // Swipe gesture handlers
-  const onTouchStart = (e: React.TouchEvent) => {
-    setTouchEnd(null);
-    setTouchStart(e.targetTouches[0].clientX);
-  };
-
-  const onTouchMove = (e: React.TouchEvent) => {
-    setTouchEnd(e.targetTouches[0].clientX);
-  };
-
-  const onTouchEnd = () => {
-    if (!touchStart || !touchEnd) return;
-    
-    const distance = touchStart - touchEnd;
-    const isLeftSwipe = distance > minSwipeDistance;
-    const isRightSwipe = distance < -minSwipeDistance;
-    
-    if (isLeftSwipe) {
-      handleNextNav();
-    }
-    if (isRightSwipe) {
-      handlePrevNav();
-    }
-    
-    setTouchStart(null);
-    setTouchEnd(null);
-  };
 
   const dayNames = ['Po', 'Út', 'St', 'Čt', 'Pá', 'So', 'Ne'];
 
@@ -601,11 +569,11 @@ const IceCalendar = () => {
       {isMobile && (
         <div className="flex items-center justify-center gap-2">
           <Button 
-            variant={viewMode === 'twoWeeks' ? 'default' : 'outline'} 
+            variant={viewMode === 'week' ? 'default' : 'outline'} 
             size="sm"
-            onClick={() => setViewMode('twoWeeks')}
+            onClick={() => setViewMode('week')}
           >
-            2 týdny
+            Týden
           </Button>
           <Button 
             variant={viewMode === 'month' ? 'default' : 'outline'} 
@@ -626,7 +594,7 @@ const IceCalendar = () => {
           <h2 className="text-lg md:text-xl font-semibold text-center">
             {getCalendarHeader()}
           </h2>
-          {isMobile && viewMode === 'twoWeeks' && (
+          {isMobile && viewMode === 'week' && (
             <Button variant="ghost" size="sm" onClick={handleGoToToday} className="text-xs">
               Dnes
             </Button>
@@ -639,14 +607,9 @@ const IceCalendar = () => {
 
       {/* Calendar Grid */}
       <Card>
-        <CardContent 
-          className="p-2 md:p-4"
-          onTouchStart={onTouchStart}
-          onTouchMove={onTouchMove}
-          onTouchEnd={onTouchEnd}
-        >
-          {/* Vertical list for mobile two-week view */}
-          {isMobile && viewMode === 'twoWeeks' ? (
+        <CardContent className="p-2 md:p-4">
+          {/* Vertical list for mobile week view */}
+          {isMobile && viewMode === 'week' ? (
             <div className="space-y-2">
               {displayDays.map((day) => {
                 const dayEvents = getEventsForDay(day);
