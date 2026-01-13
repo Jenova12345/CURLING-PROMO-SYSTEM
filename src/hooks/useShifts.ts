@@ -200,6 +200,37 @@ export const useShifts = () => {
     },
   });
 
+  // Admin completes all shifts for an event at once
+  const completeEvent = useMutation({
+    mutationFn: async ({ eventId, hoursWorked, hourlyRate, notes }: { 
+      eventId: string; 
+      hoursWorked: number;
+      hourlyRate: number;
+      notes?: string;
+    }) => {
+      const { data, error } = await supabase
+        .from('shifts')
+        .update({
+          status: 'completed',
+          hours_worked: hoursWorked,
+          hourly_rate: hourlyRate,
+          notes,
+          completed_at: new Date().toISOString(),
+        })
+        .eq('event_id', eventId)
+        .eq('status', 'claimed')
+        .select();
+
+      if (error) {
+        throw new Error('Nepodařilo se dokončit směny.');
+      }
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['shifts'] });
+    },
+  });
+
   // Staff cancels their pending request
   const cancelRequest = useMutation({
     mutationFn: async (shiftId: string) => {
@@ -330,6 +361,27 @@ export const useShifts = () => {
     if (!s.event?.end_time) return false;
     return new Date(s.event.end_time) < new Date();
   });
+
+  // Group shifts to complete by event (for admin to complete whole events at once)
+  const eventsToComplete = Object.values(
+    shiftsToComplete.reduce((acc, shift) => {
+      const eventId = shift.event_id;
+      if (!acc[eventId]) {
+        acc[eventId] = {
+          eventId,
+          event: shift.event,
+          hourlyRate: shift.hourly_rate,
+          shifts: [],
+          staffNames: [],
+        };
+      }
+      acc[eventId].shifts.push(shift);
+      if (shift.claimed_profile?.full_name) {
+        acc[eventId].staffNames.push(shift.claimed_profile.full_name);
+      }
+      return acc;
+    }, {} as Record<string, { eventId: string; event: any; hourlyRate: number | null; shifts: any[]; staffNames: string[] }>)
+  );
   
   // My completed unpaid shifts
   const myUnpaidShifts = myShifts.filter(s => s.status === 'completed' && !s.payout_id);
@@ -426,6 +478,7 @@ export const useShifts = () => {
     myUnpaidShifts,
     pendingShifts,
     shiftsToComplete,
+    eventsToComplete,
     staffUnpaidAmounts: Object.values(staffUnpaidAmounts),
     adminStats: {
       ...adminStats,
@@ -436,13 +489,14 @@ export const useShifts = () => {
     approveShift: approveShift.mutateAsync,
     rejectShift: rejectShift.mutateAsync,
     completeShift: completeShift.mutateAsync,
+    completeEvent: completeEvent.mutateAsync,
     cancelRequest: cancelRequest.mutateAsync,
     cancelShift: cancelShift.mutateAsync,
     assignShift: assignShift.mutateAsync,
     isRequesting: requestShift.isPending,
     isApproving: approveShift.isPending,
     isRejecting: rejectShift.isPending,
-    isCompleting: completeShift.isPending,
+    isCompleting: completeShift.isPending || completeEvent.isPending,
     isAssigning: assignShift.isPending,
     totalHoursWorked,
     unpaidEarnings,
