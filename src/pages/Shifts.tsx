@@ -11,8 +11,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
-import { Clock, CheckCircle, XCircle, TrendingUp, Calendar, UserCheck, AlertCircle, Wallet, DollarSign, History, Users, BarChart3, Download } from 'lucide-react';
+import { Clock, CheckCircle, XCircle, TrendingUp, Calendar, UserCheck, AlertCircle, Wallet, DollarSign, History, Users, BarChart3, Download, UserPlus } from 'lucide-react';
 import { format, startOfMonth, endOfMonth, subMonths, isWithinInterval } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
@@ -22,7 +23,8 @@ const Shifts = () => {
   const { 
     shifts, 
     openShifts,
-    openShiftsByEvent, 
+    openShiftsByEvent,
+    availableStaff,
     myShifts,
     myUnpaidShifts,
     pendingShifts,
@@ -35,10 +37,12 @@ const Shifts = () => {
     completeShift, 
     cancelRequest,
     cancelShift,
+    assignShift,
     isRequesting,
     isApproving,
     isRejecting,
     isCompleting,
+    isAssigning,
     totalHoursWorked,
     unpaidEarnings,
     isLoading 
@@ -57,6 +61,11 @@ const Shifts = () => {
   const [payoutDialogOpen, setPayoutDialogOpen] = useState(false);
   const [selectedStaff, setSelectedStaff] = useState<{ staffId: string; staffName: string; amount: number } | null>(null);
   const [payoutNotes, setPayoutNotes] = useState('');
+
+  // Assign shift dialog (admin)
+  const [assignDialogOpen, setAssignDialogOpen] = useState(false);
+  const [shiftToAssign, setShiftToAssign] = useState<any>(null);
+  const [selectedStaffId, setSelectedStaffId] = useState<string>('');
 
   const handleRequestShift = async (shiftId: string) => {
     try {
@@ -225,6 +234,41 @@ const Shifts = () => {
     }
   };
 
+  const openAssignDialog = (shift: any) => {
+    setShiftToAssign(shift);
+    setSelectedStaffId('');
+    setAssignDialogOpen(true);
+  };
+
+  const handleAssignShift = async () => {
+    if (!shiftToAssign || !selectedStaffId) {
+      toast({
+        title: 'Chyba',
+        description: 'Vyberte brigádníka.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    try {
+      await assignShift({ shiftId: shiftToAssign.id, staffId: selectedStaffId });
+      toast({
+        title: 'Směna přiřazena!',
+        description: 'Brigádník byl přiřazen na směnu.',
+      });
+      setAssignDialogOpen(false);
+      setShiftToAssign(null);
+      setSelectedStaffId('');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nepodařilo se přiřadit směnu.';
+      toast({
+        title: 'Chyba',
+        description: message,
+        variant: 'destructive',
+      });
+    }
+  };
+
   const statusLabels: Record<string, string> = {
     open: 'Volná',
     pending: 'Čeká na schválení',
@@ -343,6 +387,14 @@ const Shifts = () => {
               )}
             </TabsTrigger>
           )}
+          {isAdmin && <TabsTrigger value="open" className="text-xs sm:text-sm relative">
+              Volné
+              {openShifts.length > 0 && (
+                <span className="ml-1 inline-flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-green-500 rounded-full">
+                  {openShifts.length}
+                </span>
+              )}
+            </TabsTrigger>}
           {isAdmin && <TabsTrigger value="stats" className="text-xs sm:text-sm">Statistiky</TabsTrigger>}
           {isAdmin && <TabsTrigger value="all" className="text-xs sm:text-sm">Všechny směny</TabsTrigger>}
         </TabsList>
@@ -953,6 +1005,58 @@ const Shifts = () => {
           </TabsContent>
         )}
 
+        {/* Open Shifts - Admin can assign staff */}
+        {isAdmin && (
+          <TabsContent value="open" className="space-y-4">
+            {openShifts.length === 0 ? (
+              <Card>
+                <CardContent className="flex flex-col items-center justify-center py-12">
+                  <CheckCircle className="h-12 w-12 text-muted-foreground mb-4" />
+                  <p className="text-muted-foreground">Všechny směny jsou obsazeny.</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <UserPlus className="h-5 w-5 text-green-500" />
+                    Volné směny k přiřazení
+                  </CardTitle>
+                  <CardDescription>Kliknutím na "Přiřadit" můžete ručně přiřadit brigádníka na směnu</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {openShifts.map((shift) => (
+                    <div key={shift.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-900 gap-4">
+                      <div className="flex items-start gap-4">
+                        <div className="w-3 h-3 rounded-full mt-1.5 bg-green-500" />
+                        <div>
+                          <p className="font-medium">{shift.event?.title || 'Směna'}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {shift.event && format(new Date(shift.event.start_time), 'EEE d. MMMM yyyy', { locale: cs })}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {shift.event && `${format(new Date(shift.event.start_time), 'HH:mm')} - ${format(new Date(shift.event.end_time), 'HH:mm')}`}
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Sazba: {shift.hourly_rate} Kč/h
+                          </p>
+                        </div>
+                      </div>
+                      <Button 
+                        size="sm"
+                        onClick={() => openAssignDialog(shift)}
+                      >
+                        <UserPlus className="h-4 w-4 mr-1" />
+                        Přiřadit brigádníka
+                      </Button>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+        )}
+
         {/* All Shifts (Admin) */}
         {isAdmin && (
           <TabsContent value="all" className="space-y-4">
@@ -1109,6 +1213,64 @@ const Shifts = () => {
               className="bg-green-600 hover:bg-green-700"
             >
               {isCreatingPayout ? 'Zpracování...' : 'Potvrdit výplatu'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Assign Shift Dialog (Admin) */}
+      <Dialog open={assignDialogOpen} onOpenChange={setAssignDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Přiřadit brigádníka na směnu</DialogTitle>
+            <DialogDescription>
+              Vyberte brigádníka, kterého chcete přiřadit na tuto směnu. Směna bude rovnou schválena.
+            </DialogDescription>
+          </DialogHeader>
+          
+          {shiftToAssign && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-lg bg-accent/50 border">
+                <p className="font-medium text-lg">{shiftToAssign.event?.title || 'Směna'}</p>
+                <p className="text-sm text-muted-foreground">
+                  {shiftToAssign.event && format(new Date(shiftToAssign.event.start_time), 'EEEE d. MMMM yyyy', { locale: cs })}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  {shiftToAssign.event && `${format(new Date(shiftToAssign.event.start_time), 'HH:mm')} - ${format(new Date(shiftToAssign.event.end_time), 'HH:mm')}`}
+                </p>
+                <p className="text-sm mt-2">Sazba: {shiftToAssign.hourly_rate} Kč/h</p>
+              </div>
+              
+              <div className="space-y-2">
+                <Label htmlFor="staffSelect">Vyberte brigádníka</Label>
+                <Select value={selectedStaffId} onValueChange={setSelectedStaffId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Vyberte brigádníka..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableStaff.map((staff) => (
+                      <SelectItem key={staff.userId} value={staff.userId}>
+                        {staff.fullName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {availableStaff.length === 0 && (
+                  <p className="text-sm text-muted-foreground">Žádní brigádníci nejsou k dispozici.</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAssignDialogOpen(false)}>
+              Zrušit
+            </Button>
+            <Button 
+              onClick={handleAssignShift} 
+              disabled={isAssigning || !selectedStaffId}
+            >
+              {isAssigning ? 'Zpracování...' : 'Přiřadit brigádníka'}
             </Button>
           </DialogFooter>
         </DialogContent>

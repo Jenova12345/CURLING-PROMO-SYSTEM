@@ -6,6 +6,35 @@ export const useShifts = () => {
   const { user, isAdmin } = useAuth();
   const queryClient = useQueryClient();
 
+  // Fetch all part-time staff for admin to assign shifts
+  const { data: availableStaff = [] } = useQuery({
+    queryKey: ['available-staff'],
+    queryFn: async () => {
+      const { data: roles, error: rolesError } = await supabase
+        .from('user_roles')
+        .select('user_id')
+        .eq('role', 'part_time_staff');
+
+      if (rolesError) throw rolesError;
+
+      const userIds = roles.map(r => r.user_id);
+      if (userIds.length === 0) return [];
+
+      const { data: profiles, error: profilesError } = await supabase
+        .from('profiles')
+        .select('user_id, full_name')
+        .in('user_id', userIds);
+
+      if (profilesError) throw profilesError;
+
+      return profiles.map(p => ({
+        userId: p.user_id,
+        fullName: p.full_name || 'Neznámý',
+      }));
+    },
+    enabled: !!user && isAdmin,
+  });
+
   const { data: shifts = [], isLoading } = useQuery({
     queryKey: ['shifts'],
     queryFn: async () => {
@@ -228,6 +257,31 @@ export const useShifts = () => {
     },
   });
 
+  // Admin directly assigns a staff member to a shift (open -> claimed, bypassing pending)
+  const assignShift = useMutation({
+    mutationFn: async ({ shiftId, staffId }: { shiftId: string; staffId: string }) => {
+      const { data, error } = await supabase
+        .from('shifts')
+        .update({
+          status: 'claimed',
+          claimed_by: staffId,
+          claimed_at: new Date().toISOString(),
+        })
+        .eq('id', shiftId)
+        .eq('status', 'open')
+        .select()
+        .single();
+
+      if (error) {
+        throw new Error('Nepodařilo se přiřadit směnu.');
+      }
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['shifts'] });
+    },
+  });
+
   const myShifts = shifts.filter(s => s.claimed_by === user?.id);
   
   // Get event IDs where the user already has a pending, claimed or completed shift
@@ -364,6 +418,7 @@ export const useShifts = () => {
     shifts,
     openShifts,
     openShiftsByEvent,
+    availableStaff,
     myShifts,
     myUnpaidShifts,
     pendingShifts,
@@ -380,10 +435,12 @@ export const useShifts = () => {
     completeShift: completeShift.mutateAsync,
     cancelRequest: cancelRequest.mutateAsync,
     cancelShift: cancelShift.mutateAsync,
+    assignShift: assignShift.mutateAsync,
     isRequesting: requestShift.isPending,
     isApproving: approveShift.isPending,
     isRejecting: rejectShift.isPending,
     isCompleting: completeShift.isPending,
+    isAssigning: assignShift.isPending,
     totalHoursWorked,
     unpaidEarnings,
     totalEarnings,
