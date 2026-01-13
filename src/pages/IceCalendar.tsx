@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useEvents } from '@/hooks/useEvents';
 import { useShifts } from '@/hooks/useShifts';
+import { useIsMobile } from '@/hooks/use-mobile';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -13,13 +14,14 @@ import { Textarea } from '@/components/ui/textarea';
 import { Calendar } from '@/components/ui/calendar';
 import { useToast } from '@/hooks/use-toast';
 import { Plus, ChevronLeft, ChevronRight, Trash2, User, Clock } from 'lucide-react';
-import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths } from 'date-fns';
+import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths, startOfWeek, addDays, addWeeks, subWeeks } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { Database } from '@/integrations/supabase/types';
 import { eventSchema, safeValidate, VALIDATION_LIMITS, sanitizeText } from '@/lib/validation';
 import { useRateLimit } from '@/hooks/useRateLimit';
 
 type EventType = Database['public']['Enums']['event_type'];
+type ViewMode = 'twoWeeks' | 'month';
 
 const IceCalendar = () => {
   const { isAdmin, isStaff, user } = useAuth();
@@ -27,11 +29,16 @@ const IceCalendar = () => {
   const { shifts, requestShift, isRequesting } = useShifts();
   const { toast } = useToast();
   const { retryAfter, checkLimit } = useRateLimit('createEvent');
+  const isMobile = useIsMobile();
   
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [isDayDetailOpen, setIsDayDetailOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>('twoWeeks');
+  const [twoWeekStart, setTwoWeekStart] = useState(() => 
+    startOfWeek(new Date(), { weekStartsOn: 1 })
+  );
   
   // Form state
   const [title, setTitle] = useState('');
@@ -44,6 +51,49 @@ const IceCalendar = () => {
   const monthStart = startOfMonth(currentMonth);
   const monthEnd = endOfMonth(currentMonth);
   const daysInMonth = eachDayOfInterval({ start: monthStart, end: monthEnd });
+
+  // Two week days calculation
+  const getTwoWeekDays = () => {
+    return eachDayOfInterval({
+      start: twoWeekStart,
+      end: addDays(twoWeekStart, 13)
+    });
+  };
+
+  const twoWeekDays = getTwoWeekDays();
+  const displayDays = isMobile && viewMode === 'twoWeeks' ? twoWeekDays : daysInMonth;
+
+  // Navigation handlers
+  const handlePrevNav = () => {
+    if (isMobile && viewMode === 'twoWeeks') {
+      setTwoWeekStart(subWeeks(twoWeekStart, 2));
+    } else {
+      setCurrentMonth(subMonths(currentMonth, 1));
+    }
+  };
+
+  const handleNextNav = () => {
+    if (isMobile && viewMode === 'twoWeeks') {
+      setTwoWeekStart(addWeeks(twoWeekStart, 2));
+    } else {
+      setCurrentMonth(addMonths(currentMonth, 1));
+    }
+  };
+
+  const handleGoToToday = () => {
+    const today = new Date();
+    setTwoWeekStart(startOfWeek(today, { weekStartsOn: 1 }));
+    setCurrentMonth(today);
+  };
+
+  // Format header based on view mode
+  const getCalendarHeader = () => {
+    if (isMobile && viewMode === 'twoWeeks') {
+      const endDate = addDays(twoWeekStart, 13);
+      return `${format(twoWeekStart, 'd.', { locale: cs })} - ${format(endDate, 'd. MMMM yyyy', { locale: cs })}`;
+    }
+    return format(currentMonth, 'LLLL yyyy', { locale: cs });
+  };
 
   const eventTypeColors: Record<EventType, string> = {
     commercial: 'bg-green-500 text-white',
@@ -440,15 +490,42 @@ const IceCalendar = () => {
         )}
       </div>
 
+      {/* View Mode Toggle - Mobile only */}
+      {isMobile && (
+        <div className="flex items-center justify-center gap-2">
+          <Button 
+            variant={viewMode === 'twoWeeks' ? 'default' : 'outline'} 
+            size="sm"
+            onClick={() => setViewMode('twoWeeks')}
+          >
+            2 týdny
+          </Button>
+          <Button 
+            variant={viewMode === 'month' ? 'default' : 'outline'} 
+            size="sm"
+            onClick={() => setViewMode('month')}
+          >
+            Měsíc
+          </Button>
+        </div>
+      )}
+
       {/* Calendar Navigation */}
-      <div className="flex items-center justify-between">
-        <Button variant="outline" onClick={() => setCurrentMonth(subMonths(currentMonth, 1))}>
+      <div className="flex items-center justify-between gap-2">
+        <Button variant="outline" size="icon" onClick={handlePrevNav}>
           <ChevronLeft className="h-4 w-4" />
         </Button>
-        <h2 className="text-xl font-semibold">
-          {format(currentMonth, 'LLLL yyyy', { locale: cs })}
-        </h2>
-        <Button variant="outline" onClick={() => setCurrentMonth(addMonths(currentMonth, 1))}>
+        <div className="flex items-center gap-2">
+          <h2 className="text-lg md:text-xl font-semibold text-center">
+            {getCalendarHeader()}
+          </h2>
+          {isMobile && viewMode === 'twoWeeks' && (
+            <Button variant="ghost" size="sm" onClick={handleGoToToday} className="text-xs">
+              Dnes
+            </Button>
+          )}
+        </div>
+        <Button variant="outline" size="icon" onClick={handleNextNav}>
           <ChevronRight className="h-4 w-4" />
         </Button>
       </div>
@@ -467,17 +544,18 @@ const IceCalendar = () => {
 
           {/* Days grid */}
           <div className="grid grid-cols-7 gap-0.5 md:gap-1">
-            {/* Empty cells for days before month start */}
-            {Array.from({ length: (monthStart.getDay() + 6) % 7 }).map((_, i) => (
+            {/* Empty cells for days before start - only for month view or desktop */}
+            {!(isMobile && viewMode === 'twoWeeks') && Array.from({ length: (monthStart.getDay() + 6) % 7 }).map((_, i) => (
               <div key={`empty-${i}`} className="min-h-[60px] md:min-h-[100px] bg-muted/30 rounded" />
             ))}
 
             {/* Actual days */}
-            {daysInMonth.map((day) => {
+            {displayDays.map((day) => {
               const dayEvents = getEventsForDay(day);
               const dayShifts = (isAdmin || isStaff) ? getVisibleShiftsForDay(day) : [];
               const isToday = isSameDay(day, new Date());
               const hasContent = dayEvents.length > 0 || dayShifts.length > 0;
+              const isTwoWeekMobile = isMobile && viewMode === 'twoWeeks';
 
               // Count shifts by status
               const statusCounts = dayShifts.reduce((acc, s) => {
@@ -489,7 +567,7 @@ const IceCalendar = () => {
                 <div
                   key={day.toISOString()}
                   onClick={() => handleDayClick(day)}
-                  className={`min-h-[60px] md:min-h-[100px] border rounded p-1 md:p-2 transition-colors ${
+                  className={`${isTwoWeekMobile ? 'min-h-[90px]' : 'min-h-[60px]'} md:min-h-[100px] border rounded p-1 md:p-2 transition-colors ${
                     isToday ? 'border-primary bg-primary/5' : 'border-border'
                   } ${hasContent ? 'cursor-pointer hover:bg-accent/50' : ''}`}
                 >
