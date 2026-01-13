@@ -240,34 +240,35 @@ const Members = () => {
               {filteredMembers.map((member) => (
                 <div
                   key={member.id}
-                  className="flex items-center justify-between p-4 rounded-lg bg-accent/50"
+                  className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 rounded-lg bg-accent/50 gap-3"
                 >
-                  <div className="flex items-center gap-4">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                      <User className="h-6 w-6" />
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 sm:h-12 sm:w-12 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                      <User className="h-5 w-5 sm:h-6 sm:w-6" />
                     </div>
-                    <div>
-                      <p className="font-medium">{member.full_name || 'Bez jména'}</p>
-                      <p className="text-sm text-muted-foreground">
+                    <div className="min-w-0">
+                      <p className="font-medium truncate">{member.full_name || 'Bez jména'}</p>
+                      <p className="text-sm text-muted-foreground truncate">
                         {member.phone || 'Bez telefonu'}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        Registrován: {format(new Date(member.created_at), 'd. MMMM yyyy', { locale: cs })}
+                        {format(new Date(member.created_at), 'd. M. yyyy', { locale: cs })}
                       </p>
                     </div>
                   </div>
                   
-                  <div className="flex items-center gap-4">
-                    <Badge className={`${roleColors[member.role as AppRole]} text-white`}>
+                  <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-3">
+                    <Badge className={`${roleColors[member.role as AppRole]} text-white text-xs`}>
                       {roleLabels[member.role as AppRole]}
                     </Badge>
                     <Button
                       variant="outline"
                       size="sm"
                       onClick={() => openEditDialog(member)}
+                      className="shrink-0"
                     >
-                      <Edit className="h-4 w-4 mr-1" />
-                      Upravit roli
+                      <Edit className="h-4 w-4 sm:mr-1" />
+                      <span className="hidden sm:inline">Upravit roli</span>
                     </Button>
                   </div>
                 </div>
