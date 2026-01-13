@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useEvents } from '@/hooks/useEvents';
+import { useShifts } from '@/hooks/useShifts';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -11,24 +12,26 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { Calendar } from '@/components/ui/calendar';
 import { useToast } from '@/hooks/use-toast';
-import { Plus, ChevronLeft, ChevronRight, Trash2, Edit } from 'lucide-react';
-import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isSameDay, addMonths, subMonths } from 'date-fns';
+import { Plus, ChevronLeft, ChevronRight, Trash2, User, Clock } from 'lucide-react';
+import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { Database } from '@/integrations/supabase/types';
 import { eventSchema, safeValidate, VALIDATION_LIMITS, sanitizeText } from '@/lib/validation';
-import { useRateLimit, checkRateLimit } from '@/hooks/useRateLimit';
+import { useRateLimit } from '@/hooks/useRateLimit';
 
 type EventType = Database['public']['Enums']['event_type'];
 
 const IceCalendar = () => {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isStaff, user } = useAuth();
   const { events, createEvent, deleteEvent, isCreating, isDeleting } = useEvents();
+  const { shifts, requestShift, isRequesting } = useShifts();
   const { toast } = useToast();
-  const { isLimited, retryAfter, checkLimit } = useRateLimit('createEvent');
+  const { retryAfter, checkLimit } = useRateLimit('createEvent');
   
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [isDayDetailOpen, setIsDayDetailOpen] = useState(false);
   
   // Form state
   const [title, setTitle] = useState('');
@@ -56,8 +59,73 @@ const IceCalendar = () => {
     free: 'Volný termín',
   };
 
+  const statusColors: Record<string, string> = {
+    open: 'bg-green-500',
+    pending: 'bg-yellow-500',
+    claimed: 'bg-blue-500',
+    completed: 'bg-gray-500',
+  };
+
+  const statusLabels: Record<string, string> = {
+    open: 'Volná',
+    pending: 'Čeká na schválení',
+    claimed: 'Přiřazená',
+    completed: 'Dokončená',
+  };
+
   const getEventsForDay = (day: Date) => {
     return events.filter(event => isSameDay(new Date(event.start_time), day));
+  };
+
+  // Get shifts for a specific day
+  const getShiftsForDay = (day: Date) => {
+    return shifts.filter(shift => {
+      if (!shift.event?.start_time) return false;
+      return isSameDay(new Date(shift.event.start_time), day);
+    });
+  };
+
+  // Get event IDs where the user already has a pending, claimed or completed shift
+  const myEventIds = new Set(
+    shifts
+      .filter(s => s.claimed_by === user?.id && (s.status === 'pending' || s.status === 'claimed' || s.status === 'completed'))
+      .map(s => s.event_id)
+  );
+
+  // Group shifts by event for display - for staff, group open shifts into one entry per event
+  const getVisibleShiftsForDay = (day: Date) => {
+    const dayShifts = getShiftsForDay(day);
+    
+    if (isAdmin) {
+      return dayShifts;
+    }
+    
+    // Staff: show their own shifts + one entry per event with open slots
+    const myShiftsForDay = dayShifts.filter(s => s.claimed_by === user?.id);
+    
+    // Group open shifts by event
+    const openShiftsByEventForDay = Object.values(
+      dayShifts
+        .filter(s => s.status === 'open' && !myEventIds.has(s.event_id))
+        .reduce((acc, shift) => {
+          const eventId = shift.event_id;
+          if (!acc[eventId]) {
+            const totalSlots = dayShifts.filter(s => s.event_id === eventId).length;
+            acc[eventId] = {
+              ...shift,
+              _isGrouped: true,
+              _openCount: 0,
+              _totalSlots: totalSlots,
+              _availableShiftIds: [] as string[],
+            };
+          }
+          acc[eventId]._openCount += 1;
+          acc[eventId]._availableShiftIds.push(shift.id);
+          return acc;
+        }, {} as Record<string, any>)
+    );
+    
+    return [...myShiftsForDay, ...openShiftsByEventForDay];
   };
 
   const handleCreateEvent = async () => {
@@ -151,6 +219,39 @@ const IceCalendar = () => {
     }
   };
 
+  const handleRequestShift = async (shiftId: string) => {
+    try {
+      await requestShift(shiftId);
+      toast({
+        title: 'Přihláška odeslána!',
+        description: 'Čeká na schválení adminem.',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nepodařilo se přihlásit na směnu.';
+      toast({
+        title: 'Chyba',
+        description: message,
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleDayClick = (day: Date) => {
+    const dayEvents = getEventsForDay(day);
+    const dayShifts = (isAdmin || isStaff) ? getVisibleShiftsForDay(day) : [];
+    
+    if (dayEvents.length > 0 || dayShifts.length > 0) {
+      setSelectedDate(day);
+      setIsDayDetailOpen(true);
+    }
+  };
+
+  const canRequestShift = (shift: any) => {
+    // For grouped shifts, check if it's an open grouped entry
+    if (shift._isGrouped) return true;
+    return shift.status === 'open' && !myEventIds.has(shift.event_id);
+  };
+
   const resetForm = () => {
     setTitle('');
     setDescription('');
@@ -163,14 +264,17 @@ const IceCalendar = () => {
 
   const dayNames = ['Po', 'Út', 'St', 'Čt', 'Pá', 'So', 'Ne'];
 
+  const selectedDayEvents = selectedDate ? getEventsForDay(selectedDate) : [];
+  const selectedDayShifts = selectedDate && (isAdmin || isStaff) ? getVisibleShiftsForDay(selectedDate) : [];
+
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold">Kalendář ledu</h1>
+          <h1 className="text-2xl md:text-3xl font-bold">Kalendář</h1>
           <p className="text-muted-foreground mt-1 text-sm md:text-base">
-            Přehled obsazenosti a dostupnosti ledové plochy
+            Přehled obsazenosti ledové plochy{(isAdmin || isStaff) && ' a směn'}
           </p>
         </div>
         
@@ -292,13 +396,40 @@ const IceCalendar = () => {
       </div>
 
       {/* Legend */}
-      <div className="flex flex-wrap gap-2 md:gap-4">
-        {(Object.keys(eventTypeLabels) as EventType[]).map((type) => (
-          <div key={type} className="flex items-center gap-1.5 md:gap-2">
-            <div className={`w-3 h-3 md:w-4 md:h-4 rounded ${eventTypeColors[type]}`} />
-            <span className="text-xs md:text-sm">{eventTypeLabels[type]}</span>
+      <div className="space-y-2">
+        {/* Event types legend */}
+        <div className="flex flex-wrap gap-2 md:gap-4">
+          <span className="text-xs font-medium text-muted-foreground mr-2">Události:</span>
+          {(Object.keys(eventTypeLabels) as EventType[]).map((type) => (
+            <div key={type} className="flex items-center gap-1.5 md:gap-2">
+              <div className={`w-3 h-3 md:w-4 md:h-4 rounded ${eventTypeColors[type]}`} />
+              <span className="text-xs md:text-sm">{eventTypeLabels[type]}</span>
+            </div>
+          ))}
+        </div>
+        
+        {/* Shift status legend - only for staff/admin */}
+        {(isAdmin || isStaff) && (
+          <div className="flex flex-wrap gap-2 md:gap-4">
+            <span className="text-xs font-medium text-muted-foreground mr-2">Směny:</span>
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-3 rounded-full bg-green-500" />
+              <span className="text-xs md:text-sm">Volná</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-3 rounded-full bg-yellow-500" />
+              <span className="text-xs md:text-sm">Čekající</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-3 rounded-full bg-blue-500" />
+              <span className="text-xs md:text-sm">Přiřazená</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-3 rounded-full bg-gray-500" />
+              <span className="text-xs md:text-sm">Dokončená</span>
+            </div>
           </div>
-        ))}
+        )}
       </div>
 
       {/* Calendar Navigation */}
@@ -330,24 +461,35 @@ const IceCalendar = () => {
           <div className="grid grid-cols-7 gap-0.5 md:gap-1">
             {/* Empty cells for days before month start */}
             {Array.from({ length: (monthStart.getDay() + 6) % 7 }).map((_, i) => (
-              <div key={`empty-${i}`} className="min-h-[50px] md:min-h-[100px] bg-muted/30 rounded" />
+              <div key={`empty-${i}`} className="min-h-[60px] md:min-h-[100px] bg-muted/30 rounded" />
             ))}
 
             {/* Actual days */}
             {daysInMonth.map((day) => {
               const dayEvents = getEventsForDay(day);
+              const dayShifts = (isAdmin || isStaff) ? getVisibleShiftsForDay(day) : [];
               const isToday = isSameDay(day, new Date());
+              const hasContent = dayEvents.length > 0 || dayShifts.length > 0;
+
+              // Count shifts by status
+              const statusCounts = dayShifts.reduce((acc, s) => {
+                acc[s.status] = (acc[s.status] || 0) + 1;
+                return acc;
+              }, {} as Record<string, number>);
 
               return (
                 <div
                   key={day.toISOString()}
-                  className={`min-h-[50px] md:min-h-[100px] border rounded p-1 md:p-2 ${
+                  onClick={() => handleDayClick(day)}
+                  className={`min-h-[60px] md:min-h-[100px] border rounded p-1 md:p-2 transition-colors ${
                     isToday ? 'border-primary bg-primary/5' : 'border-border'
-                  }`}
+                  } ${hasContent ? 'cursor-pointer hover:bg-accent/50' : ''}`}
                 >
                   <div className={`text-[10px] md:text-sm font-medium mb-0.5 md:mb-1 ${isToday ? 'text-primary' : ''}`}>
                     {format(day, 'd')}
                   </div>
+                  
+                  {/* Events */}
                   <div className="space-y-0.5">
                     {dayEvents.slice(0, 2).map((event) => (
                       <div
@@ -361,16 +503,159 @@ const IceCalendar = () => {
                     ))}
                     {dayEvents.length > 2 && (
                       <div className="text-[8px] md:text-xs text-muted-foreground">
-                        +{dayEvents.length - 2}
+                        +{dayEvents.length - 2} dalších
                       </div>
                     )}
                   </div>
+
+                  {/* Shift indicators for staff/admin */}
+                  {(isAdmin || isStaff) && dayShifts.length > 0 && (
+                    <div className="flex flex-wrap gap-0.5 mt-1">
+                      {statusCounts.open && (
+                        <div className="flex items-center gap-0.5">
+                          {Array.from({ length: Math.min(statusCounts.open, 3) }).map((_, i) => (
+                            <div key={`open-${i}`} className="w-2 h-2 rounded-full bg-green-500" />
+                          ))}
+                          {statusCounts.open > 3 && (
+                            <span className="text-[8px] text-muted-foreground">+{statusCounts.open - 3}</span>
+                          )}
+                        </div>
+                      )}
+                      {statusCounts.pending && (
+                        <div className="flex items-center gap-0.5">
+                          {Array.from({ length: Math.min(statusCounts.pending, 2) }).map((_, i) => (
+                            <div key={`pending-${i}`} className="w-2 h-2 rounded-full bg-yellow-500" />
+                          ))}
+                        </div>
+                      )}
+                      {statusCounts.claimed && (
+                        <div className="flex items-center gap-0.5">
+                          {Array.from({ length: Math.min(statusCounts.claimed, 2) }).map((_, i) => (
+                            <div key={`claimed-${i}`} className="w-2 h-2 rounded-full bg-blue-500" />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}
           </div>
         </CardContent>
       </Card>
+
+      {/* Day Detail Dialog */}
+      <Dialog open={isDayDetailOpen} onOpenChange={setIsDayDetailOpen}>
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {selectedDate && format(selectedDate, 'EEEE d. MMMM yyyy', { locale: cs })}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            {/* Events section */}
+            {selectedDayEvents.length > 0 && (
+              <div>
+                <h3 className="font-medium text-sm text-muted-foreground mb-2">Události</h3>
+                <div className="space-y-2">
+                  {selectedDayEvents.map((event) => (
+                    <div key={event.id} className="flex items-start justify-between p-3 rounded-lg bg-accent/50 gap-3">
+                      <div className="flex items-start gap-3">
+                        <div className={`w-3 h-3 rounded mt-1 flex-shrink-0 ${eventTypeColors[event.event_type]}`} />
+                        <div className="min-w-0">
+                          <p className="font-medium text-sm">{event.title}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {format(new Date(event.start_time), 'HH:mm')} - {format(new Date(event.end_time), 'HH:mm')}
+                          </p>
+                          {event.description && (
+                            <p className="text-xs text-muted-foreground mt-1">{event.description}</p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="text-xs whitespace-nowrap">{eventTypeLabels[event.event_type]}</Badge>
+                        {isAdmin && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            onClick={() => handleDeleteEvent(event.id)}
+                            disabled={isDeleting}
+                          >
+                            <Trash2 className="h-3 w-3 text-destructive" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Shifts section - only for staff/admin */}
+            {(isAdmin || isStaff) && selectedDayShifts.length > 0 && (
+              <div>
+                <h3 className="font-medium text-sm text-muted-foreground mb-2">Směny</h3>
+                <div className="space-y-2">
+                  {selectedDayShifts.map((shift) => {
+                    const isGrouped = shift._isGrouped;
+                    const shiftIdToRequest = isGrouped ? shift._availableShiftIds[0] : shift.id;
+                    
+                    return (
+                      <div 
+                        key={isGrouped ? `grouped-${shift.event_id}` : shift.id} 
+                        className="p-3 rounded-lg border bg-card"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-start gap-3">
+                            <div className={`w-3 h-3 rounded-full mt-1 flex-shrink-0 ${statusColors[shift.status]}`} />
+                            <div>
+                              <p className="font-medium text-sm">{shift.event?.title || 'Směna'}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {shift.event && `${format(new Date(shift.event.start_time), 'HH:mm')} - ${format(new Date(shift.event.end_time), 'HH:mm')}`}
+                              </p>
+                              <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                                <Badge variant="outline" className="text-xs">
+                                  {isGrouped ? 'Volná' : statusLabels[shift.status]}
+                                </Badge>
+                                <span className="text-xs text-muted-foreground">
+                                  {shift.hourly_rate} Kč/h
+                                </span>
+                                {isGrouped && (
+                                  <span className="text-xs font-medium text-green-600">
+                                    Volná místa: {shift._openCount}/{shift._totalSlots}
+                                  </span>
+                                )}
+                              </div>
+                              {!isGrouped && shift.claimed_by && shift.claimed_profile && (
+                                <div className="flex items-center gap-1 mt-1.5 text-xs text-muted-foreground">
+                                  <User className="h-3 w-3" />
+                                  {shift.claimed_profile.full_name}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {isStaff && canRequestShift(shift) && (
+                            <Button 
+                              size="sm"
+                              onClick={() => handleRequestShift(shiftIdToRequest)}
+                              disabled={isRequesting}
+                            >
+                              {isRequesting ? 'Zpracování...' : 'Přihlásit'}
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Upcoming Events List */}
       <Card>

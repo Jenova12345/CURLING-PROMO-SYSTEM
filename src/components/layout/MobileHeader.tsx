@@ -4,11 +4,9 @@ import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 import { 
   Menu, 
-  X, 
   LogOut, 
   User,
   Calendar, 
-  CalendarDays,
   Clock, 
   Bell, 
   Users, 
@@ -41,7 +39,7 @@ const MobileHeader = () => {
     },
     { 
       path: '/calendar', 
-      label: 'Kalendář ledu', 
+      label: 'Kalendář', 
       icon: Calendar,
       roles: ['admin', 'trainer', 'part_time_staff', 'pro_player', 'hobby_player']
     },
@@ -49,12 +47,6 @@ const MobileHeader = () => {
       path: '/shifts', 
       label: 'Směny', 
       icon: Clock,
-      roles: ['admin', 'part_time_staff']
-    },
-    { 
-      path: '/shift-calendar', 
-      label: 'Kalendář směn', 
-      icon: CalendarDays,
       roles: ['admin', 'part_time_staff']
     },
     {

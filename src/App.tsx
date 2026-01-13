@@ -9,7 +9,6 @@ import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
 import IceCalendar from "./pages/IceCalendar";
 import Shifts from "./pages/Shifts";
-import ShiftCalendar from "./pages/ShiftCalendar";
 import Profile from "./pages/Profile";
 import Notifications from "./pages/Notifications";
 import Members from "./pages/Members";
@@ -31,7 +30,6 @@ const App = () => (
               <Route path="/" element={<Dashboard />} />
               <Route path="/calendar" element={<IceCalendar />} />
               <Route path="/shifts" element={<Shifts />} />
-              <Route path="/shift-calendar" element={<ShiftCalendar />} />
               <Route path="/profile" element={<Profile />} />
               <Route path="/notifications" element={<Notifications />} />
               <Route path="/members" element={<Members />} />
