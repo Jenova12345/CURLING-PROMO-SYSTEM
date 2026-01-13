@@ -529,41 +529,52 @@ const IceCalendar = () => {
       </div>
 
       {/* Legend */}
-      <div className="space-y-2">
-        {/* Event types legend */}
-        <div className="flex flex-wrap gap-2 md:gap-4">
-          <span className="text-xs font-medium text-muted-foreground mr-2">Události:</span>
-          {(Object.keys(eventTypeLabels) as EventType[]).map((type) => (
-            <div key={type} className="flex items-center gap-1.5 md:gap-2">
-              <div className={`w-3 h-3 md:w-4 md:h-4 rounded ${eventTypeColors[type]}`} />
-              <span className="text-xs md:text-sm">{eventTypeLabels[type]}</span>
+      <Card className="bg-muted/30">
+        <CardContent className="p-3 md:p-4">
+          <div className="space-y-3">
+            {/* Event types legend */}
+            <div>
+              <p className="text-xs font-semibold text-foreground mb-2">Události</p>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2 md:flex md:flex-wrap md:gap-4">
+                {(Object.keys(eventTypeLabels) as EventType[]).map((type) => (
+                  <div key={type} className="flex items-center gap-2">
+                    <div className={`w-3.5 h-3.5 rounded-sm flex-shrink-0 ${eventTypeColors[type]}`} />
+                    <span className="text-sm">{eventTypeLabels[type]}</span>
+                  </div>
+                ))}
+              </div>
             </div>
-          ))}
-        </div>
-        
-        {/* Shift status legend - only for staff/admin */}
-        {(isAdmin || isStaff) && (
-          <div className="flex flex-wrap gap-2 md:gap-4">
-            <span className="text-xs font-medium text-muted-foreground mr-2">Směny:</span>
-            <div className="flex items-center gap-1.5">
-              <div className="w-3 h-3 rounded-full bg-green-500" />
-              <span className="text-xs md:text-sm">Volná</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <div className="w-3 h-3 rounded-full bg-yellow-500" />
-              <span className="text-xs md:text-sm">Čekající</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <div className="w-3 h-3 rounded-full bg-blue-500" />
-              <span className="text-xs md:text-sm">Přiřazená</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <div className="w-3 h-3 rounded-full bg-gray-500" />
-              <span className="text-xs md:text-sm">Dokončená</span>
-            </div>
+            
+            {/* Shift status legend - only for staff/admin */}
+            {(isAdmin || isStaff) && (
+              <>
+                <div className="border-t border-border" />
+                <div>
+                  <p className="text-xs font-semibold text-foreground mb-2">Směny</p>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-2 md:flex md:flex-wrap md:gap-4">
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 rounded-full bg-green-500 flex-shrink-0" />
+                      <span className="text-sm">Volná</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 rounded-full bg-yellow-500 flex-shrink-0" />
+                      <span className="text-sm">Čekající</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 rounded-full bg-blue-500 flex-shrink-0" />
+                      <span className="text-sm">Přiřazená</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 rounded-full bg-gray-500 flex-shrink-0" />
+                      <span className="text-sm">Dokončená</span>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
-        )}
-      </div>
+        </CardContent>
+      </Card>
 
       {/* View Mode Toggle - Mobile only */}
       {isMobile && (
