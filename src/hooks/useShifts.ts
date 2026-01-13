@@ -206,31 +206,46 @@ export const useShifts = () => {
     },
   });
 
-  // Admin completes all shifts for an event at once
-  const completeEvent = useMutation({
-    mutationFn: async ({ eventId, hoursWorked, hourlyRate, notes }: { 
-      eventId: string; 
-      hoursWorked: number;
-      hourlyRate: number;
+  // Admin completes multiple shifts with individual values for each
+  const completeShiftsIndividually = useMutation({
+    mutationFn: async ({ 
+      shiftsData, 
+      notes 
+    }: { 
+      shiftsData: Array<{
+        shiftId: string;
+        hoursWorked: number;
+        hourlyRate: number;
+        manualAmount?: number; // Optional: if set, we store rate calculated back from manual amount
+      }>;
       notes?: string;
     }) => {
-      const { data, error } = await supabase
-        .from('shifts')
-        .update({
-          status: 'completed',
-          hours_worked: hoursWorked,
-          hourly_rate: hourlyRate,
-          notes,
-          completed_at: new Date().toISOString(),
-        })
-        .eq('event_id', eventId)
-        .eq('status', 'claimed')
-        .select();
+      // Update each shift individually
+      const updates = shiftsData.map(async (shift) => {
+        // If manual amount is provided, calculate hourly_rate back from it for consistency
+        const finalHourlyRate = shift.manualAmount 
+          ? (shift.hoursWorked > 0 ? shift.manualAmount / shift.hoursWorked : shift.hourlyRate)
+          : shift.hourlyRate;
 
-      if (error) {
-        throw new Error('Nepodařilo se dokončit směny.');
-      }
-      return data;
+        const { data, error } = await supabase
+          .from('shifts')
+          .update({
+            status: 'completed',
+            hours_worked: shift.hoursWorked,
+            hourly_rate: finalHourlyRate,
+            notes,
+            completed_at: new Date().toISOString(),
+          })
+          .eq('id', shift.shiftId)
+          .eq('status', 'claimed')
+          .select()
+          .single();
+        
+        if (error) throw error;
+        return data;
+      });
+      
+      return Promise.all(updates);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['shifts'] });
@@ -496,14 +511,14 @@ export const useShifts = () => {
     approveShift: approveShift.mutateAsync,
     rejectShift: rejectShift.mutateAsync,
     completeShift: completeShift.mutateAsync,
-    completeEvent: completeEvent.mutateAsync,
+    completeShiftsIndividually: completeShiftsIndividually.mutateAsync,
     cancelRequest: cancelRequest.mutateAsync,
     cancelShift: cancelShift.mutateAsync,
     assignShift: assignShift.mutateAsync,
     isRequesting: requestShift.isPending,
     isApproving: approveShift.isPending,
     isRejecting: rejectShift.isPending,
-    isCompleting: completeShift.isPending || completeEvent.isPending,
+    isCompleting: completeShift.isPending || completeShiftsIndividually.isPending,
     isAssigning: assignShift.isPending,
     totalHoursWorked,
     unpaidEarnings,
