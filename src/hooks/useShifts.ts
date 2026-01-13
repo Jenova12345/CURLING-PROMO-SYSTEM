@@ -8,8 +8,11 @@ export const useShifts = () => {
 
   // Fetch all part-time staff for admin to assign shifts
   const { data: availableStaff = [] } = useQuery({
-    queryKey: ['available-staff'],
+    queryKey: ['available-staff', isAdmin],
     queryFn: async () => {
+      // Only fetch if admin
+      if (!isAdmin) return [];
+      
       const { data: roles, error: rolesError } = await supabase
         .from('user_roles')
         .select('user_id')
@@ -32,7 +35,7 @@ export const useShifts = () => {
         fullName: p.full_name || 'Neznámý',
       }));
     },
-    enabled: !!user && isAdmin,
+    enabled: !!user,
   });
 
   const { data: shifts = [], isLoading } = useQuery({
