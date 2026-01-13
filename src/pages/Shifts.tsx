@@ -40,12 +40,14 @@ const Shifts = () => {
     myUnpaidShifts,
     pendingShifts,
     shiftsToComplete,
+    eventsToComplete,
     staffUnpaidAmounts,
     adminStats,
     requestShift,
     approveShift,
     rejectShift,
-    completeShift, 
+    completeShift,
+    completeEvent,
     cancelRequest,
     cancelShift,
     assignShift,
@@ -67,9 +69,9 @@ const Shifts = () => {
   const payoutRateLimit = useRateLimit('createPayout');
   const assignRateLimit = useRateLimit('assignShift');
 
-  // Complete shift dialog (admin)
+  // Complete event dialog (admin)
   const [completeDialogOpen, setCompleteDialogOpen] = useState(false);
-  const [selectedShift, setSelectedShift] = useState<any>(null);
+  const [selectedEvent, setSelectedEvent] = useState<any>(null);
   const [hoursWorked, setHoursWorked] = useState('');
   const [hourlyRate, setHourlyRate] = useState('');
   const [notes, setNotes] = useState('');
@@ -85,7 +87,7 @@ const Shifts = () => {
   const [selectedStaffId, setSelectedStaffId] = useState<string>('');
 
   // Active tab state
-  const defaultTab = isAdmin ? (pendingShifts.length > 0 ? 'pending' : shiftsToComplete.length > 0 ? 'complete' : 'all') : 'available';
+  const defaultTab = isAdmin ? (pendingShifts.length > 0 ? 'pending' : eventsToComplete.length > 0 ? 'complete' : 'all') : 'available';
   const [activeTab, setActiveTab] = useState<string>(defaultTab);
 
   const handleRequestShift = async (shiftId: string) => {
@@ -194,22 +196,22 @@ const Shifts = () => {
     }
   };
 
-  const openCompleteDialog = (shift: any) => {
-    setSelectedShift(shift);
+  const openCompleteDialog = (eventItem: any) => {
+    setSelectedEvent(eventItem);
     // Pre-fill with event duration
-    if (shift.event?.start_time && shift.event?.end_time) {
-      const start = new Date(shift.event.start_time);
-      const end = new Date(shift.event.end_time);
+    if (eventItem.event?.start_time && eventItem.event?.end_time) {
+      const start = new Date(eventItem.event.start_time);
+      const end = new Date(eventItem.event.end_time);
       const hours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
       setHoursWorked(hours.toFixed(1));
     }
-    setHourlyRate(shift.hourly_rate?.toString() || '150');
+    setHourlyRate(eventItem.hourlyRate?.toString() || '150');
     setNotes('');
     setCompleteDialogOpen(true);
   };
 
-  const handleCompleteShift = async () => {
-    if (!selectedShift) return;
+  const handleCompleteEvent = async () => {
+    if (!selectedEvent) return;
 
     // Rate limiting
     if (!completeShiftRateLimit.checkLimit()) {
@@ -225,40 +227,33 @@ const Shifts = () => {
     const parsedHours = parseNumericInput(hoursWorked, 0);
     const parsedRate = parseNumericInput(hourlyRate, 0);
 
-    const validation = safeValidate(completeShiftSchema, {
-      shiftId: selectedShift.id,
-      hoursWorked: parsedHours,
-      hourlyRate: parsedRate,
-      notes: sanitizeText(notes) || undefined,
-    });
-
-    if (!validation.success) {
+    if (parsedHours <= 0 || parsedRate <= 0) {
       toast({
         title: 'Chyba validace',
-        description: validation.error,
+        description: 'Zadejte platný počet hodin a sazbu.',
         variant: 'destructive',
       });
       return;
     }
 
     try {
-      await completeShift({
-        shiftId: validation.data.shiftId,
-        hoursWorked: validation.data.hoursWorked,
-        hourlyRate: validation.data.hourlyRate,
-        notes: validation.data.notes,
+      await completeEvent({
+        eventId: selectedEvent.eventId,
+        hoursWorked: parsedHours,
+        hourlyRate: parsedRate,
+        notes: sanitizeText(notes) || undefined,
       });
       toast({
-        title: 'Směna dokončena',
-        description: 'Hodiny a částka byly zaznamenány.',
+        title: 'Akce dokončena',
+        description: `Všechny směny (${selectedEvent.shifts.length} brigádníků) byly dokončeny.`,
       });
       setCompleteDialogOpen(false);
-      setSelectedShift(null);
+      setSelectedEvent(null);
       setHoursWorked('');
       setHourlyRate('');
       setNotes('');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Nepodařilo se dokončit směnu.';
+      const message = error instanceof Error ? error.message : 'Nepodařilo se dokončit akci.';
       toast({
         title: 'Chyba',
         description: message,
@@ -473,7 +468,7 @@ const Shifts = () => {
               {isStaff && <SelectItem value="my">Moje směny</SelectItem>}
               {isStaff && <SelectItem value="payouts">Výplaty</SelectItem>}
               {isAdmin && <SelectItem value="pending">Čekající {pendingShifts.length > 0 && `(${pendingShifts.length})`}</SelectItem>}
-              {isAdmin && <SelectItem value="complete">K dokončení {shiftsToComplete.length > 0 && `(${shiftsToComplete.length})`}</SelectItem>}
+              {isAdmin && <SelectItem value="complete">K dokončení {eventsToComplete.length > 0 && `(${eventsToComplete.length})`}</SelectItem>}
               {isAdmin && <SelectItem value="payouts">Výplaty {staffUnpaidAmounts.length > 0 && `(${staffUnpaidAmounts.length})`}</SelectItem>}
               {isAdmin && <SelectItem value="open">Volné {openShifts.length > 0 && `(${openShifts.length})`}</SelectItem>}
               {isAdmin && <SelectItem value="stats">Statistiky</SelectItem>}
@@ -500,9 +495,9 @@ const Shifts = () => {
           {isAdmin && (
             <TabsTrigger value="complete" className="text-sm relative">
               K dokončení
-              {shiftsToComplete.length > 0 && (
+              {eventsToComplete.length > 0 && (
                 <span className="ml-1 inline-flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-orange-500 rounded-full">
-                  {shiftsToComplete.length}
+                  {eventsToComplete.length}
                 </span>
               )}
             </TabsTrigger>
@@ -778,14 +773,14 @@ const Shifts = () => {
           </TabsContent>
         )}
 
-        {/* Shifts to Complete (Admin) */}
+        {/* Events to Complete (Admin) */}
         {isAdmin && (
           <TabsContent value="complete" className="space-y-4">
-            {shiftsToComplete.length === 0 ? (
+            {eventsToComplete.length === 0 ? (
               <Card>
                 <CardContent className="flex flex-col items-center justify-center py-12">
                   <CheckCircle className="h-12 w-12 text-muted-foreground mb-4" />
-                  <p className="text-muted-foreground">Žádné směny čekající na dokončení.</p>
+                  <p className="text-muted-foreground">Žádné akce čekající na dokončení.</p>
                 </CardContent>
               </Card>
             ) : (
@@ -793,35 +788,35 @@ const Shifts = () => {
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <Clock className="h-5 w-5 text-orange-500" />
-                    Směny k dokončení
+                    Akce k dokončení
                   </CardTitle>
-                  <CardDescription>Směny po skončení akce čekající na zadání hodin</CardDescription>
+                  <CardDescription>Akce po skončení čekající na zadání hodin pro všechny brigádníky</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {shiftsToComplete.map((shift) => (
-                    <div key={shift.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-lg bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-900 gap-4">
+                  {eventsToComplete.map((eventItem) => (
+                    <div key={eventItem.eventId} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-lg bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-900 gap-4">
                       <div className="flex items-start gap-4">
                         <div className={`w-3 h-3 rounded-full mt-1.5 bg-orange-500`} />
                         <div>
-                          <p className="font-medium">{shift.event?.title || 'Směna'}</p>
+                          <p className="font-medium">{eventItem.event?.title || 'Akce'}</p>
                           <p className="text-sm text-muted-foreground">
-                            {shift.event && format(new Date(shift.event.start_time), 'd. MMMM yyyy, HH:mm', { locale: cs })}
+                            {eventItem.event && format(new Date(eventItem.event.start_time), 'd. MMMM yyyy, HH:mm', { locale: cs })}
                           </p>
                           <p className="text-sm font-medium text-orange-700 dark:text-orange-400 mt-1">
-                            Brigádník: {getStaffName(shift)}
+                            Brigádníci ({eventItem.shifts.length}): {eventItem.staffNames.join(', ')}
                           </p>
                           <p className="text-xs text-muted-foreground">
-                            Sazba: {shift.hourly_rate} Kč/h
+                            Sazba: {eventItem.hourlyRate} Kč/h
                           </p>
                         </div>
                       </div>
                       <Button 
                         size="sm"
-                        onClick={() => openCompleteDialog(shift)}
+                        onClick={() => openCompleteDialog(eventItem)}
                         className="ml-7 sm:ml-0"
                       >
                         <CheckCircle className="h-4 w-4 mr-1" />
-                        Dokončit směnu
+                        Dokončit akci ({eventItem.shifts.length})
                       </Button>
                     </div>
                   ))}
@@ -1228,22 +1223,22 @@ const Shifts = () => {
         )}
       </Tabs>
 
-      {/* Complete Shift Dialog (Admin) */}
+      {/* Complete Event Dialog (Admin) */}
       <Dialog open={completeDialogOpen} onOpenChange={setCompleteDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Dokončit směnu</DialogTitle>
+            <DialogTitle>Dokončit akci</DialogTitle>
             <DialogDescription>
-              Zadejte skutečně odpracované hodiny a hodinovou sazbu.
+              Zadejte skutečně odpracované hodiny a hodinovou sazbu pro všechny brigádníky.
             </DialogDescription>
           </DialogHeader>
           
-          {selectedShift && (
+          {selectedEvent && (
             <div className="space-y-4">
               <div className="p-3 rounded-lg bg-accent/50">
-                <p className="font-medium">{selectedShift.event?.title}</p>
+                <p className="font-medium">{selectedEvent.event?.title}</p>
                 <p className="text-sm text-muted-foreground">
-                  Brigádník: {getStaffName(selectedShift)}
+                  Brigádníci ({selectedEvent.shifts.length}): {selectedEvent.staffNames.join(', ')}
                 </p>
               </div>
 
@@ -1275,8 +1270,11 @@ const Shifts = () => {
               </div>
 
               <div className="p-3 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-900">
-                <p className="text-sm text-muted-foreground">Výsledná částka</p>
+                <p className="text-sm text-muted-foreground">Výsledná částka na osobu</p>
                 <p className="text-2xl font-bold text-green-600">{calculateTotal()} Kč</p>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Celkem za {selectedEvent.shifts.length} brigádníky: {(parseFloat(hoursWorked || '0') * parseFloat(hourlyRate || '0') * selectedEvent.shifts.length).toLocaleString('cs-CZ')} Kč
+                </p>
               </div>
               
               <div className="space-y-2">
@@ -1285,7 +1283,7 @@ const Shifts = () => {
                   id="notes"
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Případné poznámky ke směně..."
+                  placeholder="Případné poznámky k akci..."
                 />
               </div>
             </div>
@@ -1295,8 +1293,8 @@ const Shifts = () => {
             <Button variant="outline" onClick={() => setCompleteDialogOpen(false)}>
               Zrušit
             </Button>
-            <Button onClick={handleCompleteShift} disabled={isCompleting}>
-              {isCompleting ? 'Zpracování...' : 'Dokončit směnu'}
+            <Button onClick={handleCompleteEvent} disabled={isCompleting}>
+              {isCompleting ? 'Zpracování...' : `Dokončit akci (${selectedEvent?.shifts.length || 0} brigádníků)`}
             </Button>
           </DialogFooter>
         </DialogContent>
