@@ -417,15 +417,15 @@ const IceCalendar = () => {
                 Nová událost
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-md">
-              <DialogHeader>
+            <DialogContent className="max-w-md max-h-[90vh] flex flex-col">
+              <DialogHeader className="flex-shrink-0">
                 <DialogTitle>Vytvořit novou událost</DialogTitle>
                 <DialogDescription>
                   Přidejte novou událost do kalendáře ledové plochy.
                 </DialogDescription>
               </DialogHeader>
               
-              <div className="space-y-4">
+              <div className="space-y-4 overflow-y-auto flex-1 pr-2">
                 <div>
                   <Label>Vyberte datum</Label>
                   <Calendar
@@ -512,7 +512,7 @@ const IceCalendar = () => {
                 </div>
               </div>
 
-              <DialogFooter>
+              <DialogFooter className="flex-shrink-0">
                 <Button variant="outline" onClick={() => setIsCreateDialogOpen(false)}>
                   Zrušit
                 </Button>
