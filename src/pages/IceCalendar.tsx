@@ -753,7 +753,7 @@ const IceCalendar = () => {
                       
                       {/* Events */}
                       <div className="space-y-0.5">
-                        {dayEvents.slice(0, 2).map((event) => {
+                        {dayEvents.slice(0, 4).map((event) => {
                           const stats = event.event_type === 'commercial' ? getEventShiftStats(event.id) : null;
                           return (
                             <div
@@ -775,9 +775,9 @@ const IceCalendar = () => {
                             </div>
                           );
                         })}
-                        {dayEvents.length > 2 && (
+                        {dayEvents.length > 4 && (
                           <div className="text-[8px] md:text-xs text-muted-foreground">
-                            +{dayEvents.length - 2} dalších
+                            +{dayEvents.length - 4} dalších
                           </div>
                         )}
                       </div>
