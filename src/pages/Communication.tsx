@@ -418,7 +418,7 @@ const Communication = () => {
           {chatGroups.map(group => (
             <Card key={group.id} className="group relative hover:shadow-md transition-shadow">
               {isAdmin && (
-                <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 z-10">
+                <div className="absolute top-2 right-2 flex gap-1 z-10 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                   <Button
                     variant="ghost"
                     size="icon"

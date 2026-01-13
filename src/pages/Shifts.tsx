@@ -84,6 +84,10 @@ const Shifts = () => {
   const [shiftToAssign, setShiftToAssign] = useState<any>(null);
   const [selectedStaffId, setSelectedStaffId] = useState<string>('');
 
+  // Active tab state
+  const defaultTab = isAdmin ? (pendingShifts.length > 0 ? 'pending' : shiftsToComplete.length > 0 ? 'complete' : 'all') : 'available';
+  const [activeTab, setActiveTab] = useState<string>(defaultTab);
+
   const handleRequestShift = async (shiftId: string) => {
     // Rate limiting
     if (!shiftActionRateLimit.checkLimit()) {
@@ -457,13 +461,34 @@ const Shifts = () => {
       )}
 
       {/* Tabs */}
-      <Tabs defaultValue={isAdmin ? (pendingShifts.length > 0 ? 'pending' : shiftsToComplete.length > 0 ? 'complete' : 'all') : 'available'} className="w-full">
-        <TabsList className="w-full sm:w-auto grid grid-cols-2 sm:flex flex-wrap">
-          {isStaff && <TabsTrigger value="available" className="text-xs sm:text-sm">Volné směny</TabsTrigger>}
-          {isStaff && <TabsTrigger value="my" className="text-xs sm:text-sm">Moje směny</TabsTrigger>}
-          {isStaff && <TabsTrigger value="payouts" className="text-xs sm:text-sm">Výplaty</TabsTrigger>}
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+        {/* Mobile: Select dropdown for tabs */}
+        <div className="sm:hidden mb-4">
+          <Select value={activeTab} onValueChange={setActiveTab}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Vyberte sekci" />
+            </SelectTrigger>
+            <SelectContent>
+              {isStaff && <SelectItem value="available">Volné směny</SelectItem>}
+              {isStaff && <SelectItem value="my">Moje směny</SelectItem>}
+              {isStaff && <SelectItem value="payouts">Výplaty</SelectItem>}
+              {isAdmin && <SelectItem value="pending">Čekající {pendingShifts.length > 0 && `(${pendingShifts.length})`}</SelectItem>}
+              {isAdmin && <SelectItem value="complete">K dokončení {shiftsToComplete.length > 0 && `(${shiftsToComplete.length})`}</SelectItem>}
+              {isAdmin && <SelectItem value="payouts">Výplaty {staffUnpaidAmounts.length > 0 && `(${staffUnpaidAmounts.length})`}</SelectItem>}
+              {isAdmin && <SelectItem value="open">Volné {openShifts.length > 0 && `(${openShifts.length})`}</SelectItem>}
+              {isAdmin && <SelectItem value="stats">Statistiky</SelectItem>}
+              {isAdmin && <SelectItem value="all">Všechny směny</SelectItem>}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* Desktop: Horizontal tabs */}
+        <TabsList className="hidden sm:flex w-auto flex-wrap">
+          {isStaff && <TabsTrigger value="available" className="text-sm">Volné směny</TabsTrigger>}
+          {isStaff && <TabsTrigger value="my" className="text-sm">Moje směny</TabsTrigger>}
+          {isStaff && <TabsTrigger value="payouts" className="text-sm">Výplaty</TabsTrigger>}
           {isAdmin && (
-            <TabsTrigger value="pending" className="text-xs sm:text-sm relative">
+            <TabsTrigger value="pending" className="text-sm relative">
               Čekající
               {pendingShifts.length > 0 && (
                 <span className="ml-1 inline-flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-yellow-500 rounded-full">
@@ -473,7 +498,7 @@ const Shifts = () => {
             </TabsTrigger>
           )}
           {isAdmin && (
-            <TabsTrigger value="complete" className="text-xs sm:text-sm relative">
+            <TabsTrigger value="complete" className="text-sm relative">
               K dokončení
               {shiftsToComplete.length > 0 && (
                 <span className="ml-1 inline-flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-orange-500 rounded-full">
@@ -483,7 +508,7 @@ const Shifts = () => {
             </TabsTrigger>
           )}
           {isAdmin && (
-            <TabsTrigger value="payouts" className="text-xs sm:text-sm relative">
+            <TabsTrigger value="payouts" className="text-sm relative">
               Výplaty
               {staffUnpaidAmounts.length > 0 && (
                 <span className="ml-1 inline-flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-green-500 rounded-full">
@@ -492,7 +517,7 @@ const Shifts = () => {
               )}
             </TabsTrigger>
           )}
-          {isAdmin && <TabsTrigger value="open" className="text-xs sm:text-sm relative">
+          {isAdmin && <TabsTrigger value="open" className="text-sm relative">
               Volné
               {openShifts.length > 0 && (
                 <span className="ml-1 inline-flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-green-500 rounded-full">
@@ -500,8 +525,8 @@ const Shifts = () => {
                 </span>
               )}
             </TabsTrigger>}
-          {isAdmin && <TabsTrigger value="stats" className="text-xs sm:text-sm">Statistiky</TabsTrigger>}
-          {isAdmin && <TabsTrigger value="all" className="text-xs sm:text-sm">Všechny směny</TabsTrigger>}
+          {isAdmin && <TabsTrigger value="stats" className="text-sm">Statistiky</TabsTrigger>}
+          {isAdmin && <TabsTrigger value="all" className="text-sm">Všechny směny</TabsTrigger>}
         </TabsList>
 
         {/* Available Shifts (Staff) - Grouped by Event */}
