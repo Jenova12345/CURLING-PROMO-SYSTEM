@@ -10,16 +10,19 @@ export const useProfile = () => {
     mutationFn: async ({ 
       fullName, 
       phone, 
-      avatarUrl 
+      avatarUrl,
+      bankAccount,
     }: { 
       fullName?: string; 
       phone?: string;
       avatarUrl?: string;
+      bankAccount?: string;
     }) => {
       const updateData: Record<string, any> = {};
       if (fullName !== undefined) updateData.full_name = fullName;
       if (phone !== undefined) updateData.phone = phone;
       if (avatarUrl !== undefined) updateData.avatar_url = avatarUrl;
+      if (bankAccount !== undefined) updateData.bank_account = bankAccount;
 
       const { data, error } = await supabase
         .from('profiles')

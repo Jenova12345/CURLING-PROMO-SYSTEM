@@ -21,7 +21,7 @@ import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
-import { User, Phone, Camera, Clock, TrendingUp, Wallet, CheckCircle } from 'lucide-react';
+import { User, Phone, Camera, Clock, TrendingUp, Wallet, CheckCircle, CreditCard } from 'lucide-react';
 import { format } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { 
@@ -37,7 +37,7 @@ const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
 
 const Profile = () => {
-  const { profile, role } = useAuth();
+  const { profile, role, isStaff } = useAuth();
   const { updateProfile, uploadAvatar, isUpdating } = useProfile();
   const { myShifts, totalHoursWorked, totalEarnings, unpaidEarnings } = useShifts();
   const { myPayouts } = usePayouts();
@@ -47,6 +47,7 @@ const Profile = () => {
 
   const [fullName, setFullName] = useState(profile?.full_name || '');
   const [phone, setPhone] = useState(profile?.phone || '');
+  const [bankAccount, setBankAccount] = useState(profile?.bank_account || '');
   const [isUploading, setIsUploading] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
 
@@ -75,7 +76,19 @@ const Profile = () => {
     const sanitizedData = {
       fullName: sanitizeText(fullName),
       phone: phone.trim(),
+      bankAccount: bankAccount.trim(),
     };
+    
+    // For staff, bank account is required
+    if (isStaff && !sanitizedData.bankAccount) {
+      setValidationError('Číslo účtu je povinné pro brigádníky.');
+      toast({
+        title: 'Chyba validace',
+        description: 'Číslo účtu je povinné pro brigádníky.',
+        variant: 'destructive',
+      });
+      return;
+    }
     
     const validation = safeValidate(profileUpdateSchema, sanitizedData);
     
@@ -276,6 +289,30 @@ const Profile = () => {
                   Formát: +420 123 456 789
                 </p>
               </div>
+
+              {/* Bank Account - only for staff */}
+              {isStaff && (
+                <div className="space-y-2">
+                  <Label htmlFor="bankAccount" className="flex items-center gap-2">
+                    <CreditCard className="h-4 w-4" />
+                    Číslo účtu <span className="text-destructive">*</span>
+                  </Label>
+                  <Input
+                    id="bankAccount"
+                    value={bankAccount}
+                    onChange={(e) => {
+                      setBankAccount(e.target.value);
+                      setValidationError(null);
+                    }}
+                    placeholder="123456-1234567890/0100"
+                    maxLength={VALIDATION_LIMITS.BANK_ACCOUNT_MAX}
+                    autoComplete="off"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Formát: 123456-1234567890/0100 nebo IBAN
+                  </p>
+                </div>
+              )}
 
               <Button 
                 onClick={handleSaveProfile} 

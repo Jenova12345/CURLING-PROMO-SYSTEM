@@ -29,6 +29,7 @@ export const VALIDATION_LIMITS = {
   
   // Profile
   PHONE_MAX: 20,
+  BANK_ACCOUNT_MAX: 34, // IBAN max length
   
   // Content
   TITLE_MIN: 1,
@@ -100,6 +101,20 @@ export const phoneSchema = z
   .trim()
   .max(VALIDATION_LIMITS.PHONE_MAX, `Telefon může mít maximálně ${VALIDATION_LIMITS.PHONE_MAX} znaků`)
   .regex(/^(\+420\s?)?\d{3}\s?\d{3}\s?\d{3}$|^$/, 'Neplatný formát telefonu (např. +420 123 456 789)')
+  .optional()
+  .or(z.literal(''));
+
+/**
+ * Bank account validation - Czech format or IBAN
+ */
+export const bankAccountSchema = z
+  .string()
+  .trim()
+  .max(VALIDATION_LIMITS.BANK_ACCOUNT_MAX, `Číslo účtu může mít maximálně ${VALIDATION_LIMITS.BANK_ACCOUNT_MAX} znaků`)
+  .regex(
+    /^(\d{1,6}-?\d{2,10}\/\d{4}|CZ\d{22}|)$/,
+    'Neplatný formát čísla účtu (např. 123456-1234567890/0100 nebo CZ6508000000192000145399)'
+  )
   .optional()
   .or(z.literal(''));
 
@@ -230,6 +245,7 @@ export const profileUpdateSchema = z.object({
   fullName: optionalNameSchema,
   phone: phoneSchema,
   avatarUrl: httpsUrlSchema.optional().or(z.literal('')),
+  bankAccount: bankAccountSchema,
 });
 
 /**
