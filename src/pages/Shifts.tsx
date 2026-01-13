@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useShifts } from '@/hooks/useShifts';
 import { usePayouts } from '@/hooks/usePayouts';
@@ -90,9 +90,28 @@ const Shifts = () => {
   const [staffHistoryDialogOpen, setStaffHistoryDialogOpen] = useState(false);
   const [selectedStaffHistory, setSelectedStaffHistory] = useState<{ staffId: string; staffName: string } | null>(null);
 
-  // Active tab state
-  const defaultTab = isAdmin ? (pendingShifts.length > 0 ? 'pending' : eventsToComplete.length > 0 ? 'complete' : 'all') : 'available';
-  const [activeTab, setActiveTab] = useState<string>(defaultTab);
+  // Active tab state - initialize as empty and set properly after auth loads
+  const [activeTab, setActiveTab] = useState<string>('');
+
+  // Set default tab based on role - runs when isAdmin/isStaff/data changes
+  useEffect(() => {
+    if (isLoading) return;
+    
+    // Only set default tab if not already set
+    if (!activeTab) {
+      if (isAdmin) {
+        if (pendingShifts.length > 0) {
+          setActiveTab('pending');
+        } else if (eventsToComplete.length > 0) {
+          setActiveTab('complete');
+        } else {
+          setActiveTab('all');
+        }
+      } else if (isStaff) {
+        setActiveTab('available');
+      }
+    }
+  }, [isAdmin, isStaff, isLoading, pendingShifts.length, eventsToComplete.length, activeTab]);
 
   const handleRequestShift = async (shiftId: string) => {
     // Rate limiting
