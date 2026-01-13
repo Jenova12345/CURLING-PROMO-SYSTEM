@@ -28,14 +28,12 @@ const Dashboard = () => {
     commercial: 'bg-green-500',
     training: 'bg-blue-500',
     maintenance: 'bg-orange-500',
-    free: 'bg-gray-500',
   };
 
   const eventTypeLabels: Record<string, string> = {
     commercial: 'Komerční',
     training: 'Trénink',
     maintenance: 'Údržba',
-    free: 'Volný',
   };
 
   return (
