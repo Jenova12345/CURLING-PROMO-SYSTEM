@@ -4,7 +4,6 @@ import { cn } from '@/lib/utils';
 import { 
   Calendar, 
   Clock, 
-  Bell, 
   Users, 
   LayoutDashboard,
   MessageCircle
@@ -32,12 +31,6 @@ const MobileNav = () => {
       label: 'Směny', 
       icon: Clock,
       roles: ['admin', 'part_time_staff']
-    },
-    {
-      path: '/notifications', 
-      label: 'Oznámení', 
-      icon: Bell,
-      roles: ['admin', 'trainer', 'part_time_staff', 'pro_player', 'hobby_player']
     },
     { 
       path: '/communication', 

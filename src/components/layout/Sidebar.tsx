@@ -4,7 +4,6 @@ import { cn } from '@/lib/utils';
 import { 
   Calendar, 
   Clock, 
-  Bell, 
   Users, 
   LayoutDashboard, 
   LogOut,
@@ -49,12 +48,6 @@ const Sidebar = () => {
       path: '/profile', 
       label: 'Můj profil', 
       icon: User,
-      roles: ['admin', 'trainer', 'part_time_staff', 'pro_player', 'hobby_player']
-    },
-    { 
-      path: '/notifications', 
-      label: 'Oznámení', 
-      icon: Bell,
       roles: ['admin', 'trainer', 'part_time_staff', 'pro_player', 'hobby_player']
     },
     { 
