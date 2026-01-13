@@ -1,3 +1,13 @@
+/**
+ * Profile Page
+ * 
+ * Security Features:
+ * - Schema-based validation for profile updates
+ * - File type and size validation for avatar uploads
+ * - Input length limits
+ * - Rate limiting for profile updates
+ */
+
 import { useState, useRef } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useProfile } from '@/hooks/useProfile';
@@ -11,9 +21,20 @@ import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
-import { User, Phone, Camera, Clock, TrendingUp, Wallet, CheckCircle, History } from 'lucide-react';
+import { User, Phone, Camera, Clock, TrendingUp, Wallet, CheckCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { cs } from 'date-fns/locale';
+import { 
+  profileUpdateSchema, 
+  safeValidate, 
+  VALIDATION_LIMITS,
+  sanitizeText 
+} from '@/lib/validation';
+import { useRateLimit } from '@/hooks/useRateLimit';
+
+// Allowed MIME types for avatar uploads
+const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
 
 const Profile = () => {
   const { profile, role } = useAuth();
@@ -22,10 +43,12 @@ const Profile = () => {
   const { myPayouts } = usePayouts();
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const profileRateLimit = useRateLimit('updateProfile');
 
   const [fullName, setFullName] = useState(profile?.full_name || '');
   const [phone, setPhone] = useState(profile?.phone || '');
   const [isUploading, setIsUploading] = useState(false);
+  const [validationError, setValidationError] = useState<string | null>(null);
 
   const roleLabels: Record<string, string> = {
     admin: 'Správce',
@@ -36,13 +59,43 @@ const Profile = () => {
   };
 
   const handleSaveProfile = async () => {
+    setValidationError(null);
+    
+    // Check rate limit
+    if (!profileRateLimit.checkLimit()) {
+      toast({
+        title: 'Příliš mnoho pokusů',
+        description: `Zkuste to znovu za ${profileRateLimit.retryAfter}.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+    
+    // Sanitize and validate input
+    const sanitizedData = {
+      fullName: sanitizeText(fullName),
+      phone: phone.trim(),
+    };
+    
+    const validation = safeValidate(profileUpdateSchema, sanitizedData);
+    
+    if (!validation.success) {
+      setValidationError(validation.error);
+      toast({
+        title: 'Chyba validace',
+        description: validation.error,
+        variant: 'destructive',
+      });
+      return;
+    }
+    
     try {
-      await updateProfile({ fullName, phone });
+      await updateProfile(validation.data);
       toast({
         title: 'Profil uložen',
         description: 'Vaše údaje byly aktualizovány.',
       });
-    } catch (error) {
+    } catch {
       toast({
         title: 'Chyba',
         description: 'Nepodařilo se uložit profil.',
@@ -59,19 +112,31 @@ const Profile = () => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.type.startsWith('image/')) {
+    // Validate file type
+    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
       toast({
-        title: 'Chyba',
-        description: 'Vyberte prosím obrázek.',
+        title: 'Neplatný typ souboru',
+        description: 'Povolené formáty: JPEG, PNG, GIF, WebP.',
         variant: 'destructive',
       });
       return;
     }
 
-    if (file.size > 5 * 1024 * 1024) {
+    // Validate file size
+    if (file.size > MAX_FILE_SIZE) {
       toast({
-        title: 'Chyba',
-        description: 'Obrázek je příliš velký. Maximum je 5 MB.',
+        title: 'Soubor je příliš velký',
+        description: `Maximum je ${MAX_FILE_SIZE / 1024 / 1024} MB.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    // Check rate limit
+    if (!profileRateLimit.checkLimit()) {
+      toast({
+        title: 'Příliš mnoho pokusů',
+        description: `Zkuste to znovu za ${profileRateLimit.retryAfter}.`,
         variant: 'destructive',
       });
       return;
@@ -85,7 +150,7 @@ const Profile = () => {
         title: 'Avatar nahrán',
         description: 'Vaše profilová fotka byla aktualizována.',
       });
-    } catch (error) {
+    } catch {
       toast({
         title: 'Chyba',
         description: 'Nepodařilo se nahrát obrázek.',
@@ -93,24 +158,20 @@ const Profile = () => {
       });
     } finally {
       setIsUploading(false);
+      // Clear input to allow re-uploading same file
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
   const completedShifts = myShifts.filter(s => s.status === 'completed');
-  const paidEarnings = myPayouts.reduce((sum, p) => sum + Number(p.amount), 0);
 
   const statusColors: Record<string, string> = {
     open: 'bg-green-500',
     pending: 'bg-yellow-500',
     claimed: 'bg-blue-500',
     completed: 'bg-gray-500',
-  };
-
-  const statusLabels: Record<string, string> = {
-    open: 'Volná',
-    pending: 'Čeká na schválení',
-    claimed: 'Schválená',
-    completed: 'Dokončená',
   };
 
   return (
@@ -148,7 +209,7 @@ const Profile = () => {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/*"
+                  accept={ALLOWED_IMAGE_TYPES.join(',')}
                   className="hidden"
                   onChange={handleFileChange}
                 />
@@ -161,6 +222,20 @@ const Profile = () => {
               </Badge>
             </div>
 
+            {/* Validation error */}
+            {validationError && (
+              <div className="p-3 text-sm text-destructive bg-destructive/10 rounded-md">
+                {validationError}
+              </div>
+            )}
+
+            {/* Rate limit warning */}
+            {profileRateLimit.isLimited && (
+              <div className="p-3 text-sm text-destructive bg-destructive/10 rounded-md">
+                Příliš mnoho pokusů. Zkuste to za {profileRateLimit.retryAfter}.
+              </div>
+            )}
+
             {/* Form */}
             <div className="space-y-4">
               <div className="space-y-2">
@@ -171,8 +246,13 @@ const Profile = () => {
                 <Input
                   id="fullName"
                   value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
+                  onChange={(e) => {
+                    setFullName(e.target.value);
+                    setValidationError(null);
+                  }}
                   placeholder="Jan Novák"
+                  maxLength={VALIDATION_LIMITS.NAME_MAX}
+                  autoComplete="name"
                 />
               </div>
 
@@ -184,14 +264,22 @@ const Profile = () => {
                 <Input
                   id="phone"
                   value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
+                  onChange={(e) => {
+                    setPhone(e.target.value);
+                    setValidationError(null);
+                  }}
                   placeholder="+420 123 456 789"
+                  maxLength={VALIDATION_LIMITS.PHONE_MAX}
+                  autoComplete="tel"
                 />
+                <p className="text-xs text-muted-foreground">
+                  Formát: +420 123 456 789
+                </p>
               </div>
 
               <Button 
                 onClick={handleSaveProfile} 
-                disabled={isUpdating}
+                disabled={isUpdating || profileRateLimit.isLimited}
                 className="w-full"
               >
                 {isUpdating ? 'Ukládání...' : 'Uložit změny'}
