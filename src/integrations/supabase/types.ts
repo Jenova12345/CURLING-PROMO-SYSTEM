@@ -269,7 +269,7 @@ export type Database = {
         | "part_time_staff"
         | "pro_player"
         | "hobby_player"
-      event_type: "commercial" | "training" | "maintenance" | "free"
+      event_type: "commercial" | "training" | "maintenance"
       shift_status: "open" | "pending" | "claimed" | "completed" | "cancelled"
     }
     CompositeTypes: {
@@ -405,7 +405,7 @@ export const Constants = {
         "pro_player",
         "hobby_player",
       ],
-      event_type: ["commercial", "training", "maintenance", "free"],
+      event_type: ["commercial", "training", "maintenance"],
       shift_status: ["open", "pending", "claimed", "completed", "cancelled"],
     },
   },
