@@ -12,7 +12,7 @@ import { cs } from 'date-fns/locale';
 
 const ShiftCalendar = () => {
   const { isAdmin, isStaff, user } = useAuth();
-  const { shifts, openShifts, requestShift, isRequesting } = useShifts();
+  const { shifts, openShiftsByEvent, requestShift, isRequesting } = useShifts();
   const { toast } = useToast();
 
   const [currentMonth, setCurrentMonth] = useState(new Date());
@@ -44,6 +44,14 @@ const ShiftCalendar = () => {
     });
   };
 
+  // Get event IDs where the user already has a pending, claimed or completed shift
+  const myEventIds = new Set(
+    shifts
+      .filter(s => s.claimed_by === user?.id && (s.status === 'pending' || s.status === 'claimed' || s.status === 'completed'))
+      .map(s => s.event_id)
+  );
+
+  // Group shifts by event for display - for staff, group open shifts into one entry per event
   const getVisibleShiftsForDay = (day: Date) => {
     const dayShifts = getShiftsForDay(day);
     
@@ -51,10 +59,32 @@ const ShiftCalendar = () => {
       return dayShifts;
     }
     
-    // Staff sees open shifts + their own shifts
-    return dayShifts.filter(s => 
-      s.status === 'open' || s.claimed_by === user?.id
+    // Staff: show their own shifts + one entry per event with open slots
+    const myShiftsForDay = dayShifts.filter(s => s.claimed_by === user?.id);
+    
+    // Group open shifts by event
+    const openShiftsByEventForDay = Object.values(
+      dayShifts
+        .filter(s => s.status === 'open' && !myEventIds.has(s.event_id))
+        .reduce((acc, shift) => {
+          const eventId = shift.event_id;
+          if (!acc[eventId]) {
+            const totalSlots = dayShifts.filter(s => s.event_id === eventId).length;
+            acc[eventId] = {
+              ...shift,
+              _isGrouped: true,
+              _openCount: 0,
+              _totalSlots: totalSlots,
+              _availableShiftIds: [] as string[],
+            };
+          }
+          acc[eventId]._openCount += 1;
+          acc[eventId]._availableShiftIds.push(shift.id);
+          return acc;
+        }, {} as Record<string, any>)
     );
+    
+    return [...myShiftsForDay, ...openShiftsByEventForDay];
   };
 
   const handleDayClick = (day: Date) => {
@@ -87,14 +117,9 @@ const ShiftCalendar = () => {
 
   const dayNames = ['Po', 'Út', 'St', 'Čt', 'Pá', 'So', 'Ne'];
 
-  // Get event IDs where the user already has a pending, claimed or completed shift
-  const myEventIds = new Set(
-    shifts
-      .filter(s => s.claimed_by === user?.id && (s.status === 'pending' || s.status === 'claimed' || s.status === 'completed'))
-      .map(s => s.event_id)
-  );
-
   const canRequestShift = (shift: any) => {
+    // For grouped shifts, check if it's an open grouped entry
+    if (shift._isGrouped) return true;
     return shift.status === 'open' && !myEventIds.has(shift.event_id);
   };
 
@@ -236,48 +261,58 @@ const ShiftCalendar = () => {
           </DialogHeader>
 
           <div className="space-y-3 max-h-[60vh] overflow-y-auto">
-            {selectedDayShifts.map((shift) => (
-              <div 
-                key={shift.id} 
-                className="p-4 rounded-lg border bg-card"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-3">
-                    <div className={`w-3 h-3 rounded-full mt-1.5 flex-shrink-0 ${statusColors[shift.status]}`} />
-                    <div>
-                      <p className="font-medium">{shift.event?.title || 'Směna'}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {shift.event && `${format(new Date(shift.event.start_time), 'HH:mm')} - ${format(new Date(shift.event.end_time), 'HH:mm')}`}
-                      </p>
-                      <div className="flex items-center gap-2 mt-2">
-                        <Badge variant="outline" className="text-xs">
-                          {statusLabels[shift.status]}
-                        </Badge>
-                        <span className="text-xs text-muted-foreground">
-                          {shift.hourly_rate} Kč/h
-                        </span>
-                      </div>
-                      {shift.claimed_by && shift.claimed_profile && (
-                        <div className="flex items-center gap-1 mt-2 text-sm text-muted-foreground">
-                          <User className="h-3 w-3" />
-                          {shift.claimed_profile.full_name}
+            {selectedDayShifts.map((shift) => {
+              const isGrouped = shift._isGrouped;
+              const shiftIdToRequest = isGrouped ? shift._availableShiftIds[0] : shift.id;
+              
+              return (
+                <div 
+                  key={isGrouped ? `grouped-${shift.event_id}` : shift.id} 
+                  className="p-4 rounded-lg border bg-card"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-3">
+                      <div className={`w-3 h-3 rounded-full mt-1.5 flex-shrink-0 ${statusColors[shift.status]}`} />
+                      <div>
+                        <p className="font-medium">{shift.event?.title || 'Směna'}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {shift.event && `${format(new Date(shift.event.start_time), 'HH:mm')} - ${format(new Date(shift.event.end_time), 'HH:mm')}`}
+                        </p>
+                        <div className="flex items-center gap-2 mt-2">
+                          <Badge variant="outline" className="text-xs">
+                            {isGrouped ? 'Volná' : statusLabels[shift.status]}
+                          </Badge>
+                          <span className="text-xs text-muted-foreground">
+                            {shift.hourly_rate} Kč/h
+                          </span>
+                          {isGrouped && (
+                            <span className="text-xs font-medium text-green-600">
+                              Volná místa: {shift._openCount}/{shift._totalSlots}
+                            </span>
+                          )}
                         </div>
-                      )}
+                        {!isGrouped && shift.claimed_by && shift.claimed_profile && (
+                          <div className="flex items-center gap-1 mt-2 text-sm text-muted-foreground">
+                            <User className="h-3 w-3" />
+                            {shift.claimed_profile.full_name}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
 
-                  {isStaff && canRequestShift(shift) && (
-                    <Button 
-                      size="sm"
-                      onClick={() => handleRequestShift(shift.id)}
-                      disabled={isRequesting}
-                    >
-                      {isRequesting ? 'Zpracování...' : 'Přihlásit se'}
-                    </Button>
-                  )}
+                    {isStaff && canRequestShift(shift) && (
+                      <Button 
+                        size="sm"
+                        onClick={() => handleRequestShift(shiftIdToRequest)}
+                        disabled={isRequesting}
+                      >
+                        {isRequesting ? 'Zpracování...' : 'Přihlásit se'}
+                      </Button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </DialogContent>
       </Dialog>

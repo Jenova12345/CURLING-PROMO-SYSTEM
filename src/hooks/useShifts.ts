@@ -241,6 +241,28 @@ export const useShifts = () => {
   const openShifts = shifts.filter(s => 
     s.status === 'open' && !myEventIds.has(s.event_id)
   );
+
+  // Group open shifts by event_id for staff view (show one entry per event)
+  const openShiftsByEvent = Object.values(
+    openShifts.reduce((acc, shift) => {
+      const eventId = shift.event_id;
+      if (!acc[eventId]) {
+        // Count total slots for this event (all shifts regardless of status)
+        const totalSlots = shifts.filter(s => s.event_id === eventId).length;
+        acc[eventId] = {
+          eventId,
+          event: shift.event,
+          hourlyRate: shift.hourly_rate,
+          availableShiftIds: [],
+          openCount: 0,
+          totalSlots,
+        };
+      }
+      acc[eventId].availableShiftIds.push(shift.id);
+      acc[eventId].openCount += 1;
+      return acc;
+    }, {} as Record<string, { eventId: string; event: any; hourlyRate: number | null; availableShiftIds: string[]; openCount: number; totalSlots: number }>)
+  );
   
   // Pending shifts for admin approval
   const pendingShifts = shifts.filter(s => s.status === 'pending');
@@ -341,6 +363,7 @@ export const useShifts = () => {
   return {
     shifts,
     openShifts,
+    openShiftsByEvent,
     myShifts,
     myUnpaidShifts,
     pendingShifts,
