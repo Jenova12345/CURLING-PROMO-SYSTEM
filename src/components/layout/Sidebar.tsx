@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
+import logo from '@/assets/logo.png';
 
 const Sidebar = () => {
   const { profile, role, signOut, isAdmin, isStaff } = useAuth();
@@ -72,7 +73,7 @@ const Sidebar = () => {
     <aside className="flex h-screen w-64 flex-col border-r bg-card">
       {/* Logo */}
       <div className="flex h-16 items-center gap-3 px-6 border-b">
-        <span className="text-2xl">🥌</span>
+        <img src={logo} alt="Mladé Kameny" className="h-10 w-auto" />
         <div>
           <h1 className="font-bold text-lg leading-none">Mladé kameny</h1>
           <p className="text-xs text-muted-foreground">Curlingová hala</p>
