@@ -8,7 +8,7 @@
  * - Rate limiting for profile updates
  */
 
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useProfile } from '@/hooks/useProfile';
 import { useShifts } from '@/hooks/useShifts';
@@ -18,10 +18,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
-import { User, Phone, Camera, Clock, TrendingUp, Wallet, CheckCircle, CreditCard } from 'lucide-react';
+import { User, Phone, Clock, TrendingUp, Wallet, CheckCircle, CreditCard } from 'lucide-react';
 import { format } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { 
@@ -32,23 +31,17 @@ import {
 } from '@/lib/validation';
 import { useRateLimit } from '@/hooks/useRateLimit';
 
-// Allowed MIME types for avatar uploads
-const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
-
 const Profile = () => {
   const { profile, role, isStaff } = useAuth();
-  const { updateProfile, uploadAvatar, isUpdating } = useProfile();
+  const { updateProfile, isUpdating } = useProfile();
   const { myShifts, totalHoursWorked, totalEarnings, unpaidEarnings } = useShifts();
   const { myPayouts } = usePayouts();
   const { toast } = useToast();
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const profileRateLimit = useRateLimit('updateProfile');
 
   const [fullName, setFullName] = useState(profile?.full_name || '');
   const [phone, setPhone] = useState(profile?.phone || '');
   const [bankAccount, setBankAccount] = useState(profile?.bank_account || '');
-  const [isUploading, setIsUploading] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
@@ -121,67 +114,6 @@ const Profile = () => {
     }
   };
 
-  const handleAvatarClick = () => {
-    fileInputRef.current?.click();
-  };
-
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    // Validate file type
-    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
-      toast({
-        title: 'Neplatný typ souboru',
-        description: 'Povolené formáty: JPEG, PNG, GIF, WebP.',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    // Validate file size
-    if (file.size > MAX_FILE_SIZE) {
-      toast({
-        title: 'Soubor je příliš velký',
-        description: `Maximum je ${MAX_FILE_SIZE / 1024 / 1024} MB.`,
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    // Check rate limit
-    if (!profileRateLimit.checkLimit()) {
-      toast({
-        title: 'Příliš mnoho pokusů',
-        description: `Zkuste to znovu za ${profileRateLimit.retryAfter}.`,
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    setIsUploading(true);
-    try {
-      const avatarUrl = await uploadAvatar(file);
-      await updateProfile({ avatarUrl });
-      toast({
-        title: 'Avatar nahrán',
-        description: 'Vaše profilová fotka byla aktualizována.',
-      });
-    } catch {
-      toast({
-        title: 'Chyba',
-        description: 'Nepodařilo se nahrát obrázek.',
-        variant: 'destructive',
-      });
-    } finally {
-      setIsUploading(false);
-      // Clear input to allow re-uploading same file
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
-    }
-  };
-
   const completedShifts = myShifts.filter(s => s.status === 'completed');
 
   const statusColors: Record<string, string> = {
@@ -207,33 +139,11 @@ const Profile = () => {
             <CardDescription>Aktualizujte své kontaktní informace</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
-            {/* Avatar */}
+            {/* User Icon */}
             <div className="flex flex-col items-center">
-              <div className="relative">
-                <Avatar className="h-24 w-24 cursor-pointer" onClick={handleAvatarClick}>
-                  <AvatarImage src={profile?.avatar_url || undefined} />
-                  <AvatarFallback className="text-2xl bg-primary text-primary-foreground">
-                    {profile?.full_name?.charAt(0)?.toUpperCase() || 'U'}
-                  </AvatarFallback>
-                </Avatar>
-                <button
-                  onClick={handleAvatarClick}
-                  disabled={isUploading}
-                  className="absolute bottom-0 right-0 p-1.5 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-                >
-                  <Camera className="h-4 w-4" />
-                </button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept={ALLOWED_IMAGE_TYPES.join(',')}
-                  className="hidden"
-                  onChange={handleFileChange}
-                />
+              <div className="flex h-24 w-24 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                <User className="h-12 w-12" />
               </div>
-              {isUploading && (
-                <p className="text-sm text-muted-foreground mt-2">Nahrávání...</p>
-              )}
               <Badge className="mt-3" variant="secondary">
                 {role ? roleLabels[role] : 'Člen'}
               </Badge>
