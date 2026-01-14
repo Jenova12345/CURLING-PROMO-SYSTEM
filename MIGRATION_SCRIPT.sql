@@ -521,6 +521,33 @@ CREATE INDEX idx_shifts_payout_id ON public.shifts(payout_id);
 CREATE INDEX idx_payouts_user_id ON public.payouts(user_id);
 
 -- ============================================
+-- 7. BEZPEČNOSTNÍ VIEW
+-- ============================================
+
+-- View pro ochranu bank_account - pouze vlastník a admin vidí číslo účtu
+CREATE OR REPLACE VIEW public.profiles_public
+WITH (security_invoker = on) AS
+SELECT 
+  id,
+  user_id,
+  full_name,
+  phone,
+  created_at,
+  updated_at,
+  CASE 
+    WHEN auth.uid() = user_id THEN bank_account
+    WHEN has_role(auth.uid(), 'admin'::app_role) THEN bank_account
+    ELSE NULL
+  END as bank_account
+FROM public.profiles;
+
+-- Oprávnění k view
+GRANT SELECT ON public.profiles_public TO authenticated;
+
+COMMENT ON VIEW public.profiles_public IS 
+'Bezpečnostní view pro přístup k profilům. bank_account je viditelný pouze vlastníkovi účtu a adminům.';
+
+-- ============================================
 -- HOTOVO!
 -- ============================================
 -- 
