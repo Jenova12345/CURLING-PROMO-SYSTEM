@@ -8,7 +8,8 @@ import {
   LayoutDashboard, 
   LogOut,
   User,
-  MessageCircle
+  MessageCircle,
+  Wallet
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -44,6 +45,12 @@ const Sidebar = () => {
       label: 'Směny', 
       icon: Clock,
       roles: ['admin', 'part_time_staff']
+    },
+    { 
+      path: '/payouts', 
+      label: 'Výplaty', 
+      icon: Wallet,
+      roles: ['admin']
     },
     { 
       path: '/profile', 

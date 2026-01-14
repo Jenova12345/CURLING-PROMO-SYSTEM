@@ -6,7 +6,8 @@ import {
   Clock, 
   Users, 
   LayoutDashboard,
-  MessageCircle
+  MessageCircle,
+  Wallet
 } from 'lucide-react';
 
 const MobileNav = () => {
@@ -31,6 +32,12 @@ const MobileNav = () => {
       label: 'Směny', 
       icon: Clock,
       roles: ['admin', 'part_time_staff']
+    },
+    { 
+      path: '/payouts', 
+      label: 'Výplaty', 
+      icon: Wallet,
+      roles: ['admin']
     },
     { 
       path: '/communication', 
