@@ -58,8 +58,9 @@ export const useShifts = () => {
       // Fetch profiles for those users
       let profilesMap: Record<string, { full_name: string; bank_account: string | null }> = {};
       if (userIds.length > 0) {
+        // Use profiles_public view which securely hides bank_account from non-admins
         const { data: profiles } = await supabase
-          .from('profiles')
+          .from('profiles_public')
           .select('user_id, full_name, bank_account')
           .in('user_id', userIds);
         
