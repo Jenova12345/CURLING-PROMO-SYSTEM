@@ -9,7 +9,7 @@
  */
 
 import { useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, Link } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -159,9 +159,14 @@ const Auth = () => {
     } else {
       // Reset rate limit on successful registration
       registerRateLimit.reset();
+      // Clear form
+      setRegisterEmail('');
+      setRegisterPassword('');
+      setRegisterName('');
       toast({
         title: 'Registrace úspěšná!',
-        description: 'Váš účet byl vytvořen. Nyní jste přihlášeni.',
+        description: 'Zkontrolujte prosím svůj email pro potvrzení registrace.',
+        duration: 10000, // Show longer for important message
       });
     }
   };
@@ -223,6 +228,14 @@ const Auth = () => {
                 <Button type="submit" className="w-full" disabled={isLoginDisabled}>
                   {isSubmitting ? 'Přihlašování...' : 'Přihlásit se'}
                 </Button>
+                <div className="text-center">
+                  <Link 
+                    to="/forgot-password" 
+                    className="text-sm text-muted-foreground hover:text-primary transition-colors"
+                  >
+                    Zapomněli jste heslo?
+                  </Link>
+                </div>
               </form>
             </TabsContent>
             
