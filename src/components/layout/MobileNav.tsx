@@ -34,7 +34,7 @@ const MobileNav = () => {
     },
     { 
       path: '/communication', 
-      label: 'Chat', 
+      label: 'Komunikace', 
       icon: MessageCircle,
       roles: ['admin', 'trainer', 'part_time_staff', 'pro_player', 'hobby_player']
     },
