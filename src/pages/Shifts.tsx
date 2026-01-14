@@ -36,6 +36,8 @@ const Shifts = () => {
     openShiftsByEvent,
     availableStaff,
     myShifts,
+    myPendingShifts,
+    myConfirmedShifts,
     myUnpaidShifts,
     pendingShifts,
     shiftsToComplete,
@@ -585,9 +587,9 @@ const Shifts = () => {
           </TabsContent>
         )}
 
-        {/* My Shifts (Staff) */}
+        {/* My Shifts (Staff) - Split into Pending and Confirmed */}
         {isStaff && (
-          <TabsContent value="my" className="space-y-4">
+          <TabsContent value="my" className="space-y-6">
             {myShifts.length === 0 ? (
               <Card>
                 <CardContent className="flex flex-col items-center justify-center py-12">
@@ -596,84 +598,150 @@ const Shifts = () => {
                 </CardContent>
               </Card>
             ) : (
-              myShifts.map((shift) => {
-                const isPastEvent = shift.event?.end_time && new Date(shift.event.end_time) < new Date();
-                const showWaitingBadge = shift.status === 'claimed' && isPastEvent;
-                
-                return (
-                  <Card key={shift.id}>
-                    <CardContent className="flex flex-col sm:flex-row sm:items-center justify-between p-4 md:p-6 gap-4">
-                      <div className="flex items-start gap-3">
-                        <div className={`w-3 h-3 rounded-full mt-1.5 flex-shrink-0 ${statusColors[shift.status]}`} />
-                        <div>
-                          <p className="font-medium text-base md:text-lg">{shift.event?.title || 'Směna'}</p>
-                          <p className="text-muted-foreground text-sm">
-                            {shift.event && format(new Date(shift.event.start_time), 'EEE d. MMM yyyy', { locale: cs })}
-                          </p>
-                          <p className="text-xs md:text-sm text-muted-foreground">
-                            {shift.event && `${format(new Date(shift.event.start_time), 'HH:mm')} - ${format(new Date(shift.event.end_time), 'HH:mm')}`}
-                          </p>
-                          {shift.status === 'completed' && shift.hours_worked && (
-                            <div className="mt-1">
-                              <p className="text-xs md:text-sm text-green-600">
-                                Odpracováno: {shift.hours_worked} h ({(Number(shift.hours_worked) * Number(shift.hourly_rate)).toLocaleString('cs-CZ')} Kč)
+              <>
+                {/* Pending Shifts Section */}
+                <Card className="border-yellow-200 dark:border-yellow-900">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-lg">
+                      <AlertCircle className="h-5 w-5 text-yellow-500" />
+                      Čeká na potvrzení
+                      {myPendingShifts.length > 0 && (
+                        <Badge variant="outline" className="ml-2 border-yellow-500 text-yellow-600">
+                          {myPendingShifts.length}
+                        </Badge>
+                      )}
+                    </CardTitle>
+                    <CardDescription>Směny čekající na schválení adminem</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {myPendingShifts.length === 0 ? (
+                      <p className="text-sm text-muted-foreground py-4 text-center">
+                        Žádné směny nečekají na potvrzení
+                      </p>
+                    ) : (
+                      myPendingShifts.map((shift) => (
+                        <div key={shift.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-lg bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-900 gap-4">
+                          <div className="flex items-start gap-3">
+                            <div className={`w-3 h-3 rounded-full mt-1.5 flex-shrink-0 ${statusColors.pending}`} />
+                            <div>
+                              <p className="font-medium text-base">{shift.event?.title || 'Směna'}</p>
+                              <p className="text-muted-foreground text-sm">
+                                {shift.event && format(new Date(shift.event.start_time), 'EEE d. MMM yyyy', { locale: cs })}
                               </p>
-                              {shift.payout_id ? (
-                                <Badge variant="outline" className="text-xs mt-1 border-green-500 text-green-600">
-                                  <CheckCircle className="h-3 w-3 mr-1" />
-                                  Vyplaceno
+                              <p className="text-xs text-muted-foreground">
+                                {shift.event && `${format(new Date(shift.event.start_time), 'HH:mm')} - ${format(new Date(shift.event.end_time), 'HH:mm')}`}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 ml-6 sm:ml-0">
+                            <Badge variant="outline" className="border-yellow-500 text-yellow-600">
+                              <Clock className="h-3 w-3 mr-1" />
+                              Čeká na schválení
+                            </Badge>
+                            <Button 
+                              variant="outline" 
+                              size="sm"
+                              onClick={() => handleCancelRequest(shift.id)}
+                              className="h-8"
+                            >
+                              <XCircle className="h-4 w-4 mr-1" />
+                              <span className="hidden sm:inline">Zrušit přihlášku</span>
+                            </Button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Confirmed Shifts Section */}
+                <Card className="border-blue-200 dark:border-blue-900">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-lg">
+                      <CheckCircle className="h-5 w-5 text-blue-500" />
+                      Potvrzené
+                      {myConfirmedShifts.length > 0 && (
+                        <Badge variant="outline" className="ml-2 border-blue-500 text-blue-600">
+                          {myConfirmedShifts.length}
+                        </Badge>
+                      )}
+                    </CardTitle>
+                    <CardDescription>Schválené a dokončené směny</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {myConfirmedShifts.length === 0 ? (
+                      <p className="text-sm text-muted-foreground py-4 text-center">
+                        Zatím nemáte žádné potvrzené směny
+                      </p>
+                    ) : (
+                      myConfirmedShifts.map((shift) => {
+                        const isPastEvent = shift.event?.end_time && new Date(shift.event.end_time) < new Date();
+                        const showWaitingBadge = shift.status === 'claimed' && isPastEvent;
+                        
+                        return (
+                          <div key={shift.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-lg bg-accent/50 gap-4">
+                            <div className="flex items-start gap-3">
+                              <div className={`w-3 h-3 rounded-full mt-1.5 flex-shrink-0 ${statusColors[shift.status]}`} />
+                              <div>
+                                <p className="font-medium text-base">{shift.event?.title || 'Směna'}</p>
+                                <p className="text-muted-foreground text-sm">
+                                  {shift.event && format(new Date(shift.event.start_time), 'EEE d. MMM yyyy', { locale: cs })}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  {shift.event && `${format(new Date(shift.event.start_time), 'HH:mm')} - ${format(new Date(shift.event.end_time), 'HH:mm')}`}
+                                </p>
+                                {shift.status === 'completed' && shift.hours_worked && (
+                                  <div className="mt-1">
+                                    <p className="text-xs text-green-600">
+                                      Odpracováno: {shift.hours_worked} h ({(Number(shift.hours_worked) * Number(shift.hourly_rate)).toLocaleString('cs-CZ')} Kč)
+                                    </p>
+                                    {shift.payout_id ? (
+                                      <Badge variant="outline" className="text-xs mt-1 border-green-500 text-green-600">
+                                        <CheckCircle className="h-3 w-3 mr-1" />
+                                        Vyplaceno
+                                      </Badge>
+                                    ) : (
+                                      <Badge variant="outline" className="text-xs mt-1 border-orange-500 text-orange-600">
+                                        <Clock className="h-3 w-3 mr-1" />
+                                        Čeká na výplatu
+                                      </Badge>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 flex-wrap ml-6 sm:ml-0">
+                              {showWaitingBadge ? (
+                                <Badge variant="outline" className="border-orange-500 text-orange-600">
+                                  <Clock className="h-3 w-3 mr-1" />
+                                  Čeká na dokončení adminem
                                 </Badge>
                               ) : (
-                                <Badge variant="outline" className="text-xs mt-1 border-orange-500 text-orange-600">
-                                  <Clock className="h-3 w-3 mr-1" />
-                                  Čeká na výplatu
+                                <Badge 
+                                  variant={shift.status === 'completed' ? 'default' : 'secondary'}
+                                >
+                                  {statusLabels[shift.status]}
                                 </Badge>
                               )}
+                              {shift.status === 'claimed' && !isPastEvent && (
+                                <Button 
+                                  variant="outline" 
+                                  size="sm"
+                                  onClick={() => handleCancelShift(shift.id)}
+                                  className="h-8"
+                                >
+                                  <XCircle className="h-4 w-4 mr-1" />
+                                  <span className="hidden sm:inline">Zrušit</span>
+                                </Button>
+                              )}
                             </div>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 flex-wrap ml-6 sm:ml-0">
-                        {showWaitingBadge ? (
-                          <Badge variant="outline" className="border-orange-500 text-orange-600">
-                            <Clock className="h-3 w-3 mr-1" />
-                            Čeká na dokončení adminem
-                          </Badge>
-                        ) : (
-                          <Badge 
-                            variant={shift.status === 'completed' ? 'default' : shift.status === 'pending' ? 'outline' : 'secondary'}
-                            className={shift.status === 'pending' ? 'border-yellow-500 text-yellow-600' : ''}
-                          >
-                            {statusLabels[shift.status]}
-                          </Badge>
-                        )}
-                        {shift.status === 'pending' && (
-                          <Button 
-                            variant="outline" 
-                            size="sm"
-                            onClick={() => handleCancelRequest(shift.id)}
-                            className="h-8"
-                          >
-                            <XCircle className="h-4 w-4 mr-1" />
-                            <span className="hidden sm:inline">Zrušit přihlášku</span>
-                          </Button>
-                        )}
-                        {shift.status === 'claimed' && !isPastEvent && (
-                          <Button 
-                            variant="outline" 
-                            size="sm"
-                            onClick={() => handleCancelShift(shift.id)}
-                            className="h-8"
-                          >
-                            <XCircle className="h-4 w-4 mr-1" />
-                            <span className="hidden sm:inline">Zrušit</span>
-                          </Button>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })
+                          </div>
+                        );
+                      })
+                    )}
+                  </CardContent>
+                </Card>
+              </>
             )}
           </TabsContent>
         )}
