@@ -21,6 +21,7 @@ export const RATE_LIMIT_CONFIG = {
   // Authentication - strict limits
   login: { maxAttempts: 5, windowMs: 60 * 1000, cooldownMs: 60 * 1000 },
   register: { maxAttempts: 3, windowMs: 60 * 1000, cooldownMs: 120 * 1000 },
+  password_reset: { maxAttempts: 3, windowMs: 60 * 1000, cooldownMs: 120 * 1000 },
   
   // Data mutations - moderate limits
   createEvent: { maxAttempts: 10, windowMs: 60 * 1000, cooldownMs: 30 * 1000 },

@@ -527,14 +527,22 @@ CREATE INDEX idx_payouts_user_id ON public.payouts(user_id);
 -- DALŠÍ KROKY:
 -- 
 -- 1. V Supabase dashboard → Authentication → Settings:
---    - Zapni "Enable email confirmations" = OFF (pro automatické potvrzení)
---    - Nastav Site URL na URL tvého frontendu
+--    - Enable email confirmations: ON (vyžadovat potvrzení emailem)
+--    - Site URL: https://vase-domena.cz (vaše produkční doména)
 --
--- 2. V Settings → API zkopíruj:
+-- 2. V Authentication → URL Configuration → Redirect URLs přidej:
+--    - https://vase-domena.cz/update-password (pro reset hesla)
+--    - https://vase-domena.cz/ (pro potvrzení registrace)
+--
+-- 3. V Authentication → Email Templates upravte šablony:
+--    - "Reset Password" - odkaz bude automaticky obsahovat /update-password
+--    - "Confirm signup" - odkaz pro potvrzení registrace
+--
+-- 4. V Settings → API zkopíruj:
 --    - Project URL → VITE_SUPABASE_URL
 --    - anon public key → VITE_SUPABASE_PUBLISHABLE_KEY
 --
--- 3. Po nasazení frontendu se zaregistruj a pak spusť:
+-- 5. Po nasazení frontendu se zaregistruj (potvrd email) a pak spusť:
 --    UPDATE public.user_roles 
 --    SET role = 'admin' 
 --    WHERE user_id = (SELECT id FROM auth.users WHERE email = 'tvuj@email.cz');
