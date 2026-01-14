@@ -371,10 +371,20 @@ export const useShifts = () => {
       acc[eventId].openCount += 1;
       return acc;
     }, {} as Record<string, { eventId: string; event: any; hourlyRate: number | null; availableShiftIds: string[]; openCount: number; totalSlots: number }>)
-  );
+  ).sort((a, b) => {
+    const aTime = a.event?.start_time ? new Date(a.event.start_time).getTime() : 0;
+    const bTime = b.event?.start_time ? new Date(b.event.start_time).getTime() : 0;
+    return aTime - bTime;
+  });
   
-  // Pending shifts for admin approval
-  const pendingShifts = shifts.filter(s => s.status === 'pending');
+  // Pending shifts for admin approval - sorted by nearest event
+  const pendingShifts = shifts
+    .filter(s => s.status === 'pending')
+    .sort((a, b) => {
+      const aTime = a.event?.start_time ? new Date(a.event.start_time).getTime() : 0;
+      const bTime = b.event?.start_time ? new Date(b.event.start_time).getTime() : 0;
+      return aTime - bTime;
+    });
   
   // Claimed shifts ready to be completed (event has passed)
   const shiftsToComplete = shifts.filter(s => {
@@ -383,7 +393,7 @@ export const useShifts = () => {
     return new Date(s.event.end_time) < new Date();
   });
 
-  // Group shifts to complete by event (for admin to complete whole events at once)
+  // Group shifts to complete by event (for admin to complete whole events at once) - sorted by earliest end time
   const eventsToComplete = Object.values(
     shiftsToComplete.reduce((acc, shift) => {
       const eventId = shift.event_id;
@@ -402,7 +412,65 @@ export const useShifts = () => {
       }
       return acc;
     }, {} as Record<string, { eventId: string; event: any; hourlyRate: number | null; shifts: any[]; staffNames: string[] }>)
-  );
+  ).sort((a, b) => {
+    const aTime = a.event?.end_time ? new Date(a.event.end_time).getTime() : 0;
+    const bTime = b.event?.end_time ? new Date(b.event.end_time).getTime() : 0;
+    return aTime - bTime;
+  });
+
+  // Upcoming shifts - future events with staff assigned (claimed or completed)
+  const upcomingShifts = shifts
+    .filter(s => {
+      if (!s.event?.start_time) return false;
+      const isFuture = new Date(s.event.start_time) > new Date();
+      const hasStaff = s.status === 'claimed' || s.status === 'completed';
+      return isFuture && hasStaff;
+    })
+    .sort((a, b) => {
+      const aTime = new Date(a.event!.start_time).getTime();
+      const bTime = new Date(b.event!.start_time).getTime();
+      return aTime - bTime;
+    });
+
+  // Group upcoming shifts by event
+  const upcomingShiftsByEvent = Object.values(
+    upcomingShifts.reduce((acc, shift) => {
+      const eventId = shift.event_id;
+      if (!acc[eventId]) {
+        acc[eventId] = {
+          eventId,
+          event: shift.event,
+          shifts: [],
+          staffNames: [],
+        };
+      }
+      acc[eventId].shifts.push(shift);
+      if (shift.claimed_profile?.full_name) {
+        acc[eventId].staffNames.push(shift.claimed_profile.full_name);
+      }
+      return acc;
+    }, {} as Record<string, { eventId: string; event: any; shifts: any[]; staffNames: string[] }>)
+  ).sort((a, b) => {
+    const aTime = a.event?.start_time ? new Date(a.event.start_time).getTime() : 0;
+    const bTime = b.event?.start_time ? new Date(b.event.start_time).getTime() : 0;
+    return aTime - bTime;
+  });
+
+  // History shifts - completed shifts from last 2 months
+  const twoMonthsAgo = new Date();
+  twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
+  
+  const historyShifts = shifts
+    .filter(s => {
+      if (s.status !== 'completed') return false;
+      if (!s.event?.start_time) return false;
+      return new Date(s.event.start_time) >= twoMonthsAgo;
+    })
+    .sort((a, b) => {
+      const aTime = new Date(a.event!.start_time).getTime();
+      const bTime = new Date(b.event!.start_time).getTime();
+      return bTime - aTime; // Newest first
+    });
   
   // My completed unpaid shifts
   const myUnpaidShifts = myShifts.filter(s => s.status === 'completed' && !s.payout_id);
@@ -501,6 +569,9 @@ export const useShifts = () => {
     pendingShifts,
     shiftsToComplete,
     eventsToComplete,
+    upcomingShifts,
+    upcomingShiftsByEvent,
+    historyShifts,
     staffUnpaidAmounts: Object.values(staffUnpaidAmounts),
     adminStats: {
       ...adminStats,

@@ -42,8 +42,8 @@ const Shifts = () => {
     pendingShifts,
     shiftsToComplete,
     eventsToComplete,
-    staffUnpaidAmounts,
-    adminStats,
+    upcomingShiftsByEvent,
+    historyShifts,
     requestShift,
     approveShift,
     rejectShift,
@@ -61,7 +61,7 @@ const Shifts = () => {
     unpaidEarnings,
     isLoading 
   } = useShifts();
-  const { payouts, myPayouts, createPayout, isCreatingPayout } = usePayouts();
+  const { myPayouts } = usePayouts();
   const { toast } = useToast();
 
   // Rate limiting hooks
@@ -113,7 +113,7 @@ const Shifts = () => {
         } else if (eventsToComplete.length > 0) {
           setActiveTab('complete');
         } else {
-          setActiveTab('all');
+          setActiveTab('upcoming');
         }
       } else if (isStaff) {
         setActiveTab('available');
@@ -570,12 +570,11 @@ const Shifts = () => {
               {isStaff && <SelectItem value="available">Volné směny</SelectItem>}
               {isStaff && <SelectItem value="my">Moje směny</SelectItem>}
               {isStaff && <SelectItem value="payouts">Výplaty</SelectItem>}
-              {isAdmin && <SelectItem value="pending">Čekající {pendingShifts.length > 0 && `(${pendingShifts.length})`}</SelectItem>}
-              {isAdmin && <SelectItem value="complete">K dokončení {eventsToComplete.length > 0 && `(${eventsToComplete.length})`}</SelectItem>}
-              {isAdmin && <SelectItem value="payouts">Výplaty {staffUnpaidAmounts.length > 0 && `(${staffUnpaidAmounts.length})`}</SelectItem>}
-              {isAdmin && <SelectItem value="open">Volné {openShifts.length > 0 && `(${openShifts.length})`}</SelectItem>}
-              {isAdmin && <SelectItem value="stats">Statistiky</SelectItem>}
-              {isAdmin && <SelectItem value="all">Všechny směny</SelectItem>}
+              {isAdmin && <SelectItem value="pending">Brigádníci k potvrzení {pendingShifts.length > 0 && `(${pendingShifts.length})`}</SelectItem>}
+              {isAdmin && <SelectItem value="complete">Akce k dokončení {eventsToComplete.length > 0 && `(${eventsToComplete.length})`}</SelectItem>}
+              {isAdmin && <SelectItem value="open">Směny kde chybí brigádníci {openShifts.length > 0 && `(${openShifts.length})`}</SelectItem>}
+              {isAdmin && <SelectItem value="upcoming">Hotové nadcházející akce</SelectItem>}
+              {isAdmin && <SelectItem value="history">Historie směn</SelectItem>}
             </SelectContent>
           </Select>
         </div>
@@ -587,7 +586,7 @@ const Shifts = () => {
           {isStaff && <TabsTrigger value="payouts" className="text-sm">Výplaty</TabsTrigger>}
           {isAdmin && (
             <TabsTrigger value="pending" className="text-sm relative">
-              Čekající
+              Brigádníci k potvrzení
               {pendingShifts.length > 0 && (
                 <span className="ml-1 inline-flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-yellow-500 rounded-full">
                   {pendingShifts.length}
@@ -597,7 +596,7 @@ const Shifts = () => {
           )}
           {isAdmin && (
             <TabsTrigger value="complete" className="text-sm relative">
-              K dokončení
+              Akce k dokončení
               {eventsToComplete.length > 0 && (
                 <span className="ml-1 inline-flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-orange-500 rounded-full">
                   {eventsToComplete.length}
@@ -605,26 +604,16 @@ const Shifts = () => {
               )}
             </TabsTrigger>
           )}
-          {isAdmin && (
-            <TabsTrigger value="payouts" className="text-sm relative">
-              Výplaty
-              {staffUnpaidAmounts.length > 0 && (
-                <span className="ml-1 inline-flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-green-500 rounded-full">
-                  {staffUnpaidAmounts.length}
-                </span>
-              )}
-            </TabsTrigger>
-          )}
           {isAdmin && <TabsTrigger value="open" className="text-sm relative">
-              Volné
+              Směny kde chybí brigádníci
               {openShifts.length > 0 && (
                 <span className="ml-1 inline-flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-green-500 rounded-full">
                   {openShifts.length}
                 </span>
               )}
             </TabsTrigger>}
-          {isAdmin && <TabsTrigger value="stats" className="text-sm">Statistiky</TabsTrigger>}
-          {isAdmin && <TabsTrigger value="all" className="text-sm">Všechny směny</TabsTrigger>}
+          {isAdmin && <TabsTrigger value="upcoming" className="text-sm">Hotové nadcházející akce</TabsTrigger>}
+          {isAdmin && <TabsTrigger value="history" className="text-sm">Historie směn</TabsTrigger>}
         </TabsList>
 
         {/* Available Shifts (Staff) - Grouped by Event */}
@@ -828,7 +817,7 @@ const Shifts = () => {
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <AlertCircle className="h-5 w-5 text-yellow-500" />
-                    Čekající přihlášky
+                    Brigádníci k potvrzení
                   </CardTitle>
                   <CardDescription>Brigádníci čekající na schválení směny</CardDescription>
                 </CardHeader>
@@ -1266,7 +1255,7 @@ const Shifts = () => {
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <UserPlus className="h-5 w-5 text-green-500" />
-                    Volné směny k přiřazení
+                    Směny kde chybí brigádníci
                   </CardTitle>
                   <CardDescription>Kliknutím na "Přiřadit" můžete ručně přiřadit brigádníka na směnu</CardDescription>
                 </CardHeader>
@@ -1303,41 +1292,107 @@ const Shifts = () => {
           </TabsContent>
         )}
 
-        {/* All Shifts (Admin) */}
+        {/* Upcoming Shifts (Admin) - Future events with staff */}
         {isAdmin && (
-          <TabsContent value="all" className="space-y-4">
+          <TabsContent value="upcoming" className="space-y-4">
+            {upcomingShiftsByEvent.length === 0 ? (
+              <Card>
+                <CardContent className="flex flex-col items-center justify-center py-12">
+                  <Calendar className="h-12 w-12 text-muted-foreground mb-4" />
+                  <p className="text-muted-foreground">Žádné nadcházející akce s brigádníky.</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Calendar className="h-5 w-5 text-blue-500" />
+                    Hotové nadcházející akce
+                  </CardTitle>
+                  <CardDescription>Budoucí akce s potvrzenými brigádníky</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {upcomingShiftsByEvent.map((eventItem) => (
+                    <div key={eventItem.eventId} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900 gap-4">
+                      <div className="flex items-start gap-4">
+                        <div className="w-3 h-3 rounded-full mt-1.5 bg-blue-500" />
+                        <div>
+                          <p className="font-medium">{eventItem.event?.title || 'Akce'}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {eventItem.event && format(new Date(eventItem.event.start_time), 'd. MMMM yyyy, HH:mm', { locale: cs })}
+                          </p>
+                          <p className="text-sm font-medium text-blue-700 dark:text-blue-400 mt-1">
+                            Brigádníci ({eventItem.shifts.length}): {eventItem.staffNames.join(', ')}
+                          </p>
+                        </div>
+                      </div>
+                      <Badge variant="outline" className="border-blue-500 text-blue-600">
+                        <CheckCircle className="h-3 w-3 mr-1" />
+                        Připraveno
+                      </Badge>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+        )}
+
+        {/* History Shifts (Admin) - Last 2 months */}
+        {isAdmin && (
+          <TabsContent value="history" className="space-y-4">
             <Card>
               <CardHeader>
-                <CardTitle>Přehled všech směn</CardTitle>
-                <CardDescription>Všechny směny seřazené podle data</CardDescription>
+                <CardTitle className="flex items-center gap-2">
+                  <History className="h-5 w-5" />
+                  Historie dokončených směn
+                </CardTitle>
+                <CardDescription>Poslední 2 měsíce</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="space-y-4">
-                  {shifts.map((shift) => (
-                    <div key={shift.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-lg bg-accent/50 gap-2">
-                      <div className="flex items-center gap-4">
-                        <div className={`w-3 h-3 rounded-full ${statusColors[shift.status]}`} />
-                        <div>
-                          <p className="font-medium">{shift.event?.title || 'Směna'}</p>
-                          <p className="text-sm text-muted-foreground">
-                            {shift.event && format(new Date(shift.event.start_time), 'd. MMMM yyyy, HH:mm', { locale: cs })}
-                          </p>
-                          {shift.claimed_by && (
+                {historyShifts.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-8">
+                    <History className="h-12 w-12 text-muted-foreground mb-4" />
+                    <p className="text-muted-foreground">Žádné dokončené směny v posledních 2 měsících.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {historyShifts.map((shift) => (
+                      <div key={shift.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-lg bg-accent/50 gap-2">
+                        <div className="flex items-center gap-4">
+                          <div className={`w-3 h-3 rounded-full ${statusColors[shift.status]}`} />
+                          <div>
+                            <p className="font-medium">{shift.event?.title || 'Směna'}</p>
                             <p className="text-sm text-muted-foreground">
-                              Brigádník: {getStaffName(shift)}
+                              {shift.event && format(new Date(shift.event.start_time), 'd. MMMM yyyy, HH:mm', { locale: cs })}
                             </p>
+                            {shift.claimed_by && (
+                              <p className="text-sm text-muted-foreground">
+                                Brigádník: {getStaffName(shift)}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-4 ml-7 sm:ml-0">
+                          {shift.payout_id ? (
+                            <Badge variant="outline" className="border-green-500 text-green-600">
+                              <CheckCircle className="h-3 w-3 mr-1" />
+                              Vyplaceno
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="border-orange-500 text-orange-600">
+                              <Clock className="h-3 w-3 mr-1" />
+                              K výplatě
+                            </Badge>
+                          )}
+                          {shift.hours_worked && (
+                            <span className="text-sm">{shift.hours_worked} h • {(Number(shift.hours_worked) * Number(shift.hourly_rate)).toLocaleString('cs-CZ')} Kč</span>
                           )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-4 ml-7 sm:ml-0">
-                        <Badge variant="outline">{statusLabels[shift.status]}</Badge>
-                        {shift.hours_worked && (
-                          <span className="text-sm">{shift.hours_worked} h • {(Number(shift.hours_worked) * Number(shift.hourly_rate)).toLocaleString('cs-CZ')} Kč</span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
