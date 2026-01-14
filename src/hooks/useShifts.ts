@@ -342,8 +342,8 @@ export const useShifts = () => {
   // My pending shifts (waiting for admin approval)
   const myPendingShifts = myShifts.filter(s => s.status === 'pending');
   
-  // My confirmed shifts (claimed or completed)
-  const myConfirmedShifts = myShifts.filter(s => s.status === 'claimed' || s.status === 'completed');
+  // My confirmed shifts (only claimed, upcoming)
+  const myConfirmedShifts = myShifts.filter(s => s.status === 'claimed');
   
   // Get event IDs where the user already has a pending, claimed or completed shift
   const myEventIds = new Set(
@@ -573,6 +573,7 @@ export const useShifts = () => {
     myShifts,
     myPendingShifts,
     myConfirmedShifts,
+    myCompletedShifts,
     myUnpaidShifts,
     pendingShifts,
     shiftsToComplete,
