@@ -53,9 +53,15 @@ const MobileNav = () => {
     },
   ];
 
-  const filteredNavItems = navItems.filter(item => 
-    role && item.roles.includes(role)
-  );
+  // Fallback paths for when role is not yet loaded
+  const defaultPaths = ['/', '/calendar', '/profile', '/communication'];
+  
+  const filteredNavItems = navItems.filter(item => {
+    if (!role) {
+      return defaultPaths.includes(item.path);
+    }
+    return item.roles.includes(role);
+  });
 
   // Show max 5 items on mobile bottom nav
   const mobileNavItems = filteredNavItems.slice(0, 5);

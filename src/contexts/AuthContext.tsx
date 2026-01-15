@@ -24,6 +24,7 @@ interface AuthContextType {
   isAdmin: boolean;
   isTrainer: boolean;
   isStaff: boolean;
+  isMember: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -36,68 +37,91 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
 
   const fetchUserData = async (userId: string) => {
-    // Fetch profile
-    const { data: profileData } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('user_id', userId)
-      .single();
+    console.log('[AuthContext] fetchUserData started for:', userId);
     
-    if (profileData) {
-      setProfile(profileData);
-    }
+    try {
+      // Fetch profile
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('user_id', userId)
+        .single();
+      
+      console.log('[AuthContext] Profile fetch result:', { profileData, profileError });
+      
+      if (profileData) {
+        setProfile(profileData);
+      }
 
-    // Fetch role
-    const { data: roleData, error: roleError } = await supabase
-      .from('user_roles')
-      .select('role')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .single();
-    
-    console.log('[AuthContext] Fetched role for user:', userId, 'roleData:', roleData, 'error:', roleError);
-    
-    if (roleData) {
-      setRole(roleData.role as AppRole);
-      console.log('[AuthContext] Role set to:', roleData.role);
-    } else {
-      console.log('[AuthContext] No role found for user');
+      // Fetch role - using maybeSingle() for better handling
+      const { data: roleData, error: roleError } = await supabase
+        .from('user_roles')
+        .select('role')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      
+      console.log('[AuthContext] Role fetch result:', { roleData, roleError });
+      
+      if (roleData?.role) {
+        setRole(roleData.role as AppRole);
+        console.log('[AuthContext] Role successfully set to:', roleData.role);
+      } else {
+        console.warn('[AuthContext] No role found for user, defaulting to hobby_player');
+        setRole('hobby_player');
+      }
+    } catch (error) {
+      console.error('[AuthContext] Error fetching user data:', error);
+      setRole('hobby_player');
     }
   };
 
   useEffect(() => {
+    let mounted = true;
+
     // Set up auth state listener FIRST
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
+      async (event, session) => {
+        console.log('[AuthContext] Auth state changed:', event);
+        
         setSession(session);
         setUser(session?.user ?? null);
         
         if (session?.user) {
-          // Defer data fetching to avoid deadlock
-          setTimeout(() => {
-            fetchUserData(session.user.id);
-          }, 0);
+          // Await data fetching before setting loading to false
+          await fetchUserData(session.user.id);
         } else {
           setProfile(null);
           setRole(null);
         }
-        setLoading(false);
+        
+        if (mounted) {
+          setLoading(false);
+        }
       }
     );
 
     // THEN check for existing session
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      console.log('[AuthContext] Initial session check:', session?.user?.id);
+      
       setSession(session);
       setUser(session?.user ?? null);
       
       if (session?.user) {
-        fetchUserData(session.user.id);
+        await fetchUserData(session.user.id);
       }
-      setLoading(false);
+      
+      if (mounted) {
+        setLoading(false);
+      }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const signIn = async (email: string, password: string) => {
@@ -135,6 +159,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const isAdmin = role === 'admin';
   const isTrainer = role === 'trainer';
   const isStaff = role === 'part_time_staff';
+  const isMember = role === 'hobby_player' || role === 'pro_player';
 
   return (
     <AuthContext.Provider
@@ -150,6 +175,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isAdmin,
         isTrainer,
         isStaff,
+        isMember,
       }}
     >
       {children}
