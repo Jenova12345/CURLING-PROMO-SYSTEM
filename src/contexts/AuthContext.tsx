@@ -83,39 +83,48 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     // Set up auth state listener FIRST
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+      (event, session) => {
         console.log('[AuthContext] Auth state changed:', event);
         
         setSession(session);
         setUser(session?.user ?? null);
         
         if (session?.user) {
-          // Await data fetching before setting loading to false
-          await fetchUserData(session.user.id);
+          // Use setTimeout to avoid Supabase auth deadlock
+          setTimeout(() => {
+            fetchUserData(session.user.id).finally(() => {
+              if (mounted) {
+                setLoading(false);
+              }
+            });
+          }, 0);
         } else {
           setProfile(null);
           setRole(null);
-        }
-        
-        if (mounted) {
-          setLoading(false);
+          if (mounted) {
+            setLoading(false);
+          }
         }
       }
     );
 
     // THEN check for existing session
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
       console.log('[AuthContext] Initial session check:', session?.user?.id);
       
       setSession(session);
       setUser(session?.user ?? null);
       
       if (session?.user) {
-        await fetchUserData(session.user.id);
-      }
-      
-      if (mounted) {
-        setLoading(false);
+        fetchUserData(session.user.id).finally(() => {
+          if (mounted) {
+            setLoading(false);
+          }
+        });
+      } else {
+        if (mounted) {
+          setLoading(false);
+        }
       }
     });
 
