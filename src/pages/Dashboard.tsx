@@ -3,9 +3,11 @@ import { useEvents } from '@/hooks/useEvents';
 import { useShifts } from '@/hooks/useShifts';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Calendar, Clock, TrendingUp } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Calendar, Clock, TrendingUp, Bell, MessageCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { cs } from 'date-fns/locale';
+import { Link } from 'react-router-dom';
 
 const Dashboard = () => {
   const { profile, role, isAdmin, isStaff } = useAuth();
@@ -109,6 +111,22 @@ const Dashboard = () => {
 
       {/* Content Grid */}
       <div className="grid gap-4 md:gap-6 lg:grid-cols-2">
+        {/* Announcements - for all users */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Bell className="h-5 w-5" />
+              Oznámení
+            </CardTitle>
+            <CardDescription>Důležité informace z haly</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-muted-foreground text-sm">
+              Žádná nová oznámení
+            </p>
+          </CardContent>
+        </Card>
+
         {/* Upcoming Events */}
         <Card>
           <CardHeader>
@@ -138,6 +156,26 @@ const Dashboard = () => {
             )}
           </CardContent>
         </Card>
+
+        {/* WhatsApp Community Link - for non-staff members */}
+        {!isStaff && !isAdmin && (
+          <Card className="border-green-200 bg-green-50 dark:bg-green-950/20 lg:col-span-2">
+            <CardContent className="pt-6">
+              <div className="flex items-center gap-4">
+                <MessageCircle className="h-8 w-8 text-green-600" />
+                <div className="flex-1">
+                  <p className="font-medium">Připojte se k naší komunitě</p>
+                  <p className="text-sm text-muted-foreground">
+                    Sledujte novinky a komunikujte s ostatními členy
+                  </p>
+                </div>
+                <Button variant="outline" asChild>
+                  <Link to="/communication">Zobrazit skupiny</Link>
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Staff Shifts Section */}
         {isStaff && myShifts.length > 0 && (

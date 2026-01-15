@@ -3,7 +3,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 
 export const useShifts = () => {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, isStaff } = useAuth();
   const queryClient = useQueryClient();
 
   // Fetch all part-time staff for admin to assign shifts
@@ -84,7 +84,7 @@ export const useShifts = () => {
         } : null,
       }));
     },
-    enabled: !!user,
+    enabled: !!user && (isAdmin || isStaff),
   });
 
   // Staff requests a shift (open -> pending)

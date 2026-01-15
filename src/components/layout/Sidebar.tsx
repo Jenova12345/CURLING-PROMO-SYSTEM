@@ -72,9 +72,15 @@ const Sidebar = () => {
     },
   ];
 
-  const filteredNavItems = navItems.filter(item => 
-    role && item.roles.includes(role)
-  );
+  // Fallback paths for when role is not yet loaded
+  const defaultPaths = ['/', '/calendar', '/profile', '/communication'];
+  
+  const filteredNavItems = navItems.filter(item => {
+    if (!role) {
+      return defaultPaths.includes(item.path);
+    }
+    return item.roles.includes(role);
+  });
 
   return (
     <aside className="flex h-screen w-64 flex-col border-r bg-card">
