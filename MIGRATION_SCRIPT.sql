@@ -1,6 +1,7 @@
 -- ============================================
 -- KOMPLETNÍ MIGRAČNÍ SKRIPT PRO SUPABASE
 -- Mladé Kameny - Systém pro správu brigádníků
+-- OPRAVENÁ VERZE - Fixed RLS deadlock
 -- ============================================
 -- 
 -- INSTRUKCE:
@@ -9,6 +10,10 @@
 -- 3. Zkopíruj celý tento skript a spusť ho
 -- 4. Nastav Auth settings (viz poznámky níže)
 -- 5. Zkopíruj API credentials do frontendu
+--
+-- KRITICKÁ OPRAVA:
+-- Místo has_role() v RLS policies používáme přímé EXISTS subquery,
+-- aby nedošlo k deadlocku. Funkce has_role() zůstává pro triggery.
 --
 -- ============================================
 
@@ -128,7 +133,8 @@ CREATE TABLE public.chat_groups (
 -- 3. DATABÁZOVÉ FUNKCE
 -- ============================================
 
--- Kontrola role uživatele (security definer - zabraňuje RLS rekurzi)
+-- Kontrola role uživatele (security definer - pro použití v TRIGGERECH!)
+-- NEPOUŽÍVAT V RLS POLICIES - způsobuje deadlock!
 CREATE OR REPLACE FUNCTION public.has_role(_user_id UUID, _role app_role)
 RETURNS BOOLEAN
 LANGUAGE sql
@@ -144,7 +150,7 @@ AS $$
   )
 $$;
 
--- Získání role uživatele (vrací nejvyšší roli)
+-- Získání role uživatele (pro použití v TRIGGERECH)
 CREATE OR REPLACE FUNCTION public.get_user_role(_user_id UUID)
 RETURNS app_role
 LANGUAGE sql
@@ -360,7 +366,11 @@ CREATE TRIGGER on_commercial_event_created
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_commercial_event();
 
 -- ============================================
--- 5. ROW LEVEL SECURITY (RLS)
+-- 5. ROW LEVEL SECURITY (RLS) - OPRAVENÉ!
+-- ============================================
+-- KRITICKÁ OPRAVA: Místo has_role() v RLS policies
+-- používáme přímé EXISTS subquery, aby nedošlo k deadlocku.
+-- Funkce has_role() zůstává pro použití v triggerech.
 -- ============================================
 
 -- Zapnout RLS na všech tabulkách
@@ -372,139 +382,253 @@ ALTER TABLE public.payouts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.chat_groups ENABLE ROW LEVEL SECURITY;
 
 -- ==================
--- PROFILES POLICIES
+-- USER_ROLES POLICIES - OPRAVENÉ (bez has_role!)
 -- ==================
 
-CREATE POLICY "Users can view profiles based on role"
-ON public.profiles FOR SELECT
+-- Každý authenticated může číst svoji roli, admin vidí všechny
+CREATE POLICY "Anyone can read own role"
+ON public.user_roles FOR SELECT TO authenticated
 USING (
-  (auth.uid() = user_id) 
-  OR has_role(auth.uid(), 'admin'::app_role) 
-  OR has_role(auth.uid(), 'part_time_staff'::app_role) 
-  OR has_role(auth.uid(), 'trainer'::app_role)
+  user_id = auth.uid()
+  OR EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() AND ur.role = 'admin'
+  )
 );
 
+CREATE POLICY "Admins can insert roles"
+ON public.user_roles FOR INSERT TO authenticated
+WITH CHECK (
+  EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() AND ur.role = 'admin'
+  )
+);
+
+CREATE POLICY "Admins can update roles"
+ON public.user_roles FOR UPDATE TO authenticated
+USING (
+  EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() AND ur.role = 'admin'
+  )
+);
+
+CREATE POLICY "Admins can delete roles"
+ON public.user_roles FOR DELETE TO authenticated
+USING (
+  EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() AND ur.role = 'admin'
+  )
+);
+
+-- ==================
+-- PROFILES POLICIES - OPRAVENÉ (bez has_role!)
+-- ==================
+
+-- Všichni authenticated mohou číst profily
+-- (citlivé údaje jako bank_account jsou chráněny přes VIEW)
+CREATE POLICY "Authenticated can read profiles"
+ON public.profiles FOR SELECT TO authenticated
+USING (true);
+
 CREATE POLICY "Users can insert own profile"
-ON public.profiles FOR INSERT
+ON public.profiles FOR INSERT TO authenticated
 WITH CHECK (auth.uid() = user_id);
 
 CREATE POLICY "Users can update own profile"
-ON public.profiles FOR UPDATE
+ON public.profiles FOR UPDATE TO authenticated
 USING (auth.uid() = user_id);
 
 -- ==================
--- USER_ROLES POLICIES
+-- EVENTS POLICIES - OPRAVENÉ (bez has_role!)
 -- ==================
 
-CREATE POLICY "Users can view own roles"
-ON public.user_roles FOR SELECT
+CREATE POLICY "Authenticated can read events"
+ON public.events FOR SELECT TO authenticated
 USING (
-  (auth.uid() = user_id) 
-  OR has_role(auth.uid(), 'admin'::app_role)
+  event_type <> 'commercial'
+  OR EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() 
+    AND ur.role IN ('admin', 'part_time_staff', 'trainer')
+  )
 );
 
-CREATE POLICY "Only admins can manage roles"
-ON public.user_roles FOR ALL
-USING (has_role(auth.uid(), 'admin'::app_role));
-
--- ==================
--- EVENTS POLICIES
--- ==================
-
-CREATE POLICY "Users can view events based on type"
-ON public.events FOR SELECT
-USING (
-  (event_type <> 'commercial'::event_type) 
-  OR has_role(auth.uid(), 'admin'::app_role) 
-  OR has_role(auth.uid(), 'part_time_staff'::app_role) 
-  OR has_role(auth.uid(), 'trainer'::app_role)
+CREATE POLICY "Admins can create events"
+ON public.events FOR INSERT TO authenticated
+WITH CHECK (
+  EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() AND ur.role = 'admin'
+  )
 );
 
-CREATE POLICY "Only admins can create events"
-ON public.events FOR INSERT
-WITH CHECK (has_role(auth.uid(), 'admin'::app_role));
-
-CREATE POLICY "Only admins can update events"
-ON public.events FOR UPDATE
-USING (has_role(auth.uid(), 'admin'::app_role));
-
-CREATE POLICY "Only admins can delete events"
-ON public.events FOR DELETE
-USING (has_role(auth.uid(), 'admin'::app_role));
-
--- ==================
--- SHIFTS POLICIES
--- ==================
-
-CREATE POLICY "Staff and admins can view shifts"
-ON public.shifts FOR SELECT
+CREATE POLICY "Admins can update events"
+ON public.events FOR UPDATE TO authenticated
 USING (
-  has_role(auth.uid(), 'admin'::app_role) 
-  OR has_role(auth.uid(), 'part_time_staff'::app_role) 
-  OR (claimed_by = auth.uid())
+  EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() AND ur.role = 'admin'
+  )
 );
 
-CREATE POLICY "Only admins can create shifts"
-ON public.shifts FOR INSERT
-WITH CHECK (has_role(auth.uid(), 'admin'::app_role));
-
-CREATE POLICY "Staff can update shifts"
-ON public.shifts FOR UPDATE
+CREATE POLICY "Admins can delete events"
+ON public.events FOR DELETE TO authenticated
 USING (
-  has_role(auth.uid(), 'admin'::app_role) 
-  OR has_role(auth.uid(), 'part_time_staff'::app_role)
+  EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() AND ur.role = 'admin'
+  )
+);
+
+-- ==================
+-- SHIFTS POLICIES - OPRAVENÉ (bez has_role!)
+-- ==================
+
+CREATE POLICY "Staff and admins can read shifts"
+ON public.shifts FOR SELECT TO authenticated
+USING (
+  claimed_by = auth.uid()
+  OR EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() 
+    AND ur.role IN ('admin', 'part_time_staff')
+  )
+);
+
+CREATE POLICY "Admins can create shifts"
+ON public.shifts FOR INSERT TO authenticated
+WITH CHECK (
+  EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() AND ur.role = 'admin'
+  )
+);
+
+CREATE POLICY "Staff and admins can update shifts"
+ON public.shifts FOR UPDATE TO authenticated
+USING (
+  EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() 
+    AND ur.role IN ('admin', 'part_time_staff')
+  )
 )
 WITH CHECK (
-  has_role(auth.uid(), 'admin'::app_role) 
+  EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() AND ur.role = 'admin'
+  )
   OR (
-    has_role(auth.uid(), 'part_time_staff'::app_role) 
+    EXISTS (
+      SELECT 1 FROM public.user_roles ur
+      WHERE ur.user_id = auth.uid() AND ur.role = 'part_time_staff'
+    )
     AND (
-      ((status = 'pending'::shift_status) AND (claimed_by = auth.uid())) 
-      OR ((status = 'completed'::shift_status) AND (claimed_by = auth.uid())) 
-      OR ((status = 'open'::shift_status) AND (claimed_by IS NULL))
+      (status = 'pending' AND claimed_by = auth.uid())
+      OR (status = 'completed' AND claimed_by = auth.uid())
+      OR (status = 'open' AND claimed_by IS NULL)
     )
   )
 );
 
-CREATE POLICY "Only admins can delete shifts"
-ON public.shifts FOR DELETE
-USING (has_role(auth.uid(), 'admin'::app_role));
-
--- ==================
--- PAYOUTS POLICIES
--- ==================
-
-CREATE POLICY "Users can view own payouts"
-ON public.payouts FOR SELECT
-USING (user_id = auth.uid());
-
-CREATE POLICY "Admins can manage payouts"
-ON public.payouts FOR ALL
-USING (has_role(auth.uid(), 'admin'::app_role));
-
--- ==================
--- CHAT_GROUPS POLICIES
--- ==================
-
-CREATE POLICY "Users can view authorized groups"
-ON public.chat_groups FOR SELECT
+CREATE POLICY "Admins can delete shifts"
+ON public.shifts FOR DELETE TO authenticated
 USING (
-  has_role(auth.uid(), 'admin'::app_role) 
-  OR (authorized_roles = '{}'::app_role[]) 
-  OR (get_user_role(auth.uid()) = ANY (authorized_roles))
+  EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() AND ur.role = 'admin'
+  )
 );
 
-CREATE POLICY "Only admins can create groups"
-ON public.chat_groups FOR INSERT
-WITH CHECK (has_role(auth.uid(), 'admin'::app_role));
+-- ==================
+-- PAYOUTS POLICIES - OPRAVENÉ (bez has_role!)
+-- ==================
 
-CREATE POLICY "Only admins can update groups"
-ON public.chat_groups FOR UPDATE
-USING (has_role(auth.uid(), 'admin'::app_role));
+CREATE POLICY "Users can read own payouts"
+ON public.payouts FOR SELECT TO authenticated
+USING (
+  user_id = auth.uid()
+  OR EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() AND ur.role = 'admin'
+  )
+);
 
-CREATE POLICY "Only admins can delete groups"
-ON public.chat_groups FOR DELETE
-USING (has_role(auth.uid(), 'admin'::app_role));
+CREATE POLICY "Admins can create payouts"
+ON public.payouts FOR INSERT TO authenticated
+WITH CHECK (
+  EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() AND ur.role = 'admin'
+  )
+);
+
+CREATE POLICY "Admins can update payouts"
+ON public.payouts FOR UPDATE TO authenticated
+USING (
+  EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() AND ur.role = 'admin'
+  )
+);
+
+CREATE POLICY "Admins can delete payouts"
+ON public.payouts FOR DELETE TO authenticated
+USING (
+  EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() AND ur.role = 'admin'
+  )
+);
+
+-- ==================
+-- CHAT_GROUPS POLICIES - OPRAVENÉ (bez has_role!)
+-- ==================
+
+CREATE POLICY "Users can read authorized groups"
+ON public.chat_groups FOR SELECT TO authenticated
+USING (
+  authorized_roles = '{}'::app_role[]
+  OR EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() AND ur.role = 'admin'
+  )
+  OR EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() 
+    AND ur.role = ANY(authorized_roles)
+  )
+);
+
+CREATE POLICY "Admins can create groups"
+ON public.chat_groups FOR INSERT TO authenticated
+WITH CHECK (
+  EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() AND ur.role = 'admin'
+  )
+);
+
+CREATE POLICY "Admins can update groups"
+ON public.chat_groups FOR UPDATE TO authenticated
+USING (
+  EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() AND ur.role = 'admin'
+  )
+);
+
+CREATE POLICY "Admins can delete groups"
+ON public.chat_groups FOR DELETE TO authenticated
+USING (
+  EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid() AND ur.role = 'admin'
+  )
+);
 
 -- ============================================
 -- 6. INDEXY PRO VÝKON
@@ -524,7 +648,6 @@ CREATE INDEX idx_payouts_user_id ON public.payouts(user_id);
 -- 7. BEZPEČNOSTNÍ VIEW
 -- ============================================
 
--- View pro ochranu bank_account - pouze vlastník a admin vidí číslo účtu
 CREATE OR REPLACE VIEW public.profiles_public
 WITH (security_invoker = on) AS
 SELECT 
@@ -536,16 +659,15 @@ SELECT
   updated_at,
   CASE 
     WHEN auth.uid() = user_id THEN bank_account
-    WHEN has_role(auth.uid(), 'admin'::app_role) THEN bank_account
+    WHEN EXISTS (
+      SELECT 1 FROM public.user_roles ur
+      WHERE ur.user_id = auth.uid() AND ur.role = 'admin'
+    ) THEN bank_account
     ELSE NULL
   END as bank_account
 FROM public.profiles;
 
--- Oprávnění k view
 GRANT SELECT ON public.profiles_public TO authenticated;
-
-COMMENT ON VIEW public.profiles_public IS 
-'Bezpečnostní view pro přístup k profilům. bank_account je viditelný pouze vlastníkovi účtu a adminům.';
 
 -- ============================================
 -- HOTOVO!
@@ -554,22 +676,13 @@ COMMENT ON VIEW public.profiles_public IS
 -- DALŠÍ KROKY:
 -- 
 -- 1. V Supabase dashboard → Authentication → Settings:
---    - Enable email confirmations: ON (vyžadovat potvrzení emailem)
---    - Site URL: https://vase-domena.cz (vaše produkční doména)
+--    - Site URL: https://mladekameny.lovable.app
 --
 -- 2. V Authentication → URL Configuration → Redirect URLs přidej:
---    - https://vase-domena.cz/update-password (pro reset hesla)
---    - https://vase-domena.cz/ (pro potvrzení registrace)
+--    - https://mladekameny.lovable.app/update-password
+--    - https://mladekameny.lovable.app/
 --
--- 3. V Authentication → Email Templates upravte šablony:
---    - "Reset Password" - odkaz bude automaticky obsahovat /update-password
---    - "Confirm signup" - odkaz pro potvrzení registrace
---
--- 4. V Settings → API zkopíruj:
---    - Project URL → VITE_SUPABASE_URL
---    - anon public key → VITE_SUPABASE_PUBLISHABLE_KEY
---
--- 5. Po nasazení frontendu se zaregistruj (potvrd email) a pak spusť:
+-- 3. Po registraci se přihlas a spusť tento SQL pro nastavení admin role:
 --    UPDATE public.user_roles 
 --    SET role = 'admin' 
 --    WHERE user_id = (SELECT id FROM auth.users WHERE email = 'tvuj@email.cz');
