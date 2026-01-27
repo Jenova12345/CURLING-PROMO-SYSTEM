@@ -1,86 +1,17 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
-import { 
-  Calendar, 
-  Clock, 
-  Users, 
-  LayoutDashboard, 
-  LogOut,
-  User,
-  MessageCircle,
-  Wallet
-} from 'lucide-react';
+import { LogOut, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import logo from '@/assets/logo.png';
+import { NAV_ITEMS, ROLE_LABELS, filterNavItemsByRole } from '@/config/navigation';
 
 const Sidebar = () => {
-  const { profile, role, signOut, isAdmin, isStaff } = useAuth();
+  const { profile, role, signOut } = useAuth();
   const location = useLocation();
 
-  const roleLabels: Record<string, string> = {
-    admin: 'Správce',
-    trainer: 'Trenér',
-    part_time_staff: 'Brigádník',
-    pro_player: 'Profi hráč',
-    hobby_player: 'Hobby hráč',
-  };
-
-  const navItems = [
-    { 
-      path: '/', 
-      label: 'Přehled', 
-      icon: LayoutDashboard,
-      roles: ['admin', 'trainer', 'part_time_staff', 'pro_player', 'hobby_player']
-    },
-    { 
-      path: '/calendar', 
-      label: 'Kalendář', 
-      icon: Calendar,
-      roles: ['admin', 'trainer', 'part_time_staff', 'pro_player', 'hobby_player']
-    },
-    { 
-      path: '/shifts', 
-      label: 'Směny', 
-      icon: Clock,
-      roles: ['admin', 'part_time_staff']
-    },
-    { 
-      path: '/payouts', 
-      label: 'Výplaty', 
-      icon: Wallet,
-      roles: ['admin']
-    },
-    { 
-      path: '/profile', 
-      label: 'Můj profil', 
-      icon: User,
-      roles: ['admin', 'trainer', 'part_time_staff', 'pro_player', 'hobby_player']
-    },
-    { 
-      path: '/members', 
-      label: 'Členové', 
-      icon: Users,
-      roles: ['admin']
-    },
-    { 
-      path: '/communication', 
-      label: 'Komunikace', 
-      icon: MessageCircle,
-      roles: ['admin', 'trainer', 'part_time_staff', 'pro_player', 'hobby_player']
-    },
-  ];
-
-  // Fallback paths for when role is not yet loaded
-  const defaultPaths = ['/', '/calendar', '/profile', '/communication'];
-  
-  const filteredNavItems = navItems.filter(item => {
-    if (!role) {
-      return defaultPaths.includes(item.path);
-    }
-    return item.roles.includes(role);
-  });
+  const filteredNavItems = filterNavItemsByRole(NAV_ITEMS, role);
 
   return (
     <aside className="flex h-screen w-64 flex-col border-r bg-card">
@@ -130,7 +61,7 @@ const Sidebar = () => {
               {profile?.full_name || 'Uživatel'}
             </p>
             <p className="text-xs text-muted-foreground">
-              {role ? roleLabels[role] : 'Člen'}
+              {role ? ROLE_LABELS[role] : 'Člen'}
             </p>
           </div>
         </div>

@@ -2,70 +2,19 @@ import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
-import { 
-  Menu, 
-  LogOut, 
-  User,
-  Calendar, 
-  Clock, 
-  Users, 
-  LayoutDashboard,
-  MessageCircle
-} from 'lucide-react';
+import { Menu, LogOut, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { Separator } from '@/components/ui/separator';
 import logo from '@/assets/logo.png';
+import { NAV_ITEMS, ROLE_LABELS, filterNavItemsByRole } from '@/config/navigation';
 
 const MobileHeader = () => {
   const { profile, role, signOut } = useAuth();
   const location = useLocation();
   const [isOpen, setIsOpen] = useState(false);
 
-  const roleLabels: Record<string, string> = {
-    admin: 'Správce',
-    trainer: 'Trenér',
-    part_time_staff: 'Brigádník',
-    pro_player: 'Profi hráč',
-    hobby_player: 'Hobby hráč',
-  };
-
-  const navItems = [
-    { 
-      path: '/', 
-      label: 'Přehled', 
-      icon: LayoutDashboard,
-      roles: ['admin', 'trainer', 'part_time_staff', 'pro_player', 'hobby_player']
-    },
-    { 
-      path: '/calendar', 
-      label: 'Kalendář', 
-      icon: Calendar,
-      roles: ['admin', 'trainer', 'part_time_staff', 'pro_player', 'hobby_player']
-    },
-    { 
-      path: '/shifts', 
-      label: 'Směny', 
-      icon: Clock,
-      roles: ['admin', 'part_time_staff']
-    },
-    { 
-      path: '/communication', 
-      label: 'Komunikace', 
-      icon: MessageCircle,
-      roles: ['admin', 'trainer', 'part_time_staff', 'pro_player', 'hobby_player']
-    },
-    { 
-      path: '/members', 
-      label: 'Členové', 
-      icon: Users,
-      roles: ['admin']
-    },
-  ];
-
-  const filteredNavItems = navItems.filter(item => 
-    role && item.roles.includes(role)
-  );
+  const filteredNavItems = filterNavItemsByRole(NAV_ITEMS, role);
 
   const handleNavClick = () => {
     setIsOpen(false);
@@ -106,7 +55,7 @@ const MobileHeader = () => {
               <div>
                 <p className="font-medium">{profile?.full_name || 'Uživatel'}</p>
                 <p className="text-xs text-muted-foreground">
-                  {role ? roleLabels[role] : 'Člen'}
+                  {role ? ROLE_LABELS[role] : 'Člen'}
                 </p>
               </div>
             </div>
