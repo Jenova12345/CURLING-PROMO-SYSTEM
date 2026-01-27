@@ -20,9 +20,10 @@ import { Database } from '@/integrations/supabase/types';
 import { eventSchema, safeValidate, VALIDATION_LIMITS, sanitizeText } from '@/lib/validation';
 import { useRateLimit } from '@/hooks/useRateLimit';
 
-type EventType = Database['public']['Enums']['event_type'];
+// Extended EventType to include 'recruitment' (pending database migration)
+type EventType = Database['public']['Enums']['event_type'] | 'recruitment';
 type ViewMode = 'week' | 'month';
-type Event = Database['public']['Tables']['events']['Row'];
+type Event = Database['public']['Tables']['events']['Row'] & { event_type: EventType };
 
 const IceCalendar = () => {
   const { isAdmin, isStaff, user } = useAuth();
@@ -102,12 +103,14 @@ const IceCalendar = () => {
     commercial: 'bg-green-500 text-white',
     training: 'bg-blue-500 text-white',
     maintenance: 'bg-orange-500 text-white',
+    recruitment: 'bg-purple-500 text-white',
   };
 
   const eventTypeLabels: Record<string, string> = {
     commercial: 'Komerční akce',
     training: 'Trénink',
     maintenance: 'Údržba ledu',
+    recruitment: 'Náborová akce',
   };
 
   const statusColors: Record<string, string> = {
@@ -222,7 +225,7 @@ const IceCalendar = () => {
       event_type: eventType,
       start_time: startDateTime.toISOString(),
       end_time: endDateTime.toISOString(),
-      required_staff: eventType === 'commercial' ? parseInt(requiredStaff) || 0 : 0,
+      required_staff: (eventType === 'commercial' || eventType === 'recruitment') ? parseInt(requiredStaff) || 0 : 0,
     });
 
     if (!validation.success) {
@@ -238,7 +241,7 @@ const IceCalendar = () => {
       await createEvent({
         title: validation.data.title,
         description: validation.data.description,
-        event_type: validation.data.event_type,
+        event_type: validation.data.event_type as Database['public']['Enums']['event_type'],
         start_time: validation.data.start_time,
         end_time: validation.data.end_time,
         required_staff: validation.data.required_staff,
@@ -246,7 +249,7 @@ const IceCalendar = () => {
 
       toast({
         title: 'Událost vytvořena',
-        description: eventType === 'commercial' && parseInt(requiredStaff) > 0
+        description: (eventType === 'commercial' || eventType === 'recruitment') && parseInt(requiredStaff) > 0
           ? `Brigádníci byli upozorněni na ${requiredStaff} volných směn.`
           : 'Událost byla úspěšně přidána do kalendáře.',
       });
@@ -353,7 +356,7 @@ const IceCalendar = () => {
       event_type: eventType,
       start_time: startDateTime.toISOString(),
       end_time: endDateTime.toISOString(),
-      required_staff: eventType === 'commercial' ? parseInt(requiredStaff) || 0 : 0,
+      required_staff: (eventType === 'commercial' || eventType === 'recruitment') ? parseInt(requiredStaff) || 0 : 0,
     });
 
     if (!validation.success) {
@@ -370,7 +373,7 @@ const IceCalendar = () => {
         id: editingEvent.id,
         title: validation.data.title,
         description: validation.data.description,
-        event_type: validation.data.event_type,
+        event_type: validation.data.event_type as Database['public']['Enums']['event_type'],
         start_time: validation.data.start_time,
         end_time: validation.data.end_time,
         required_staff: validation.data.required_staff,
@@ -458,6 +461,7 @@ const IceCalendar = () => {
                       <SelectItem value="commercial">Komerční akce</SelectItem>
                       <SelectItem value="training">Trénink</SelectItem>
                       <SelectItem value="maintenance">Údržba ledu</SelectItem>
+                      <SelectItem value="recruitment">Náborová akce</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -483,7 +487,7 @@ const IceCalendar = () => {
                   </div>
                 </div>
 
-                {eventType === 'commercial' && (
+                {(eventType === 'commercial' || eventType === 'recruitment') && (
                   <div className="space-y-2">
                     <Label htmlFor="staff">Počet potřebných brigádníků</Label>
                     <Input
@@ -656,7 +660,7 @@ const IceCalendar = () => {
                     {hasContent ? (
                       <div className="p-2 space-y-1.5">
                         {dayEvents.map((event) => {
-                          const stats = event.event_type === 'commercial' ? getEventShiftStats(event.id) : null;
+                          const stats = ((event.event_type as EventType) === 'commercial' || (event.event_type as EventType) === 'recruitment') ? getEventShiftStats(event.id) : null;
                           return (
                             <div
                               key={event.id}
@@ -754,7 +758,7 @@ const IceCalendar = () => {
                       {/* Events */}
                       <div className="space-y-0.5">
                         {dayEvents.slice(0, 4).map((event) => {
-                          const stats = event.event_type === 'commercial' ? getEventShiftStats(event.id) : null;
+                          const stats = ((event.event_type as EventType) === 'commercial' || (event.event_type as EventType) === 'recruitment') ? getEventShiftStats(event.id) : null;
                           return (
                             <div
                               key={event.id}
@@ -842,6 +846,7 @@ const IceCalendar = () => {
                     commercial: 'border-l-green-500',
                     training: 'border-l-blue-500',
                     maintenance: 'border-l-orange-500',
+                    recruitment: 'border-l-purple-500',
                   };
                   
                   return (
@@ -986,7 +991,7 @@ const IceCalendar = () => {
                   </div>
                   <div className="flex items-center gap-2 flex-wrap ml-6 sm:ml-0">
                     <Badge variant="outline" className="text-xs">{eventTypeLabels[event.event_type]}</Badge>
-                    {event.event_type === 'commercial' && event.required_staff && event.required_staff > 0 && (
+                    {((event.event_type as EventType) === 'commercial' || (event.event_type as EventType) === 'recruitment') && event.required_staff && event.required_staff > 0 && (
                       <Badge variant="secondary" className="text-xs">{event.required_staff} brig.</Badge>
                     )}
                     {isAdmin && (
@@ -1063,6 +1068,7 @@ const IceCalendar = () => {
                   <SelectItem value="commercial">Komerční akce</SelectItem>
                   <SelectItem value="training">Trénink</SelectItem>
                   <SelectItem value="maintenance">Údržba ledu</SelectItem>
+                  <SelectItem value="recruitment">Náborová akce</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1088,7 +1094,7 @@ const IceCalendar = () => {
               </div>
             </div>
 
-            {eventType === 'commercial' && (
+            {(eventType === 'commercial' || eventType === 'recruitment') && (
               <div className="space-y-2">
                 <Label htmlFor="edit-staff">Počet potřebných brigádníků</Label>
                 <Input
