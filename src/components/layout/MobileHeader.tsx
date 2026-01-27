@@ -36,7 +36,7 @@ const MobileHeader = () => {
           </Button>
         </SheetTrigger>
         <SheetContent side="right" className="w-[280px] p-0">
-          <SheetHeader className="p-4 border-b">
+          <SheetHeader className="p-4 border-b pt-[calc(1rem+env(safe-area-inset-top,0))]">
             <SheetTitle className="flex items-center gap-2 text-left">
               <img src={logo} alt="Mladé Kameny" className="h-10 w-auto" />
               <div>
