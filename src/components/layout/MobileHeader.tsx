@@ -21,7 +21,7 @@ const MobileHeader = () => {
   };
 
   return (
-    <header className="sticky top-0 z-50 flex h-14 items-center justify-between border-b bg-card px-4 md:hidden">
+    <header className="sticky top-0 z-50 flex h-14 items-center justify-between border-b bg-card px-4 md:hidden safe-area-top">
       {/* Logo */}
       <Link to="/" className="flex items-center gap-2">
         <img src={logo} alt="Mladé Kameny" className="h-8 w-auto" />
