@@ -1,13 +1,13 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
-import { NAV_ITEMS, filterNavItemsByRole } from '@/config/navigation';
+import { NAV_ITEMS, filterNavItemsByRoles } from '@/config/navigation';
 
 const MobileNav = () => {
-  const { role } = useAuth();
+  const { roles } = useAuth();
   const location = useLocation();
 
-  const filteredNavItems = filterNavItemsByRole(NAV_ITEMS, role);
+  const filteredNavItems = filterNavItemsByRoles(NAV_ITEMS, roles);
   const mobileNavItems = filteredNavItems.slice(0, 5);
 
   return (

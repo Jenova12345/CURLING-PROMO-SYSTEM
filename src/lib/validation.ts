@@ -256,7 +256,10 @@ export const chatGroupSchema = z.object({
   description: descriptionSchema,
   whatsapp_url: whatsappUrlSchema,
   icon_slug: z.string().max(50).optional(),
-  authorized_roles: z.array(z.enum(['admin', 'trainer', 'part_time_staff', 'pro_player', 'hobby_player'])),
+  authorized_roles: z.array(z.enum([
+    'admin', 'trainer', 'part_time_staff', 'instructor', 
+    'bar_staff', 'manager', 'pro_player', 'hobby_player'
+  ])),
 });
 
 /**
@@ -297,12 +300,15 @@ export const payoutSchema = z.object({
 // ============= Role & Assignment Schemas =============
 
 /**
- * Valid app roles enum
+ * Valid app roles enum - updated with all roles
  */
 export const appRoleSchema = z.enum([
   'admin',
   'trainer',
   'part_time_staff',
+  'instructor',
+  'bar_staff',
+  'manager',
   'pro_player',
   'hobby_player',
 ]);

@@ -10,7 +10,7 @@ import { cs } from 'date-fns/locale';
 import { Link } from 'react-router-dom';
 
 const Dashboard = () => {
-  const { profile, role, isAdmin, isStaff } = useAuth();
+  const { profile, roles, isAdmin, isStaff } = useAuth();
   const { events } = useEvents();
   const { openShifts, myShifts, totalHoursWorked, totalEarnings } = useShifts();
 
@@ -18,6 +18,9 @@ const Dashboard = () => {
     admin: 'Správce',
     trainer: 'Trenér',
     part_time_staff: 'Brigádník',
+    instructor: 'Instruktor',
+    bar_staff: 'Obsluha baru',
+    manager: 'Provozní hospoda',
     pro_player: 'Profi hráč',
     hobby_player: 'Hobby hráč',
   };
@@ -55,10 +58,19 @@ const Dashboard = () => {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium whitespace-nowrap">Vaše role</CardTitle>
-            <Badge variant="secondary">{role ? roleLabels[role] : 'Člen'}</Badge>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{profile?.full_name}</div>
+            <div className="flex flex-wrap gap-1 mb-2">
+              {roles.map(r => (
+                <Badge key={r} variant="secondary" className="text-xs">
+                  {roleLabels[r] || r}
+                </Badge>
+              ))}
+              {roles.length === 0 && (
+                <Badge variant="secondary" className="text-xs">Člen</Badge>
+              )}
+            </div>
+            <p className="text-sm font-medium truncate">{profile?.full_name}</p>
             <p className="text-xs text-muted-foreground">
               Aktivní účet
             </p>

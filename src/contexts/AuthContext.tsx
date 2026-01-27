@@ -1,9 +1,22 @@
 // Auth context for managing user authentication state
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 
-type AppRole = 'admin' | 'trainer' | 'part_time_staff' | 'pro_player' | 'hobby_player';
+type AppRole = 'admin' | 'trainer' | 'part_time_staff' | 'instructor' | 'bar_staff' | 'manager' | 'pro_player' | 'hobby_player';
+
+// Role priority for determining primary role
+const ROLE_PRIORITY: AppRole[] = [
+  'admin', 'trainer', 'manager', 'instructor', 'bar_staff', 
+  'part_time_staff', 'pro_player', 'hobby_player'
+];
+
+const getPrimaryRole = (userRoles: AppRole[]): AppRole => {
+  for (const r of ROLE_PRIORITY) {
+    if (userRoles.includes(r)) return r;
+  }
+  return 'hobby_player';
+};
 
 interface Profile {
   id: string;
@@ -17,11 +30,13 @@ interface AuthContextType {
   user: User | null;
   session: Session | null;
   profile: Profile | null;
-  role: AppRole | null;
+  role: AppRole | null;           // Primary role (backward compat)
+  roles: AppRole[];               // All user roles
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signUp: (email: string, password: string, fullName: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
+  hasAnyRole: (allowedRoles: string[]) => boolean;
   isAdmin: boolean;
   isTrainer: boolean;
   isStaff: boolean;
@@ -35,6 +50,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [role, setRole] = useState<AppRole | null>(null);
+  const [roles, setRoles] = useState<AppRole[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchUserData = async (userId: string) => {
@@ -54,26 +70,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setProfile(profileData);
       }
 
-      // Fetch role - using maybeSingle() for better handling
-      const { data: roleData, error: roleError } = await supabase
+      // Fetch ALL roles for user
+      const { data: rolesData, error: roleError } = await supabase
         .from('user_roles')
         .select('role')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: true })
-        .limit(1)
-        .maybeSingle();
+        .eq('user_id', userId);
       
-      console.log('[AuthContext] Role fetch result:', { roleData, roleError });
+      console.log('[AuthContext] Roles fetch result:', { rolesData, roleError });
       
-      if (roleData?.role) {
-        setRole(roleData.role as AppRole);
-        console.log('[AuthContext] Role successfully set to:', roleData.role);
+      if (rolesData && rolesData.length > 0) {
+        const userRoles = rolesData.map(r => r.role as AppRole);
+        setRoles(userRoles);
+        const primaryRole = getPrimaryRole(userRoles);
+        setRole(primaryRole);
+        console.log('[AuthContext] Roles successfully set to:', userRoles, 'Primary:', primaryRole);
       } else {
-        console.warn('[AuthContext] No role found for user, defaulting to hobby_player');
+        console.warn('[AuthContext] No roles found for user, defaulting to hobby_player');
+        setRoles(['hobby_player']);
         setRole('hobby_player');
       }
     } catch (error) {
       console.error('[AuthContext] Error fetching user data:', error);
+      setRoles(['hobby_player']);
       setRole('hobby_player');
     }
   };
@@ -101,6 +119,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } else {
           setProfile(null);
           setRole(null);
+          setRoles([]);
           if (mounted) {
             setLoading(false);
           }
@@ -164,12 +183,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setSession(null);
     setProfile(null);
     setRole(null);
+    setRoles([]);
   };
 
-  const isAdmin = role === 'admin';
-  const isTrainer = role === 'trainer';
-  const isStaff = role === 'part_time_staff';
-  const isMember = role === 'hobby_player' || role === 'pro_player';
+  const hasAnyRole = useCallback((allowedRoles: string[]): boolean => {
+    return roles.some(r => allowedRoles.includes(r));
+  }, [roles]);
+
+  // Derived values using roles array
+  const isAdmin = roles.includes('admin');
+  const isTrainer = roles.includes('trainer');
+  const isStaff = roles.some(r => 
+    ['part_time_staff', 'instructor', 'bar_staff', 'manager'].includes(r)
+  );
+  const isMember = roles.some(r => ['hobby_player', 'pro_player'].includes(r));
 
   return (
     <AuthContext.Provider
@@ -178,10 +205,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         session,
         profile,
         role,
+        roles,
         loading,
         signIn,
         signUp,
         signOut,
+        hasAnyRole,
         isAdmin,
         isTrainer,
         isStaff,

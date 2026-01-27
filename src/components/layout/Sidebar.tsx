@@ -5,13 +5,18 @@ import { LogOut, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import logo from '@/assets/logo.png';
-import { NAV_ITEMS, ROLE_LABELS, filterNavItemsByRole } from '@/config/navigation';
+import { NAV_ITEMS, ROLE_LABELS, filterNavItemsByRoles } from '@/config/navigation';
 
 const Sidebar = () => {
-  const { profile, role, signOut } = useAuth();
+  const { profile, roles, signOut } = useAuth();
   const location = useLocation();
 
-  const filteredNavItems = filterNavItemsByRole(NAV_ITEMS, role);
+  const filteredNavItems = filterNavItemsByRoles(NAV_ITEMS, roles);
+
+  // Display roles - join with comma if multiple
+  const displayRoles = roles.length > 0 
+    ? roles.map(r => ROLE_LABELS[r] || r).join(', ')
+    : 'Člen';
 
   return (
     <aside className="flex h-screen w-64 flex-col border-r bg-card">
@@ -60,8 +65,8 @@ const Sidebar = () => {
             <p className="text-sm font-medium truncate">
               {profile?.full_name || 'Uživatel'}
             </p>
-            <p className="text-xs text-muted-foreground">
-              {role ? ROLE_LABELS[role] : 'Člen'}
+            <p className="text-xs text-muted-foreground truncate">
+              {displayRoles}
             </p>
           </div>
         </div>

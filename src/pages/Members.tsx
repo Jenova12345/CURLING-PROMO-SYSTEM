@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useState, useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -8,31 +8,56 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/hooks/use-toast';
-import { Users, Search, Edit, User } from 'lucide-react';
+import { Users, Search, Edit, User, Loader2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { cs } from 'date-fns/locale';
-import { Database } from '@/integrations/supabase/types';
-import { roleUpdateSchema, safeValidate } from '@/lib/validation';
-import { useRateLimit } from '@/hooks/useRateLimit';
 
-type AppRole = Database['public']['Enums']['app_role'];
+interface MemberWithRoles {
+  id: string;
+  user_id: string;
+  full_name: string | null;
+  phone: string | null;
+  bank_account: string | null;
+  created_at: string;
+  updated_at: string;
+  roles: string[];
+}
 
 const Members = () => {
   const { isAdmin } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { isLimited, retryAfter, checkLimit } = useRateLimit('updateRole');
   
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('all');
   const [editDialogOpen, setEditDialogOpen] = useState(false);
-  const [selectedMember, setSelectedMember] = useState<{
-    user_id: string;
-    full_name: string | null;
-    role: AppRole;
-  } | null>(null);
-  const [newRole, setNewRole] = useState<AppRole>('hobby_player');
+  const [selectedMember, setSelectedMember] = useState<MemberWithRoles | null>(null);
+  const [selectedRoles, setSelectedRoles] = useState<string[]>([]);
+  const [isUpdatingRoles, setIsUpdatingRoles] = useState(false);
+
+  const roleLabels: Record<string, string> = {
+    admin: 'Správce',
+    trainer: 'Trenér',
+    part_time_staff: 'Brigádník',
+    instructor: 'Instruktor',
+    bar_staff: 'Obsluha baru',
+    manager: 'Provozní hospoda',
+    pro_player: 'Profi hráč',
+    hobby_player: 'Hobby hráč',
+  };
+
+  const roleColors: Record<string, string> = {
+    admin: 'bg-red-500',
+    trainer: 'bg-purple-500',
+    part_time_staff: 'bg-blue-500',
+    instructor: 'bg-teal-500',
+    bar_staff: 'bg-amber-500',
+    manager: 'bg-indigo-500',
+    pro_player: 'bg-green-500',
+    hobby_player: 'bg-gray-500',
+  };
 
   const { data: members = [], isLoading } = useQuery({
     queryKey: ['members'],
@@ -50,108 +75,100 @@ const Members = () => {
 
       if (rolesError) throw rolesError;
 
+      // Map profiles to include ALL roles as array
       return profiles.map(profile => ({
         ...profile,
-        role: roles.find(r => r.user_id === profile.user_id)?.role || 'hobby_player',
-      }));
+        roles: roles
+          .filter(r => r.user_id === profile.user_id)
+          .map(r => r.role),
+      })) as MemberWithRoles[];
     },
     enabled: isAdmin,
   });
 
-  const updateRole = useMutation({
-    mutationFn: async ({ userId, role }: { userId: string; role: AppRole }) => {
-      // First delete existing role
-      await supabase
-        .from('user_roles')
-        .delete()
-        .eq('user_id', userId);
+  // Sync selectedRoles when selectedMember changes
+  useEffect(() => {
+    if (selectedMember) {
+      setSelectedRoles(selectedMember.roles);
+    }
+  }, [selectedMember]);
 
-      // Then insert new role
-      const { error } = await supabase
-        .from('user_roles')
-        .insert({ user_id: userId, role });
-
-      if (error) throw error;
-    },
-    onSuccess: () => {
+  const handleToggleRole = async (role: string, checked: boolean) => {
+    if (!selectedMember) return;
+    
+    setIsUpdatingRoles(true);
+    
+    try {
+      if (checked) {
+        // INSERT new role - cast to handle new roles not yet in Supabase types
+        const { error } = await supabase.from('user_roles').insert({ 
+          user_id: selectedMember.user_id, 
+          role: role as 'admin' | 'trainer' | 'part_time_staff' | 'pro_player' | 'hobby_player'
+        });
+        
+        if (error) throw error;
+        
+        setSelectedRoles(prev => [...prev, role]);
+        toast({
+          title: 'Role přidána',
+          description: `Role "${roleLabels[role]}" byla přidána.`,
+        });
+      } else {
+        // Prevent removing last role
+        if (selectedRoles.length <= 1) {
+          toast({ 
+            title: 'Nelze odebrat', 
+            description: 'Uživatel musí mít alespoň jednu roli.',
+            variant: 'destructive',
+          });
+          return;
+        }
+        
+        // DELETE role - cast to handle new roles not yet in Supabase types
+        const { error } = await supabase
+          .from('user_roles')
+          .delete()
+          .eq('user_id', selectedMember.user_id)
+          .eq('role', role as 'admin' | 'trainer' | 'part_time_staff' | 'pro_player' | 'hobby_player');
+        
+        if (error) throw error;
+        
+        setSelectedRoles(prev => prev.filter(r => r !== role));
+        toast({
+          title: 'Role odebrána',
+          description: `Role "${roleLabels[role]}" byla odebrána.`,
+        });
+      }
+      
       queryClient.invalidateQueries({ queryKey: ['members'] });
-      toast({
-        title: 'Role aktualizována',
-        description: 'Uživatelská role byla úspěšně změněna.',
-      });
-      setEditDialogOpen(false);
-    },
-    onError: () => {
+    } catch (error) {
+      console.error('Error updating role:', error);
       toast({
         title: 'Chyba',
         description: 'Nepodařilo se změnit roli.',
         variant: 'destructive',
       });
-    },
-  });
-
-  const roleLabels: Record<AppRole, string> = {
-    admin: 'Správce',
-    trainer: 'Trenér',
-    part_time_staff: 'Brigádník',
-    pro_player: 'Profi hráč',
-    hobby_player: 'Hobby hráč',
+    } finally {
+      setIsUpdatingRoles(false);
+    }
   };
 
-  const roleColors: Record<AppRole, string> = {
-    admin: 'bg-red-500',
-    trainer: 'bg-purple-500',
-    part_time_staff: 'bg-blue-500',
-    pro_player: 'bg-green-500',
-    hobby_player: 'bg-gray-500',
+  const openEditDialog = (member: MemberWithRoles) => {
+    setSelectedMember(member);
+    setSelectedRoles(member.roles);
+    setEditDialogOpen(true);
   };
 
   const filteredMembers = members.filter(member => {
     const matchesSearch = member.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
                          member.phone?.includes(searchQuery);
-    const matchesRole = roleFilter === 'all' || member.role === roleFilter;
+    const matchesRole = roleFilter === 'all' || member.roles.includes(roleFilter);
     return matchesSearch && matchesRole;
   });
 
-  const openEditDialog = (member: typeof members[0]) => {
-    setSelectedMember({
-      user_id: member.user_id,
-      full_name: member.full_name,
-      role: member.role as AppRole,
-    });
-    setNewRole(member.role as AppRole);
-    setEditDialogOpen(true);
-  };
-
-  const handleUpdateRole = () => {
-    if (!selectedMember) return;
-    
-    // Rate limiting check
-    if (!checkLimit()) {
-      toast({
-        title: 'Příliš mnoho požadavků',
-        description: `Zkuste to znovu za ${retryAfter}.`,
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    // Validate input
-    const validation = safeValidate(roleUpdateSchema, {
-      userId: selectedMember.user_id,
-      role: newRole,
-    });
-
-    if (!validation.success) {
-      toast({
-        title: 'Chyba validace',
-        description: validation.error,
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    updateRole.mutate({ userId: validation.data.userId, role: validation.data.role });
+  // Count members per role (including multi-role users in multiple counts)
+  const getRoleCount = (role: string) => {
+    return members.filter(m => m.roles.includes(role)).length;
   };
 
   if (!isAdmin) {
@@ -181,14 +198,14 @@ const Members = () => {
       </div>
 
       {/* Stats */}
-      <div className="grid gap-2 grid-cols-3 md:grid-cols-5">
-        {(Object.keys(roleLabels) as AppRole[]).map((role) => (
+      <div className="grid gap-2 grid-cols-4 md:grid-cols-8">
+        {Object.keys(roleLabels).map((role) => (
           <Card key={role}>
             <CardContent className="flex items-center gap-2 p-3">
               <div className={`w-2.5 h-2.5 rounded-full ${roleColors[role]}`} />
               <div>
                 <p className="text-lg md:text-2xl font-bold">
-                  {members.filter(m => m.role === role).length}
+                  {getRoleCount(role)}
                 </p>
                 <p className="text-[10px] md:text-xs text-muted-foreground">{roleLabels[role]}</p>
               </div>
@@ -214,7 +231,7 @@ const Members = () => {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Všechny role</SelectItem>
-            {(Object.keys(roleLabels) as AppRole[]).map((role) => (
+            {Object.keys(roleLabels).map((role) => (
               <SelectItem key={role} value={role}>
                 {roleLabels[role]}
               </SelectItem>
@@ -258,9 +275,16 @@ const Members = () => {
                   </div>
                   
                   <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-3">
-                    <Badge className={`${roleColors[member.role as AppRole]} text-white text-xs`}>
-                      {roleLabels[member.role as AppRole]}
-                    </Badge>
+                    <div className="flex flex-wrap gap-1">
+                      {member.roles.map((role) => (
+                        <Badge 
+                          key={role} 
+                          className={`${roleColors[role] || 'bg-gray-500'} text-white text-xs`}
+                        >
+                          {roleLabels[role] || role}
+                        </Badge>
+                      ))}
+                    </div>
                     <Button
                       variant="outline"
                       size="sm"
@@ -268,7 +292,7 @@ const Members = () => {
                       className="shrink-0"
                     >
                       <Edit className="h-4 w-4 sm:mr-1" />
-                      <span className="hidden sm:inline">Upravit roli</span>
+                      <span className="hidden sm:inline">Upravit role</span>
                     </Button>
                   </div>
                 </div>
@@ -278,40 +302,53 @@ const Members = () => {
         </CardContent>
       </Card>
 
-      {/* Edit Role Dialog */}
+      {/* Edit Role Dialog - Multi-checkbox */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Změnit roli uživatele</DialogTitle>
+            <DialogTitle>Upravit role uživatele</DialogTitle>
             <DialogDescription>
-              Měníte roli pro: {selectedMember?.full_name || 'Uživatel'}
+              Spravujete role pro: {selectedMember?.full_name || 'Uživatel'}
             </DialogDescription>
           </DialogHeader>
           
-          <div className="space-y-4">
-            <Select value={newRole} onValueChange={(v) => setNewRole(v as AppRole)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {(Object.keys(roleLabels) as AppRole[]).map((role) => (
-                  <SelectItem key={role} value={role}>
-                    {roleLabels[role]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <div className="space-y-4 py-4">
+            <p className="text-sm text-muted-foreground">
+              Vyberte jednu nebo více rolí:
+            </p>
+            {Object.entries(roleLabels).map(([role, label]) => {
+              const isChecked = selectedRoles.includes(role);
+              const isLastRole = selectedRoles.length <= 1 && isChecked;
+              
+              return (
+                <div key={role} className="flex items-center space-x-3">
+                  <Checkbox 
+                    id={`role-${role}`}
+                    checked={isChecked}
+                    onCheckedChange={(checked) => handleToggleRole(role, !!checked)}
+                    disabled={isUpdatingRoles || isLastRole}
+                  />
+                  <label 
+                    htmlFor={`role-${role}`} 
+                    className="flex items-center gap-2 cursor-pointer text-sm"
+                  >
+                    <div className={`w-3 h-3 rounded-full ${roleColors[role]}`} />
+                    {label}
+                    {isLastRole && (
+                      <span className="text-xs text-muted-foreground">(poslední role)</span>
+                    )}
+                  </label>
+                  {isUpdatingRoles && (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditDialogOpen(false)}>
-              Zrušit
-            </Button>
-            <Button 
-              onClick={handleUpdateRole}
-              disabled={updateRole.isPending}
-            >
-              {updateRole.isPending ? 'Ukládání...' : 'Uložit změny'}
+              Zavřít
             </Button>
           </DialogFooter>
         </DialogContent>
