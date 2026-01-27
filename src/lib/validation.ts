@@ -266,7 +266,7 @@ export const chatGroupSchema = z.object({
 export const eventSchema = z.object({
   title: titleSchema,
   description: descriptionSchema,
-  event_type: z.enum(['commercial', 'training', 'maintenance']),
+  event_type: z.enum(['commercial', 'training', 'maintenance', 'recruitment']),
   start_time: z.string().refine((val) => !isNaN(Date.parse(val)), 'Neplatný formát data/času'),
   end_time: z.string().refine((val) => !isNaN(Date.parse(val)), 'Neplatný formát data/času'),
   required_staff: staffCountSchema.optional(),
