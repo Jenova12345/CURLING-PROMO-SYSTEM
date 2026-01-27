@@ -7,14 +7,19 @@ import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { Separator } from '@/components/ui/separator';
 import logo from '@/assets/logo.png';
-import { NAV_ITEMS, ROLE_LABELS, filterNavItemsByRole } from '@/config/navigation';
+import { NAV_ITEMS, ROLE_LABELS, filterNavItemsByRoles } from '@/config/navigation';
 
 const MobileHeader = () => {
-  const { profile, role, signOut } = useAuth();
+  const { profile, roles, signOut } = useAuth();
   const location = useLocation();
   const [isOpen, setIsOpen] = useState(false);
 
-  const filteredNavItems = filterNavItemsByRole(NAV_ITEMS, role);
+  const filteredNavItems = filterNavItemsByRoles(NAV_ITEMS, roles);
+
+  // Display roles - join with comma if multiple
+  const displayRoles = roles.length > 0 
+    ? roles.map(r => ROLE_LABELS[r] || r).join(', ')
+    : 'Člen';
 
   const handleNavClick = () => {
     setIsOpen(false);
@@ -52,10 +57,10 @@ const MobileHeader = () => {
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground">
                 <User className="h-5 w-5" />
               </div>
-              <div>
-                <p className="font-medium">{profile?.full_name || 'Uživatel'}</p>
-                <p className="text-xs text-muted-foreground">
-                  {role ? ROLE_LABELS[role] : 'Člen'}
+              <div className="min-w-0 flex-1">
+                <p className="font-medium truncate">{profile?.full_name || 'Uživatel'}</p>
+                <p className="text-xs text-muted-foreground truncate">
+                  {displayRoles}
                 </p>
               </div>
             </div>

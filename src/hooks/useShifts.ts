@@ -6,21 +6,24 @@ export const useShifts = () => {
   const { user, isAdmin, isStaff } = useAuth();
   const queryClient = useQueryClient();
 
-  // Fetch all part-time staff for admin to assign shifts
+  // Fetch all staff (all staff roles) for admin to assign shifts
   const { data: availableStaff = [] } = useQuery({
     queryKey: ['available-staff', isAdmin],
     queryFn: async () => {
       // Only fetch if admin
       if (!isAdmin) return [];
       
-      const { data: roles, error: rolesError } = await supabase
+      // Query for ALL staff roles, not just part_time_staff
+      // Use type assertion to handle new roles not yet in Supabase types
+      const { data: roleData, error: rolesError } = await supabase
         .from('user_roles')
         .select('user_id')
-        .eq('role', 'part_time_staff');
+        .or('role.eq.part_time_staff,role.eq.instructor,role.eq.bar_staff,role.eq.manager');
 
       if (rolesError) throw rolesError;
 
-      const userIds = roles.map(r => r.user_id);
+      // Get unique user IDs
+      const userIds = [...new Set(roleData.map(r => r.user_id))];
       if (userIds.length === 0) return [];
 
       const { data: profiles, error: profilesError } = await supabase

@@ -21,19 +21,19 @@ export const NAV_ITEMS: NavItem[] = [
     path: '/', 
     label: 'Přehled', 
     icon: LayoutDashboard,
-    roles: ['admin', 'trainer', 'part_time_staff', 'pro_player', 'hobby_player']
+    roles: ['admin', 'trainer', 'part_time_staff', 'instructor', 'bar_staff', 'manager', 'pro_player', 'hobby_player']
   },
   { 
     path: '/calendar', 
     label: 'Kalendář', 
     icon: Calendar,
-    roles: ['admin', 'trainer', 'part_time_staff', 'pro_player', 'hobby_player']
+    roles: ['admin', 'trainer', 'part_time_staff', 'instructor', 'bar_staff', 'manager', 'pro_player', 'hobby_player']
   },
   { 
     path: '/shifts', 
     label: 'Směny', 
     icon: Clock,
-    roles: ['admin', 'part_time_staff']
+    roles: ['admin', 'part_time_staff', 'instructor', 'bar_staff', 'manager']
   },
   { 
     path: '/payouts', 
@@ -51,13 +51,13 @@ export const NAV_ITEMS: NavItem[] = [
     path: '/communication', 
     label: 'Komunikace', 
     icon: MessageCircle,
-    roles: ['admin', 'trainer', 'part_time_staff', 'pro_player', 'hobby_player']
+    roles: ['admin', 'trainer', 'part_time_staff', 'instructor', 'bar_staff', 'manager', 'pro_player', 'hobby_player']
   },
   { 
     path: '/profile', 
     label: 'Můj profil', 
     icon: User,
-    roles: ['admin', 'trainer', 'part_time_staff', 'pro_player', 'hobby_player']
+    roles: ['admin', 'trainer', 'part_time_staff', 'instructor', 'bar_staff', 'manager', 'pro_player', 'hobby_player']
   },
 ];
 
@@ -65,12 +65,16 @@ export const ROLE_LABELS: Record<string, string> = {
   admin: 'Správce',
   trainer: 'Trenér',
   part_time_staff: 'Brigádník',
+  instructor: 'Instruktor',
+  bar_staff: 'Obsluha baru',
+  manager: 'Provozní hospoda',
   pro_player: 'Profi hráč',
   hobby_player: 'Hobby hráč',
 };
 
 export const DEFAULT_PATHS = ['/', '/calendar', '/profile', '/communication'];
 
+// Legacy function for backward compatibility
 export const filterNavItemsByRole = (
   items: NavItem[], 
   role: string | null
@@ -80,5 +84,18 @@ export const filterNavItemsByRole = (
       return DEFAULT_PATHS.includes(item.path);
     }
     return item.roles.includes(role);
+  });
+};
+
+// New multi-role filter function
+export const filterNavItemsByRoles = (
+  items: NavItem[], 
+  roles: string[]
+): NavItem[] => {
+  return items.filter(item => {
+    if (roles.length === 0) {
+      return DEFAULT_PATHS.includes(item.path);
+    }
+    return item.roles.some(allowedRole => roles.includes(allowedRole));
   });
 };
