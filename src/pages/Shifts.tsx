@@ -28,6 +28,21 @@ import {
 } from '@/lib/validation';
 import { useRateLimit } from '@/hooks/useRateLimit';
 
+// Staff role labels and colors for badges
+const staffRoleLabels: Record<string, string> = {
+  instructor: 'Instruktor',
+  bar_staff: 'Obsluha baru',
+  manager: 'Provozní hospoda',
+  part_time_staff: 'Brigádník',
+};
+
+const staffRoleColors: Record<string, string> = {
+  instructor: 'bg-teal-500',
+  bar_staff: 'bg-amber-500',
+  manager: 'bg-indigo-500',
+  part_time_staff: 'bg-blue-500',
+};
+
 const Shifts = () => {
   const { isAdmin, isStaff, user } = useAuth();
   const { 
@@ -566,7 +581,14 @@ const Shifts = () => {
                     <div className="flex items-start gap-3">
                       <div className={`w-3 h-3 rounded-full mt-1.5 flex-shrink-0 ${statusColors.open}`} />
                       <div>
-                        <p className="font-medium text-base md:text-lg">{eventItem.event?.title || 'Směna'}</p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-medium text-base md:text-lg">{eventItem.event?.title || 'Směna'}</p>
+                          {(eventItem as any).availableShifts?.[0]?.required_role && (
+                            <Badge className={`${staffRoleColors[(eventItem as any).availableShifts[0].required_role] || 'bg-gray-500'} text-white text-xs`}>
+                              {staffRoleLabels[(eventItem as any).availableShifts[0].required_role] || (eventItem as any).availableShifts[0].required_role}
+                            </Badge>
+                          )}
+                        </div>
                         <p className="text-muted-foreground text-sm">
                           {eventItem.event && format(new Date(eventItem.event.start_time), 'EEE d. MMM yyyy', { locale: cs })}
                         </p>
@@ -636,7 +658,14 @@ const Shifts = () => {
                           <div className="flex items-start gap-3">
                             <div className={`w-3 h-3 rounded-full mt-1.5 flex-shrink-0 ${statusColors.pending}`} />
                             <div>
-                              <p className="font-medium text-base">{shift.event?.title || 'Směna'}</p>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <p className="font-medium text-base">{shift.event?.title || 'Směna'}</p>
+                                {(shift as any).required_role && (
+                                  <Badge className={`${staffRoleColors[(shift as any).required_role] || 'bg-gray-500'} text-white text-xs`}>
+                                    {staffRoleLabels[(shift as any).required_role] || (shift as any).required_role}
+                                  </Badge>
+                                )}
+                              </div>
                               <p className="text-muted-foreground text-sm">
                                 {shift.event && format(new Date(shift.event.start_time), 'EEE d. MMM yyyy', { locale: cs })}
                               </p>
@@ -695,7 +724,14 @@ const Shifts = () => {
                             <div className="flex items-start gap-3">
                               <div className={`w-3 h-3 rounded-full mt-1.5 flex-shrink-0 ${statusColors.claimed}`} />
                               <div>
-                                <p className="font-medium text-base">{shift.event?.title || 'Směna'}</p>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <p className="font-medium text-base">{shift.event?.title || 'Směna'}</p>
+                                  {(shift as any).required_role && (
+                                    <Badge className={`${staffRoleColors[(shift as any).required_role] || 'bg-gray-500'} text-white text-xs`}>
+                                      {staffRoleLabels[(shift as any).required_role] || (shift as any).required_role}
+                                    </Badge>
+                                  )}
+                                </div>
                                 <p className="text-muted-foreground text-sm">
                                   {shift.event && format(new Date(shift.event.start_time), 'EEE d. MMM yyyy', { locale: cs })}
                                 </p>
@@ -873,7 +909,14 @@ const Shifts = () => {
                       <div className="flex items-start gap-4">
                         <div className={`w-3 h-3 rounded-full mt-1.5 ${statusColors.pending}`} />
                         <div>
-                          <p className="font-medium">{shift.event?.title || 'Směna'}</p>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-medium">{shift.event?.title || 'Směna'}</p>
+                            {(shift as any).required_role && (
+                              <Badge className={`${staffRoleColors[(shift as any).required_role] || 'bg-gray-500'} text-white text-xs`}>
+                                {staffRoleLabels[(shift as any).required_role] || (shift as any).required_role}
+                              </Badge>
+                            )}
+                          </div>
                           <p className="text-sm text-muted-foreground">
                             {shift.event && format(new Date(shift.event.start_time), 'd. MMMM yyyy, HH:mm', { locale: cs })}
                           </p>
@@ -988,7 +1031,14 @@ const Shifts = () => {
                       <div className="flex items-start gap-4">
                         <div className="w-3 h-3 rounded-full mt-1.5 bg-green-500" />
                         <div>
-                          <p className="font-medium">{shift.event?.title || 'Směna'}</p>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-medium">{shift.event?.title || 'Směna'}</p>
+                            {(shift as any).required_role && (
+                              <Badge className={`${staffRoleColors[(shift as any).required_role] || 'bg-gray-500'} text-white text-xs`}>
+                                {staffRoleLabels[(shift as any).required_role] || (shift as any).required_role}
+                              </Badge>
+                            )}
+                          </div>
                           <p className="text-sm text-muted-foreground">
                             {shift.event && format(new Date(shift.event.start_time), 'EEE d. MMMM yyyy', { locale: cs })}
                           </p>
@@ -1005,7 +1055,7 @@ const Shifts = () => {
                         onClick={() => openAssignDialog(shift)}
                       >
                         <UserPlus className="h-4 w-4 mr-1" />
-                        Přiřadit brigádníka
+                        Přiřadit {staffRoleLabels[(shift as any).required_role] || 'brigádníka'}
                       </Button>
                     </div>
                   ))}
@@ -1303,7 +1353,14 @@ const Shifts = () => {
           {shiftToAssign && (
             <div className="space-y-4">
               <div className="p-4 rounded-lg bg-accent/50 border">
-                <p className="font-medium text-lg">{shiftToAssign.event?.title || 'Směna'}</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="font-medium text-lg">{shiftToAssign.event?.title || 'Směna'}</p>
+                  {(shiftToAssign as any).required_role && (
+                    <Badge className={`${staffRoleColors[(shiftToAssign as any).required_role] || 'bg-gray-500'} text-white`}>
+                      {staffRoleLabels[(shiftToAssign as any).required_role] || (shiftToAssign as any).required_role}
+                    </Badge>
+                  )}
+                </div>
                 <p className="text-sm text-muted-foreground">
                   {shiftToAssign.event && format(new Date(shiftToAssign.event.start_time), 'EEEE d. MMMM yyyy', { locale: cs })}
                 </p>
@@ -1342,7 +1399,7 @@ const Shifts = () => {
               onClick={handleAssignShift} 
               disabled={isAssigning || !selectedStaffId}
             >
-              {isAssigning ? 'Zpracování...' : 'Přiřadit brigádníka'}
+              {isAssigning ? 'Zpracování...' : `Přiřadit ${staffRoleLabels[(shiftToAssign as any)?.required_role] || 'brigádníka'}`}
             </Button>
           </DialogFooter>
         </DialogContent>

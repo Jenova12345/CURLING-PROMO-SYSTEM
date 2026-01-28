@@ -312,6 +312,9 @@ export type Database = {
         | "part_time_staff"
         | "pro_player"
         | "hobby_player"
+        | "instructor"
+        | "bar_staff"
+        | "manager"
       event_type: "commercial" | "training" | "maintenance"
       shift_status: "open" | "pending" | "claimed" | "completed" | "cancelled"
     }
@@ -447,6 +450,9 @@ export const Constants = {
         "part_time_staff",
         "pro_player",
         "hobby_player",
+        "instructor",
+        "bar_staff",
+        "manager",
       ],
       event_type: ["commercial", "training", "maintenance"],
       shift_status: ["open", "pending", "claimed", "completed", "cancelled"],

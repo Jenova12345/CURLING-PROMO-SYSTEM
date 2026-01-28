@@ -3,7 +3,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 
 export const useShifts = () => {
-  const { user, isAdmin, isStaff } = useAuth();
+  const { user, isAdmin, isStaff, roles } = useAuth();
   const queryClient = useQueryClient();
 
   // Fetch all staff (all staff roles) for admin to assign shifts
@@ -357,9 +357,21 @@ export const useShifts = () => {
   );
   
   // Filter open shifts - exclude events where user already has a shift
-  const openShifts = shifts.filter(s => 
-    s.status === 'open' && !myEventIds.has(s.event_id)
-  );
+  // Staff sees only shifts matching their roles (or shifts without required_role for backward compat)
+  const openShifts = shifts.filter(s => {
+    if (s.status !== 'open') return false;
+    if (myEventIds.has(s.event_id)) return false;
+    
+    // Admin sees all
+    if (isAdmin) return true;
+    
+    // If shift has no required_role, show to all staff (legacy)
+    const requiredRole = (s as any).required_role;
+    if (!requiredRole) return true;
+    
+    // Show only if user has the required role
+    return roles.includes(requiredRole);
+  });
 
   // Group open shifts by event_id for staff view (show one entry per event)
   const openShiftsByEvent = Object.values(
@@ -373,14 +385,16 @@ export const useShifts = () => {
           event: shift.event,
           hourlyRate: shift.hourly_rate,
           availableShiftIds: [],
+          availableShifts: [],  // Include shift data for role display
           openCount: 0,
           totalSlots,
         };
       }
       acc[eventId].availableShiftIds.push(shift.id);
+      acc[eventId].availableShifts.push(shift);
       acc[eventId].openCount += 1;
       return acc;
-    }, {} as Record<string, { eventId: string; event: any; hourlyRate: number | null; availableShiftIds: string[]; openCount: number; totalSlots: number }>)
+    }, {} as Record<string, { eventId: string; event: any; hourlyRate: number | null; availableShiftIds: string[]; availableShifts: any[]; openCount: number; totalSlots: number }>)
   ).sort((a, b) => {
     const aTime = a.event?.start_time ? new Date(a.event.start_time).getTime() : 0;
     const bTime = b.event?.start_time ? new Date(b.event.start_time).getTime() : 0;
