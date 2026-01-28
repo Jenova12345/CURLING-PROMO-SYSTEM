@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { Calendar } from '@/components/ui/calendar';
 import { useToast } from '@/hooks/use-toast';
-import { Plus, ChevronLeft, ChevronRight, Trash2, User, Clock, Pencil } from 'lucide-react';
+import { Plus, ChevronLeft, ChevronRight, Trash2, User, Clock, Pencil, Minus } from 'lucide-react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths, startOfWeek, addDays, addWeeks, subWeeks } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { Database } from '@/integrations/supabase/types';
@@ -50,7 +50,11 @@ const IceCalendar = () => {
   const [eventType, setEventType] = useState<EventType>('commercial');
   const [startTime, setStartTime] = useState('09:00');
   const [endTime, setEndTime] = useState('11:00');
-  const [requiredStaff, setRequiredStaff] = useState('0');
+  const [roleCounts, setRoleCounts] = useState<Record<string, number>>({
+    instructor: 0,
+    bar_staff: 0,
+    manager: 0,
+  });
 
   const monthStart = startOfMonth(currentMonth);
   const monthEnd = endOfMonth(currentMonth);
@@ -126,6 +130,24 @@ const IceCalendar = () => {
     claimed: 'Přiřazená',
     completed: 'Dokončená',
   };
+
+  // Staff role labels for team configuration
+  const staffRoleLabels: Record<string, string> = {
+    instructor: 'Instruktor',
+    bar_staff: 'Obsluha baru',
+    manager: 'Provozní hospoda',
+  };
+
+  // Increment/decrement role count
+  const adjustRoleCount = (role: string, delta: number) => {
+    setRoleCounts(prev => ({
+      ...prev,
+      [role]: Math.max(0, Math.min(VALIDATION_LIMITS.STAFF_COUNT_MAX, (prev[role] || 0) + delta))
+    }));
+  };
+
+  // Calculate total staff (for backward compatibility)
+  const getTotalStaff = () => Object.values(roleCounts).reduce((sum, count) => sum + count, 0);
 
   const getEventsForDay = (day: Date) => {
     return events.filter(event => isSameDay(new Date(event.start_time), day));
@@ -225,7 +247,7 @@ const IceCalendar = () => {
       event_type: eventType,
       start_time: startDateTime.toISOString(),
       end_time: endDateTime.toISOString(),
-      required_staff: (eventType === 'commercial' || eventType === 'recruitment') ? parseInt(requiredStaff) || 0 : 0,
+      required_staff: (eventType === 'commercial' || eventType === 'recruitment') ? getTotalStaff() : 0,
     });
 
     if (!validation.success) {
@@ -238,19 +260,25 @@ const IceCalendar = () => {
     }
 
     try {
+      // Build role_reqs object (filter out zeros)
+      const roleReqs = Object.fromEntries(
+        Object.entries(roleCounts).filter(([_, count]) => count > 0)
+      );
+
       await createEvent({
         title: validation.data.title,
         description: validation.data.description,
         event_type: validation.data.event_type as Database['public']['Enums']['event_type'],
         start_time: validation.data.start_time,
         end_time: validation.data.end_time,
-        required_staff: validation.data.required_staff,
+        required_staff: getTotalStaff(),
+        role_reqs: Object.keys(roleReqs).length > 0 ? roleReqs : undefined,
       });
 
       toast({
         title: 'Událost vytvořena',
-        description: (eventType === 'commercial' || eventType === 'recruitment') && parseInt(requiredStaff) > 0
-          ? `Brigádníci byli upozorněni na ${requiredStaff} volných směn.`
+        description: (eventType === 'commercial' || eventType === 'recruitment') && getTotalStaff() > 0
+          ? `Brigádníci byli upozorněni na ${getTotalStaff()} volných směn.`
           : 'Událost byla úspěšně přidána do kalendáře.',
       });
 
@@ -320,7 +348,7 @@ const IceCalendar = () => {
     setEventType('commercial');
     setStartTime('09:00');
     setEndTime('11:00');
-    setRequiredStaff('0');
+    setRoleCounts({ instructor: 0, bar_staff: 0, manager: 0 });
     setSelectedDate(null);
     setEditingEvent(null);
   };
@@ -333,7 +361,25 @@ const IceCalendar = () => {
     setEventType(event.event_type);
     setStartTime(format(new Date(event.start_time), 'HH:mm'));
     setEndTime(format(new Date(event.end_time), 'HH:mm'));
-    setRequiredStaff(event.required_staff?.toString() || '0');
+    
+    // Parse role_reqs or fallback to legacy distribution
+    const eventRoleReqs = (event as any).role_reqs;
+    if (eventRoleReqs && typeof eventRoleReqs === 'object' && Object.keys(eventRoleReqs).length > 0) {
+      setRoleCounts({
+        instructor: eventRoleReqs.instructor || 0,
+        bar_staff: eventRoleReqs.bar_staff || 0,
+        manager: eventRoleReqs.manager || 0,
+      });
+    } else {
+      // Legacy events: assign all required_staff to instructor
+      const legacyCount = event.required_staff || 0;
+      setRoleCounts({
+        instructor: legacyCount,
+        bar_staff: 0,
+        manager: 0,
+      });
+    }
+    
     setSelectedDate(new Date(event.start_time));
     setIsEditDialogOpen(true);
   };
@@ -356,7 +402,7 @@ const IceCalendar = () => {
       event_type: eventType,
       start_time: startDateTime.toISOString(),
       end_time: endDateTime.toISOString(),
-      required_staff: (eventType === 'commercial' || eventType === 'recruitment') ? parseInt(requiredStaff) || 0 : 0,
+      required_staff: (eventType === 'commercial' || eventType === 'recruitment') ? getTotalStaff() : 0,
     });
 
     if (!validation.success) {
@@ -369,6 +415,11 @@ const IceCalendar = () => {
     }
 
     try {
+      // Build role_reqs object (filter out zeros)
+      const roleReqs = Object.fromEntries(
+        Object.entries(roleCounts).filter(([_, count]) => count > 0)
+      );
+
       await updateEvent({
         id: editingEvent.id,
         title: validation.data.title,
@@ -376,7 +427,8 @@ const IceCalendar = () => {
         event_type: validation.data.event_type as Database['public']['Enums']['event_type'],
         start_time: validation.data.start_time,
         end_time: validation.data.end_time,
-        required_staff: validation.data.required_staff,
+        required_staff: getTotalStaff(),
+        role_reqs: Object.keys(roleReqs).length > 0 ? roleReqs : undefined,
       });
 
       toast({
@@ -488,19 +540,48 @@ const IceCalendar = () => {
                 </div>
 
                 {(eventType === 'commercial' || eventType === 'recruitment') && (
-                  <div className="space-y-2">
-                    <Label htmlFor="staff">Počet potřebných brigádníků</Label>
-                    <Input
-                      id="staff"
-                      type="number"
-                      min="0"
-                      max={VALIDATION_LIMITS.STAFF_COUNT_MAX}
-                      value={requiredStaff}
-                      onChange={(e) => setRequiredStaff(e.target.value)}
-                    />
+                  <div className="space-y-3">
+                    <Label>Konfigurace týmu</Label>
                     <p className="text-xs text-muted-foreground">
-                      Brigádníci budou automaticky upozorněni na volné směny.
+                      Vyberte počet osob pro každou roli.
                     </p>
+                    
+                    {Object.entries(staffRoleLabels).map(([role, label]) => (
+                      <div key={role} className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+                        <span className="font-medium text-sm">{label}</span>
+                        <div className="flex items-center gap-3">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => adjustRoleCount(role, -1)}
+                            disabled={roleCounts[role] <= 0}
+                          >
+                            <Minus className="h-4 w-4" />
+                          </Button>
+                          <span className="w-8 text-center font-semibold">
+                            {roleCounts[role]}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => adjustRoleCount(role, 1)}
+                            disabled={roleCounts[role] >= VALIDATION_LIMITS.STAFF_COUNT_MAX}
+                          >
+                            <Plus className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                    
+                    {getTotalStaff() > 0 && (
+                      <p className="text-sm text-muted-foreground text-right">
+                        Celkem: <strong>{getTotalStaff()}</strong> osob
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -1095,16 +1176,48 @@ const IceCalendar = () => {
             </div>
 
             {(eventType === 'commercial' || eventType === 'recruitment') && (
-              <div className="space-y-2">
-                <Label htmlFor="edit-staff">Počet potřebných brigádníků</Label>
-                <Input
-                  id="edit-staff"
-                  type="number"
-                  min="0"
-                  max={VALIDATION_LIMITS.STAFF_COUNT_MAX}
-                  value={requiredStaff}
-                  onChange={(e) => setRequiredStaff(e.target.value)}
-                />
+              <div className="space-y-3">
+                <Label>Konfigurace týmu</Label>
+                <p className="text-xs text-muted-foreground">
+                  Vyberte počet osob pro každou roli.
+                </p>
+                
+                {Object.entries(staffRoleLabels).map(([role, label]) => (
+                  <div key={role} className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+                    <span className="font-medium text-sm">{label}</span>
+                    <div className="flex items-center gap-3">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => adjustRoleCount(role, -1)}
+                        disabled={roleCounts[role] <= 0}
+                      >
+                        <Minus className="h-4 w-4" />
+                      </Button>
+                      <span className="w-8 text-center font-semibold">
+                        {roleCounts[role]}
+                      </span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => adjustRoleCount(role, 1)}
+                        disabled={roleCounts[role] >= VALIDATION_LIMITS.STAFF_COUNT_MAX}
+                      >
+                        <Plus className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                
+                {getTotalStaff() > 0 && (
+                  <p className="text-sm text-muted-foreground text-right">
+                    Celkem: <strong>{getTotalStaff()}</strong> osob
+                  </p>
+                )}
               </div>
             )}
 
