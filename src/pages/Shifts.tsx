@@ -577,18 +577,12 @@ const Shifts = () => {
             ) : (
               openShiftsByEvent.map((eventItem) => (
                 <Card key={eventItem.eventId}>
-                  <CardContent className="flex flex-col sm:flex-row sm:items-center justify-between p-4 md:p-6 gap-4">
+                  <CardContent className="p-4 md:p-6 space-y-4">
+                    {/* Event header - shared info */}
                     <div className="flex items-start gap-3">
                       <div className={`w-3 h-3 rounded-full mt-1.5 flex-shrink-0 ${statusColors.open}`} />
                       <div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <p className="font-medium text-base md:text-lg">{eventItem.event?.title || 'Směna'}</p>
-                          {(eventItem as any).availableShifts?.[0]?.required_role && (
-                            <Badge className={`${staffRoleColors[(eventItem as any).availableShifts[0].required_role] || 'bg-gray-500'} text-white text-xs`}>
-                              {staffRoleLabels[(eventItem as any).availableShifts[0].required_role] || (eventItem as any).availableShifts[0].required_role}
-                            </Badge>
-                          )}
-                        </div>
+                        <p className="font-medium text-base md:text-lg">{eventItem.event?.title || 'Směna'}</p>
                         <p className="text-muted-foreground text-sm">
                           {eventItem.event && format(new Date(eventItem.event.start_time), 'EEE d. MMM yyyy', { locale: cs })}
                         </p>
@@ -597,22 +591,39 @@ const Shifts = () => {
                         </p>
                       </div>
                     </div>
-                    <div className="flex items-center justify-between sm:justify-end gap-4 ml-6 sm:ml-0">
-                      <div className="text-left sm:text-right">
-                        <p className="text-xs text-muted-foreground">Sazba</p>
-                        <p className="font-medium text-sm">{eventItem.hourlyRate} Kč/h</p>
-                      </div>
-                      <div className="text-left sm:text-right">
-                        <p className="text-xs text-muted-foreground">Volná místa</p>
-                        <p className="font-medium text-sm">{eventItem.openCount}/{eventItem.totalSlots}</p>
-                      </div>
-                      <Button 
-                        onClick={() => handleRequestShift(eventItem.availableShiftIds[0])} 
-                        disabled={isRequesting}
-                        className="whitespace-nowrap"
-                      >
-                        {isRequesting ? 'Zpracování...' : 'Přihlásit se'}
-                      </Button>
+                    
+                    {/* Individual shifts - one row per available shift */}
+                    <div className="space-y-3 ml-6">
+                      {(eventItem as any).availableShifts.map((shift: any) => (
+                        <div 
+                          key={shift.id} 
+                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-muted/50 rounded-lg"
+                        >
+                          <div className="flex items-center gap-2">
+                            {shift.required_role && (
+                              <Badge className={`${staffRoleColors[shift.required_role] || 'bg-gray-500'} text-white text-xs`}>
+                                {staffRoleLabels[shift.required_role] || shift.required_role}
+                              </Badge>
+                            )}
+                            <span className="text-sm text-muted-foreground">
+                              {eventItem.hourlyRate} Kč/h
+                            </span>
+                          </div>
+                          <Button 
+                            onClick={() => handleRequestShift(shift.id)} 
+                            disabled={isRequesting}
+                            size="sm"
+                            className="whitespace-nowrap"
+                          >
+                            {isRequesting ? 'Zpracování...' : 'Přihlásit se'}
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                    
+                    {/* Summary footer */}
+                    <div className="text-xs text-muted-foreground ml-6">
+                      Volná místa celkem: {eventItem.openCount}/{eventItem.totalSlots}
                     </div>
                   </CardContent>
                 </Card>
