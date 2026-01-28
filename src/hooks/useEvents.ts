@@ -12,6 +12,7 @@ interface CreateEventData {
   start_time: string;
   end_time: string;
   required_staff?: number;
+  role_reqs?: Record<string, number>;
 }
 
 export const useEvents = () => {
