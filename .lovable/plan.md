@@ -1,252 +1,143 @@
 
 
-## Oprava zobrazení směn a logiky přihlášení
+## Oprava zobrazení směn pro multi-role události
 
-Rozumím architektuře. Poskytuji **pouze**:
-1. RLS SQL jako textový snippet (k manuálnímu spuštění)
-2. Frontend kód (React/TypeScript)
+### Problém
 
-Databázové sloupce `role_reqs` (events) a `required_role` (shifts) **již existují**. Nebudu generovat žádné `ALTER TABLE` ani `CREATE TRIGGER` příkazy.
+Když má událost více směn s různými rolemi (např. 1x Instruktor, 1x Obsluha baru) a uživatel má obě role, vidí pouze první směnu. Druhá je skrytá, i když na ni má nárok.
+
+### Příčina
+
+V `Shifts.tsx` (řádky 578-619) se pro každou událost vykresluje pouze jedna karta s jedním tlačítkem "Přihlásit se", které odkazuje na `availableShiftIds[0]`. Badge se zobrazuje pouze z `availableShifts[0].required_role`.
+
+```tsx
+// Současný problematický kód (řádek 586-589)
+{(eventItem as any).availableShifts?.[0]?.required_role && (
+  <Badge>...</Badge>  // Pouze první role
+)}
+
+// Tlačítko (řádek 610)
+onClick={() => handleRequestShift(eventItem.availableShiftIds[0])}  // Pouze první směna
+```
+
+### Řešení
+
+Změnit UI tak, aby pro každou směnu v `availableShifts` vykreslila samostatný řádek s vlastním badge a tlačítkem.
 
 ---
 
-## Část 1: RLS SQL (textový snippet - spustíte manuálně)
+### Změny v `src/pages/Shifts.tsx`
 
-Zkopírujte a spusťte tento SQL v Supabase SQL Editoru:
+**Řádky 578-619** - Nahradit celý blok mapování událostí:
 
-```sql
--- 1. Aktualizovat SELECT politiku - přidat nové staff role
-DROP POLICY IF EXISTS "Staff and admins can view shifts" ON public.shifts;
-CREATE POLICY "Staff and admins can view shifts" ON public.shifts
-FOR SELECT USING (
-  has_role(auth.uid(), 'admin'::app_role) OR 
-  has_role(auth.uid(), 'part_time_staff'::app_role) OR
-  has_role(auth.uid(), 'instructor'::app_role) OR
-  has_role(auth.uid(), 'bar_staff'::app_role) OR
-  has_role(auth.uid(), 'manager'::app_role) OR
-  (claimed_by = auth.uid())
-);
+| Před | Po |
+|------|-----|
+| 1 karta = 1 událost | 1 karta = 1 událost, ALE s více řádky pro směny |
+| 1 badge (první role) | Badge pro každou směnu |
+| 1 tlačítko | Tlačítko pro každou směnu |
 
--- 2. Aktualizovat UPDATE politiku - přidat nové staff role
-DROP POLICY IF EXISTS "Staff can update shifts" ON public.shifts;
-CREATE POLICY "Staff can update shifts" ON public.shifts
-FOR UPDATE 
-USING (
-  has_role(auth.uid(), 'admin'::app_role) OR 
-  has_role(auth.uid(), 'part_time_staff'::app_role) OR
-  has_role(auth.uid(), 'instructor'::app_role) OR
-  has_role(auth.uid(), 'bar_staff'::app_role) OR
-  has_role(auth.uid(), 'manager'::app_role)
-)
-WITH CHECK (
-  has_role(auth.uid(), 'admin'::app_role) OR 
-  (
-    (has_role(auth.uid(), 'part_time_staff'::app_role) OR
-     has_role(auth.uid(), 'instructor'::app_role) OR
-     has_role(auth.uid(), 'bar_staff'::app_role) OR
-     has_role(auth.uid(), 'manager'::app_role)) 
-    AND 
-    (
-      ((status = 'pending'::shift_status) AND (claimed_by = auth.uid())) OR
-      ((status = 'completed'::shift_status) AND (claimed_by = auth.uid())) OR
-      ((status = 'open'::shift_status) AND (claimed_by IS NULL))
-    )
-  )
-);
+**Nový kód:**
+
+```tsx
+openShiftsByEvent.map((eventItem) => (
+  <Card key={eventItem.eventId}>
+    <CardContent className="p-4 md:p-6 space-y-4">
+      {/* Event header - shared info */}
+      <div className="flex items-start gap-3">
+        <div className={`w-3 h-3 rounded-full mt-1.5 flex-shrink-0 ${statusColors.open}`} />
+        <div>
+          <p className="font-medium text-base md:text-lg">{eventItem.event?.title || 'Směna'}</p>
+          <p className="text-muted-foreground text-sm">
+            {eventItem.event && format(new Date(eventItem.event.start_time), 'EEE d. MMM yyyy', { locale: cs })}
+          </p>
+          <p className="text-xs md:text-sm text-muted-foreground">
+            {eventItem.event && `${format(new Date(eventItem.event.start_time), 'HH:mm')} - ${format(new Date(eventItem.event.end_time), 'HH:mm')}`}
+          </p>
+        </div>
+      </div>
+      
+      {/* Individual shifts - one row per available shift */}
+      <div className="space-y-3 ml-6">
+        {(eventItem as any).availableShifts.map((shift: any) => (
+          <div 
+            key={shift.id} 
+            className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-muted/50 rounded-lg"
+          >
+            <div className="flex items-center gap-2">
+              {shift.required_role && (
+                <Badge className={`${staffRoleColors[shift.required_role] || 'bg-gray-500'} text-white text-xs`}>
+                  {staffRoleLabels[shift.required_role] || shift.required_role}
+                </Badge>
+              )}
+              <span className="text-sm text-muted-foreground">
+                {eventItem.hourlyRate} Kč/h
+              </span>
+            </div>
+            <Button 
+              onClick={() => handleRequestShift(shift.id)} 
+              disabled={isRequesting}
+              size="sm"
+              className="whitespace-nowrap"
+            >
+              {isRequesting ? 'Zpracování...' : 'Přihlásit se'}
+            </Button>
+          </div>
+        ))}
+      </div>
+      
+      {/* Summary footer */}
+      <div className="text-xs text-muted-foreground ml-6">
+        Volná místa celkem: {eventItem.openCount}/{eventItem.totalSlots}
+      </div>
+    </CardContent>
+  </Card>
+))
 ```
 
 ---
 
-## Část 2: Frontend změny
+### Vizuální výsledek
+
+**Před:**
+```
+┌─────────────────────────────────────────┐
+│ ● Test Multi Role                       │
+│   Pá 31. ledna 2025                     │
+│   18:00 - 22:00                         │
+│                                         │
+│   Sazba: 150 Kč/h  Volná: 2/2  [Přihlásit se] │
+└─────────────────────────────────────────┘
+```
+
+**Po:**
+```
+┌─────────────────────────────────────────┐
+│ ● Test Multi Role                       │
+│   Pá 31. ledna 2025                     │
+│   18:00 - 22:00                         │
+│                                         │
+│   ┌─────────────────────────────────┐   │
+│   │ [Instruktor]  150 Kč/h  [Přihlásit se] │   │
+│   └─────────────────────────────────┘   │
+│   ┌─────────────────────────────────┐   │
+│   │ [Obsluha baru] 150 Kč/h [Přihlásit se] │   │
+│   └─────────────────────────────────┘   │
+│                                         │
+│   Volná místa celkem: 2/2               │
+└─────────────────────────────────────────┘
+```
+
+---
 
 ### Soubory k úpravě
 
-| Soubor | Změny |
+| Soubor | Změna |
 |--------|-------|
-| `src/hooks/useShifts.ts` | Přidat `roles` z AuthContext, filtrovat směny podle rolí, rozšířit `openShiftsByEvent` o `availableShifts` |
-| `src/pages/Shifts.tsx` | Přidat role konstanty, zobrazit Badge s rolí na 5 místech v UI |
+| `src/pages/Shifts.tsx` | Řádky 578-619 - Přepsat blok Available Shifts na iteraci přes jednotlivé směny |
 
----
+### Důležité poznámky
 
-### 2.1 useShifts.ts změny
-
-**Řádek 6 - Přidat `roles` do importu:**
-```typescript
-const { user, isAdmin, isStaff, roles } = useAuth();
-```
-
-**Řádky 359-362 - Nahradit filtrování openShifts:**
-```typescript
-// Filter open shifts - exclude events where user already has a shift
-// Staff sees only shifts matching their roles (or shifts without required_role for backward compat)
-const openShifts = shifts.filter(s => {
-  if (s.status !== 'open') return false;
-  if (myEventIds.has(s.event_id)) return false;
-  
-  // Admin sees all
-  if (isAdmin) return true;
-  
-  // If shift has no required_role, show to all staff (legacy)
-  const requiredRole = (s as any).required_role;
-  if (!requiredRole) return true;
-  
-  // Show only if user has the required role
-  return roles.includes(requiredRole);
-});
-```
-
-**Řádky 364-388 - Rozšířit `openShiftsByEvent` o `availableShifts`:**
-```typescript
-// Group open shifts by event_id for staff view (show one entry per event)
-const openShiftsByEvent = Object.values(
-  openShifts.reduce((acc, shift) => {
-    const eventId = shift.event_id;
-    if (!acc[eventId]) {
-      // Count total slots for this event (all shifts regardless of status)
-      const totalSlots = shifts.filter(s => s.event_id === eventId).length;
-      acc[eventId] = {
-        eventId,
-        event: shift.event,
-        hourlyRate: shift.hourly_rate,
-        availableShiftIds: [],
-        availableShifts: [],  // NEW - include shift data for role display
-        openCount: 0,
-        totalSlots,
-      };
-    }
-    acc[eventId].availableShiftIds.push(shift.id);
-    acc[eventId].availableShifts.push(shift);  // NEW
-    acc[eventId].openCount += 1;
-    return acc;
-  }, {} as Record<string, { eventId: string; event: any; hourlyRate: number | null; availableShiftIds: string[]; availableShifts: any[]; openCount: number; totalSlots: number }>)
-).sort((a, b) => {
-  const aTime = a.event?.start_time ? new Date(a.event.start_time).getTime() : 0;
-  const bTime = b.event?.start_time ? new Date(b.event.start_time).getTime() : 0;
-  return aTime - bTime;
-});
-```
-
----
-
-### 2.2 Shifts.tsx změny
-
-**Po řádku 29 - Přidat konstanty pro role:**
-```typescript
-// Staff role labels and colors for badges
-const staffRoleLabels: Record<string, string> = {
-  instructor: 'Instruktor',
-  bar_staff: 'Obsluha baru',
-  manager: 'Provozní hospoda',
-  part_time_staff: 'Brigádník',
-};
-
-const staffRoleColors: Record<string, string> = {
-  instructor: 'bg-teal-500',
-  bar_staff: 'bg-amber-500',
-  manager: 'bg-indigo-500',
-  part_time_staff: 'bg-blue-500',
-};
-```
-
-**Řádek 569 - Staff Available Shifts - přidat role badge:**
-```tsx
-<div className="flex items-center gap-2 flex-wrap">
-  <p className="font-medium text-base md:text-lg">{eventItem.event?.title || 'Směna'}</p>
-  {/* Show role badge if available shifts have required_role */}
-  {(eventItem as any).availableShifts?.[0]?.required_role && (
-    <Badge className={`${staffRoleColors[(eventItem as any).availableShifts[0].required_role] || 'bg-gray-500'} text-white text-xs`}>
-      {staffRoleLabels[(eventItem as any).availableShifts[0].required_role] || (eventItem as any).availableShifts[0].required_role}
-    </Badge>
-  )}
-</div>
-```
-
-**Řádek 639 - Staff My Pending Shifts - přidat role badge:**
-```tsx
-<div className="flex items-center gap-2 flex-wrap">
-  <p className="font-medium text-base">{shift.event?.title || 'Směna'}</p>
-  {(shift as any).required_role && (
-    <Badge className={`${staffRoleColors[(shift as any).required_role] || 'bg-gray-500'} text-white text-xs`}>
-      {staffRoleLabels[(shift as any).required_role] || (shift as any).required_role}
-    </Badge>
-  )}
-</div>
-```
-
-**Řádek 698 - Staff My Confirmed Shifts - přidat role badge:**
-```tsx
-<div className="flex items-center gap-2 flex-wrap">
-  <p className="font-medium text-base">{shift.event?.title || 'Směna'}</p>
-  {(shift as any).required_role && (
-    <Badge className={`${staffRoleColors[(shift as any).required_role] || 'bg-gray-500'} text-white text-xs`}>
-      {staffRoleLabels[(shift as any).required_role] || (shift as any).required_role}
-    </Badge>
-  )}
-</div>
-```
-
-**Řádky 876-877 - Admin Pending Shifts - přidat role badge:**
-```tsx
-<div className="flex items-center gap-2 flex-wrap">
-  <p className="font-medium">{shift.event?.title || 'Směna'}</p>
-  {(shift as any).required_role && (
-    <Badge className={`${staffRoleColors[(shift as any).required_role] || 'bg-gray-500'} text-white text-xs`}>
-      {staffRoleLabels[(shift as any).required_role] || (shift as any).required_role}
-    </Badge>
-  )}
-</div>
-```
-
-**Řádky 991 a 1007-1008 - Admin Open Shifts - přidat role badge a aktualizovat tlačítko:**
-```tsx
-{/* Line 991 - název s badge */}
-<div className="flex items-center gap-2 flex-wrap">
-  <p className="font-medium">{shift.event?.title || 'Směna'}</p>
-  {(shift as any).required_role && (
-    <Badge className={`${staffRoleColors[(shift as any).required_role] || 'bg-gray-500'} text-white text-xs`}>
-      {staffRoleLabels[(shift as any).required_role] || (shift as any).required_role}
-    </Badge>
-  )}
-</div>
-
-{/* Lines 1007-1008 - tlačítko s dynamickým textem */}
-<Button 
-  size="sm"
-  onClick={() => openAssignDialog(shift)}
->
-  <UserPlus className="h-4 w-4 mr-1" />
-  Přiřadit {staffRoleLabels[(shift as any).required_role] || 'brigádníka'}
-</Button>
-```
-
-**Řádky 1305-1306 - Assign Dialog - zobrazit požadovanou roli:**
-```tsx
-<div className="flex items-center gap-2 flex-wrap">
-  <p className="font-medium text-lg">{shiftToAssign.event?.title || 'Směna'}</p>
-  {(shiftToAssign as any).required_role && (
-    <Badge className={`${staffRoleColors[(shiftToAssign as any).required_role] || 'bg-gray-500'} text-white`}>
-      {staffRoleLabels[(shiftToAssign as any).required_role] || (shiftToAssign as any).required_role}
-    </Badge>
-  )}
-</div>
-```
-
----
-
-## Výsledek po implementaci
-
-| Oblast | Před | Po |
-|--------|------|-----|
-| **Staff Available** | Zobrazí všechny směny | Zobrazí jen směny pro role uživatele + badge |
-| **Staff My Shifts** | Bez role | S badge u každé směny |
-| **Admin Pending** | Bez role | S badge "Instruktor" atd. |
-| **Admin Open** | "Přiřadit brigádníka" | "Přiřadit Instruktora" + badge |
-| **Assign Dialog** | Bez role | S badge požadované role |
-| **RLS** | Jen admin + part_time_staff | + instructor, bar_staff, manager |
-
----
-
-## TypeScript Note
-
-Používám `(shift as any).required_role` pro přístup k `required_role`, protože auto-generované typy neobsahují nový sloupec. Toto je bezpečný workaround bez nutnosti regenerovat typy.
+- Žádné změny v `useShifts.ts` - data jsou již správně připravena v `availableShifts`
+- Používám `(shift as any).required_role` pro TypeScript kompatibilitu
+- Zachovávám stávající `handleRequestShift(shift.id)` logiku - jen předávám správné ID
 
