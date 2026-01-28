@@ -64,7 +64,6 @@ export const NAV_ITEMS: NavItem[] = [
 export const ROLE_LABELS: Record<string, string> = {
   admin: 'Správce',
   trainer: 'Trenér',
-  part_time_staff: 'Brigádník',
   instructor: 'Instruktor',
   bar_staff: 'Obsluha baru',
   manager: 'Provozní hospoda',
