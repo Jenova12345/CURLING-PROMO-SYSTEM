@@ -37,15 +37,21 @@ const Members = () => {
   const [selectedRoles, setSelectedRoles] = useState<string[]>([]);
   const [isUpdatingRoles, setIsUpdatingRoles] = useState(false);
 
-  const roleLabels: Record<string, string> = {
+  // Roles visible in admin UI (for assignment, stats, filters)
+  const visibleRoleLabels: Record<string, string> = {
     admin: 'Správce',
     trainer: 'Trenér',
-    part_time_staff: 'Brigádník',
     instructor: 'Instruktor',
     bar_staff: 'Obsluha baru',
     manager: 'Provozní hospoda',
     pro_player: 'Profi hráč',
     hobby_player: 'Hobby hráč',
+  };
+
+  // All roles including legacy (for badge display only)
+  const allRoleLabels: Record<string, string> = {
+    ...visibleRoleLabels,
+    part_time_staff: 'Brigádník', // Legacy - only for displaying existing badges
   };
 
   const roleColors: Record<string, string> = {
@@ -111,7 +117,7 @@ const Members = () => {
         setSelectedRoles(prev => [...prev, role]);
         toast({
           title: 'Role přidána',
-          description: `Role "${roleLabels[role]}" byla přidána.`,
+          description: `Role "${allRoleLabels[role]}" byla přidána.`,
         });
       } else {
         // Prevent removing last role
@@ -136,7 +142,7 @@ const Members = () => {
         setSelectedRoles(prev => prev.filter(r => r !== role));
         toast({
           title: 'Role odebrána',
-          description: `Role "${roleLabels[role]}" byla odebrána.`,
+          description: `Role "${allRoleLabels[role]}" byla odebrána.`,
         });
       }
       
@@ -198,8 +204,8 @@ const Members = () => {
       </div>
 
       {/* Stats */}
-      <div className="grid gap-2 grid-cols-4 md:grid-cols-8">
-        {Object.keys(roleLabels).map((role) => (
+      <div className="grid gap-2 grid-cols-4 md:grid-cols-7">
+        {Object.keys(visibleRoleLabels).map((role) => (
           <Card key={role}>
             <CardContent className="flex items-center gap-2 p-3">
               <div className={`w-2.5 h-2.5 rounded-full ${roleColors[role]}`} />
@@ -207,7 +213,7 @@ const Members = () => {
                 <p className="text-lg md:text-2xl font-bold">
                   {getRoleCount(role)}
                 </p>
-                <p className="text-[10px] md:text-xs text-muted-foreground">{roleLabels[role]}</p>
+                <p className="text-[10px] md:text-xs text-muted-foreground">{visibleRoleLabels[role]}</p>
               </div>
             </CardContent>
           </Card>
@@ -231,9 +237,9 @@ const Members = () => {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Všechny role</SelectItem>
-            {Object.keys(roleLabels).map((role) => (
+            {Object.keys(visibleRoleLabels).map((role) => (
               <SelectItem key={role} value={role}>
-                {roleLabels[role]}
+                {visibleRoleLabels[role]}
               </SelectItem>
             ))}
           </SelectContent>
@@ -281,7 +287,7 @@ const Members = () => {
                           key={role} 
                           className={`${roleColors[role] || 'bg-gray-500'} text-white text-xs`}
                         >
-                          {roleLabels[role] || role}
+                          {allRoleLabels[role] || role}
                         </Badge>
                       ))}
                     </div>
@@ -316,7 +322,7 @@ const Members = () => {
             <p className="text-sm text-muted-foreground">
               Vyberte jednu nebo více rolí:
             </p>
-            {Object.entries(roleLabels).map(([role, label]) => {
+            {Object.entries(visibleRoleLabels).map(([role, label]) => {
               const isChecked = selectedRoles.includes(role);
               const isLastRole = selectedRoles.length <= 1 && isChecked;
               
