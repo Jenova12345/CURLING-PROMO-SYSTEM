@@ -9,8 +9,10 @@
  */
 
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/contexts/AuthContext';
 import { useChatGroups } from '@/hooks/useChatGroups';
+import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -36,7 +38,9 @@ type AppRole = Database['public']['Enums']['app_role'];
 const ALL_ROLES: { value: AppRole; label: string }[] = [
   { value: 'admin', label: 'Správce' },
   { value: 'trainer', label: 'Trenér' },
-  { value: 'part_time_staff', label: 'Brigádník' },
+  { value: 'instructor', label: 'Instruktor' },
+  { value: 'bar_staff', label: 'Obsluha baru' },
+  { value: 'manager', label: 'Provozní hospoda' },
   { value: 'pro_player', label: 'Profi hráč' },
   { value: 'hobby_player', label: 'Hobby hráč' },
 ];
@@ -78,6 +82,7 @@ interface ChatGroupFormData {
   whatsapp_url: string;
   icon_slug: string;
   authorized_roles: AppRole[];
+  visible_to_user_ids: string[];
   isPublic: boolean;
 }
 
@@ -87,6 +92,7 @@ const defaultFormData: ChatGroupFormData = {
   whatsapp_url: '',
   icon_slug: 'message-circle',
   authorized_roles: [],
+  visible_to_user_ids: [],
   isPublic: false,
 };
 
@@ -98,6 +104,21 @@ const Communication = () => {
   const [editingGroup, setEditingGroup] = useState<string | null>(null);
   const [formData, setFormData] = useState<ChatGroupFormData>(defaultFormData);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [userSearchQuery, setUserSearchQuery] = useState('');
+
+  // Fetch all users for the specific users selector (admin only)
+  const { data: allUsers = [] } = useQuery({
+    queryKey: ['all-users-for-groups'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('user_id, full_name')
+        .order('full_name');
+      if (error) throw error;
+      return data;
+    },
+    enabled: isAdmin,
+  });
 
   const handleOpenWhatsApp = (url: string) => {
     // Validate URL before opening - security check
@@ -113,28 +134,27 @@ const Communication = () => {
   };
 
   const handleCreateOrUpdate = async () => {
-    // Clear previous validation error
     setValidationError(null);
     
-    // If public, authorized_roles should be empty array
     const authorizedRoles = formData.isPublic ? [] : formData.authorized_roles;
 
-    // Validate: either public or has at least one role
-    if (!formData.isPublic && authorizedRoles.length === 0) {
-      setValidationError('Vyberte alespoň jednu roli nebo označte skupinu jako veřejnou.');
+    // Validate: either public, has at least one role, or has specific users
+    if (!formData.isPublic && authorizedRoles.length === 0 && formData.visible_to_user_ids.length === 0) {
+      setValidationError('Vyberte alespoň jednu roli, osobu, nebo označte skupinu jako veřejnou.');
       return;
     }
 
-    // Prepare payload with sanitized data
     const payload = {
       name: sanitizeText(formData.name),
       description: sanitizeText(formData.description),
       whatsapp_url: formData.whatsapp_url.trim(),
       icon_slug: formData.icon_slug,
       authorized_roles: authorizedRoles,
+      visible_to_user_ids: formData.visible_to_user_ids.length > 0 
+        ? formData.visible_to_user_ids 
+        : null,
     };
 
-    // Validate with schema
     const validation = safeValidate(chatGroupSchema, payload);
     
     if (!validation.success) {
@@ -148,13 +168,13 @@ const Communication = () => {
     }
 
     try {
-      // Type assertion - validation passed so data is valid
       const validData = validation.data as {
         name: string;
         description?: string;
         whatsapp_url: string;
         icon_slug?: string;
         authorized_roles: AppRole[];
+        visible_to_user_ids?: string[] | null;
       };
       
       if (editingGroup) {
@@ -170,6 +190,7 @@ const Communication = () => {
       setEditingGroup(null);
       setFormData(defaultFormData);
       setValidationError(null);
+      setUserSearchQuery('');
     } catch {
       // Error is handled by the hook
     }
@@ -183,10 +204,12 @@ const Communication = () => {
       whatsapp_url: group.whatsapp_url,
       icon_slug: group.icon_slug || 'message-circle',
       authorized_roles: group.authorized_roles,
+      visible_to_user_ids: (group as any).visible_to_user_ids || [],
       isPublic,
     });
     setEditingGroup(group.id);
     setValidationError(null);
+    setUserSearchQuery('');
     setIsDialogOpen(true);
   };
 
@@ -208,8 +231,8 @@ const Communication = () => {
     setFormData(prev => ({
       ...prev,
       isPublic: checked,
-      // Clear roles when making public
       authorized_roles: checked ? [] : prev.authorized_roles,
+      visible_to_user_ids: checked ? [] : prev.visible_to_user_ids,
     }));
     setValidationError(null);
   };
@@ -219,9 +242,11 @@ const Communication = () => {
     setEditingGroup(null);
     setFormData(defaultFormData);
     setValidationError(null);
+    setUserSearchQuery('');
   };
 
-  const isFormValid = formData.name.trim() && formData.whatsapp_url.trim() && (formData.isPublic || formData.authorized_roles.length > 0);
+  const isFormValid = formData.name.trim() && formData.whatsapp_url.trim() && 
+    (formData.isPublic || formData.authorized_roles.length > 0 || formData.visible_to_user_ids.length > 0);
 
   if (isLoading) {
     return (
@@ -363,21 +388,68 @@ const Communication = () => {
                     </div>
                     
                     {!formData.isPublic && (
-                      <div className="space-y-2 pl-1">
-                        <span className="text-sm text-muted-foreground">Nebo vyberte oprávněné role:</span>
-                        {ALL_ROLES.map(role => (
-                          <div key={role.value} className="flex items-center space-x-2">
-                            <Checkbox
-                              id={role.value}
-                              checked={formData.authorized_roles.includes(role.value)}
-                              onCheckedChange={() => handleRoleToggle(role.value)}
-                            />
-                            <Label htmlFor={role.value} className="font-normal cursor-pointer">
-                              {role.label}
-                            </Label>
+                      <>
+                        <div className="space-y-2 pl-1">
+                          <span className="text-sm text-muted-foreground">Oprávněné role:</span>
+                          {ALL_ROLES.map(role => (
+                            <div key={role.value} className="flex items-center space-x-2">
+                              <Checkbox
+                                id={role.value}
+                                checked={formData.authorized_roles.includes(role.value)}
+                                onCheckedChange={() => handleRoleToggle(role.value)}
+                              />
+                              <Label htmlFor={role.value} className="font-normal cursor-pointer">
+                                {role.label}
+                              </Label>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Specific users selection */}
+                        <div className="space-y-2 pl-1">
+                          <span className="text-sm text-muted-foreground">Konkrétní osoby (volitelné):</span>
+                          <p className="text-xs text-muted-foreground">
+                            Vyberte uživatele, kteří uvidí skupinu bez ohledu na roli
+                          </p>
+                          <Input
+                            placeholder="Hledat podle jména..."
+                            value={userSearchQuery}
+                            onChange={(e) => setUserSearchQuery(e.target.value)}
+                            className="mb-2"
+                          />
+                          <div className="max-h-40 overflow-y-auto space-y-1 border rounded-md p-2">
+                            {allUsers
+                              .filter(u => 
+                                !userSearchQuery || 
+                                u.full_name?.toLowerCase().includes(userSearchQuery.toLowerCase())
+                              )
+                              .map(u => (
+                                <div key={u.user_id} className="flex items-center space-x-2">
+                                  <Checkbox
+                                    id={`user-${u.user_id}`}
+                                    checked={formData.visible_to_user_ids.includes(u.user_id)}
+                                    onCheckedChange={(checked) => {
+                                      setFormData(prev => ({
+                                        ...prev,
+                                        visible_to_user_ids: checked 
+                                          ? [...prev.visible_to_user_ids, u.user_id]
+                                          : prev.visible_to_user_ids.filter(id => id !== u.user_id),
+                                      }));
+                                    }}
+                                  />
+                                  <Label htmlFor={`user-${u.user_id}`} className="font-normal cursor-pointer text-sm">
+                                    {u.full_name || 'Bez jména'}
+                                  </Label>
+                                </div>
+                              ))}
                           </div>
-                        ))}
-                      </div>
+                          {formData.visible_to_user_ids.length > 0 && (
+                            <p className="text-xs text-primary">
+                              Vybráno: {formData.visible_to_user_ids.length} uživatelů
+                            </p>
+                          )}
+                        </div>
+                      </>
                     )}
                   </div>
                 </div>

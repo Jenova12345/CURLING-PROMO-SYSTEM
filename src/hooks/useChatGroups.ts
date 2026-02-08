@@ -14,6 +14,7 @@ interface ChatGroup {
   icon: string | null;
   icon_slug: string | null;
   authorized_roles: AppRole[];
+  visible_to_user_ids: string[] | null;
   created_at: string;
   updated_at: string;
 }
@@ -25,6 +26,7 @@ interface CreateChatGroupInput {
   icon?: string;
   icon_slug?: string;
   authorized_roles: AppRole[];
+  visible_to_user_ids?: string[] | null;
 }
 
 interface UpdateChatGroupInput extends Partial<CreateChatGroupInput> {
@@ -60,7 +62,8 @@ export const useChatGroups = () => {
           icon: input.icon || null,
           icon_slug: input.icon_slug || 'message-circle',
           authorized_roles: input.authorized_roles,
-        })
+          visible_to_user_ids: input.visible_to_user_ids || null,
+        } as any)
         .select()
         .single();
 
@@ -82,7 +85,7 @@ export const useChatGroups = () => {
       const { id, ...updates } = input;
       const { data, error } = await supabase
         .from('chat_groups')
-        .update(updates)
+        .update(updates as any)
         .eq('id', id)
         .select()
         .single();
