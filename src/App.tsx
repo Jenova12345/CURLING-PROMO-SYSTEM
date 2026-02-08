@@ -15,6 +15,7 @@ import Payouts from "./pages/Payouts";
 import Profile from "./pages/Profile";
 import Members from "./pages/Members";
 import Communication from "./pages/Communication";
+import Help from "./pages/Help";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -38,6 +39,7 @@ const App = () => (
               <Route path="/profile" element={<Profile />} />
               <Route path="/members" element={<Members />} />
               <Route path="/communication" element={<Communication />} />
+              <Route path="/help" element={<Help />} />
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>

@@ -6,6 +6,7 @@ import {
   MessageCircle, 
   Wallet,
   User,
+  HelpCircle,
   LucideIcon
 } from 'lucide-react';
 
@@ -54,6 +55,12 @@ export const NAV_ITEMS: NavItem[] = [
     roles: ['admin', 'trainer', 'part_time_staff', 'instructor', 'bar_staff', 'manager', 'pro_player', 'hobby_player']
   },
   { 
+    path: '/help', 
+    label: 'Nápověda', 
+    icon: HelpCircle,
+    roles: ['admin', 'trainer', 'part_time_staff', 'instructor', 'bar_staff', 'manager', 'pro_player', 'hobby_player']
+  },
+  { 
     path: '/profile', 
     label: 'Můj profil', 
     icon: User,
@@ -71,7 +78,7 @@ export const ROLE_LABELS: Record<string, string> = {
   hobby_player: 'Hobby hráč',
 };
 
-export const DEFAULT_PATHS = ['/', '/calendar', '/profile', '/communication'];
+export const DEFAULT_PATHS = ['/', '/calendar', '/profile', '/communication', '/help'];
 
 // Legacy function for backward compatibility
 export const filterNavItemsByRole = (
