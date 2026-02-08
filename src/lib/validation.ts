@@ -260,6 +260,7 @@ export const chatGroupSchema = z.object({
     'admin', 'trainer', 'part_time_staff', 'instructor', 
     'bar_staff', 'manager', 'pro_player', 'hobby_player'
   ])),
+  visible_to_user_ids: z.array(z.string().uuid()).nullable().optional(),
 });
 
 /**

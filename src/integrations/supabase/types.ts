@@ -24,6 +24,7 @@ export type Database = {
           id: string
           name: string
           updated_at: string
+          visible_to_user_ids: string[] | null
           whatsapp_url: string
         }
         Insert: {
@@ -35,6 +36,7 @@ export type Database = {
           id?: string
           name: string
           updated_at?: string
+          visible_to_user_ids?: string[] | null
           whatsapp_url: string
         }
         Update: {
@@ -46,6 +48,7 @@ export type Database = {
           id?: string
           name?: string
           updated_at?: string
+          visible_to_user_ids?: string[] | null
           whatsapp_url?: string
         }
         Relationships: []
