@@ -8,6 +8,7 @@ import { Calendar, Clock, TrendingUp, Bell, MessageCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { Link } from 'react-router-dom';
+import NewShiftsAlert from '@/components/NewShiftsAlert';
 
 const Dashboard = () => {
   const { profile, roles, isAdmin, isStaff } = useAuth();
@@ -52,6 +53,9 @@ const Dashboard = () => {
           Přehled vašeho účtu a nadcházejících událostí
         </p>
       </div>
+
+      {/* New shifts alert (workers) */}
+      <NewShiftsAlert />
 
       {/* Stats Grid */}
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">

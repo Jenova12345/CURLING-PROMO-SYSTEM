@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useShifts } from '@/hooks/useShifts';
+import { useShiftApplications } from '@/hooks/useShiftApplications';
 import { usePayouts } from '@/hooks/usePayouts';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -78,6 +79,20 @@ const Shifts = () => {
     isLoading 
   } = useShifts();
   const { myPayouts } = usePayouts();
+  const {
+    myApplications,
+    applicationsByShift,
+    pendingApplications,
+    applyToShift,
+    cancelMyApplication,
+    approveApplication,
+    rejectApplication,
+    revokeApproval,
+    isApplying,
+    isApproving: isApprovingApp,
+    isRejecting: isRejectingApp,
+    isRevoking,
+  } = useShiftApplications();
   const { toast } = useToast();
 
   // Rate limiting hooks
@@ -129,8 +144,8 @@ const Shifts = () => {
     }
   }, [isAdmin, isStaff, isLoading, pendingShifts.length, eventsToComplete.length, activeTab]);
 
+
   const handleRequestShift = async (shiftId: string) => {
-    // Rate limiting
     if (!shiftActionRateLimit.checkLimit()) {
       toast({
         title: 'Příliš mnoho požadavků',
@@ -139,48 +154,62 @@ const Shifts = () => {
       });
       return;
     }
-
-    // Validate shift ID
     const validation = safeValidate(shiftRequestSchema, { shiftId });
     if (!validation.success) {
-      toast({
-        title: 'Chyba validace',
-        description: validation.error,
-        variant: 'destructive',
-      });
+      toast({ title: 'Chyba validace', description: validation.error, variant: 'destructive' });
       return;
     }
-
     try {
-      await requestShift(validation.data.shiftId);
-      toast({
-        title: 'Přihláška odeslána!',
-        description: 'Čeká na schválení adminem.',
-      });
+      await applyToShift(validation.data.shiftId);
+      toast({ title: 'Přihláška odeslána!', description: 'Čeká na schválení adminem.' });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Nepodařilo se přihlásit na směnu.';
-      toast({
-        title: 'Chyba',
-        description: message,
-        variant: 'destructive',
-      });
+      const message = error instanceof Error ? error.message : 'Nepodařilo se přihlásit.';
+      toast({ title: 'Chyba', description: message, variant: 'destructive' });
     }
   };
 
-  const handleApproveShift = async (shiftId: string) => {
+  const handleCancelApplication = async (appId: string) => {
     try {
-      await approveShift(shiftId);
-      toast({
-        title: 'Směna schválena!',
-        description: 'Brigádník byl přiřazen na směnu.',
-      });
+      await cancelMyApplication(appId);
+      toast({ title: 'Přihláška zrušena' });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Nepodařilo se schválit směnu.';
-      toast({
-        title: 'Chyba',
-        description: message,
-        variant: 'destructive',
-      });
+      const message = error instanceof Error ? error.message : 'Nepodařilo se zrušit přihlášku.';
+      toast({ title: 'Chyba', description: message, variant: 'destructive' });
+    }
+  };
+
+  const handleApproveApplication = async (appId: string) => {
+    try {
+      await approveApplication(appId);
+      toast({ title: 'Přihláška schválena', description: 'Brigádník byl přiřazen na směnu.' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nepodařilo se schválit přihlášku.';
+      toast({ title: 'Chyba', description: message, variant: 'destructive' });
+    }
+  };
+
+  const handleRejectApplication = async (appId: string) => {
+    try {
+      await rejectApplication(appId);
+      toast({ title: 'Přihláška zamítnuta' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nepodařilo se zamítnout přihlášku.';
+      toast({ title: 'Chyba', description: message, variant: 'destructive' });
+    }
+  };
+
+  const handleRevokeApproval = async (shiftId: string) => {
+    const app = applicationsByShift[shiftId]?.find((a) => a.status === 'approved');
+    if (!app) {
+      toast({ title: 'Chyba', description: 'Schválená přihláška nenalezena.', variant: 'destructive' });
+      return;
+    }
+    try {
+      await revokeApproval(app.id);
+      toast({ title: 'Brigádník odebrán', description: 'Směna je opět volná.' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nepodařilo se odebrat brigádníka.';
+      toast({ title: 'Chyba', description: message, variant: 'destructive' });
     }
   };
 
@@ -609,14 +638,38 @@ const Shifts = () => {
                               {eventItem.hourlyRate} Kč/h
                             </span>
                           </div>
-                          <Button 
-                            onClick={() => handleRequestShift(shift.id)} 
-                            disabled={isRequesting}
-                            size="sm"
-                            className="whitespace-nowrap"
-                          >
-                            {isRequesting ? 'Zpracování...' : 'Přihlásit se'}
-                          </Button>
+                          {(() => {
+                            const myApp = myApplications.find(
+                              (a) => a.shift_id === shift.id && (a.status === 'pending' || a.status === 'approved')
+                            );
+                            if (myApp?.status === 'pending') {
+                              return (
+                                <div className="flex items-center gap-2">
+                                  <Badge variant="outline" className="border-yellow-500 text-yellow-600">
+                                    <Clock className="h-3 w-3 mr-1" />
+                                    Čeká na schválení
+                                  </Badge>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleCancelApplication(myApp.id)}
+                                  >
+                                    Zrušit zájem
+                                  </Button>
+                                </div>
+                              );
+                            }
+                            return (
+                              <Button
+                                onClick={() => handleRequestShift(shift.id)}
+                                disabled={isApplying}
+                                size="sm"
+                                className="whitespace-nowrap"
+                              >
+                                {isApplying ? 'Zpracování...' : 'Mám zájem'}
+                              </Button>
+                            );
+                          })()}
                         </div>
                       ))}
                     </div>
@@ -895,10 +948,10 @@ const Shifts = () => {
           </TabsContent>
         )}
 
-        {/* Pending Shifts (Admin) */}
+        {/* Pending Applications (Admin) */}
         {isAdmin && (
           <TabsContent value="pending" className="space-y-4">
-            {pendingShifts.length === 0 ? (
+            {pendingApplications.length === 0 ? (
               <Card>
                 <CardContent className="flex flex-col items-center justify-center py-12">
                   <UserCheck className="h-12 w-12 text-muted-foreground mb-4" />
@@ -910,56 +963,91 @@ const Shifts = () => {
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <AlertCircle className="h-5 w-5 text-yellow-500" />
-                    Brigádníci k potvrzení
+                    Zájemci o směny
                   </CardTitle>
-                  <CardDescription>Brigádníci čekající na schválení směny</CardDescription>
+                  <CardDescription>
+                    Brigádníci, kteří se přihlásili na volné směny. Vyberte, kdo směnu dostane.
+                  </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {pendingShifts.map((shift) => (
-                    <div key={shift.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-lg bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-900 gap-4">
-                      <div className="flex items-start gap-4">
-                        <div className={`w-3 h-3 rounded-full mt-1.5 ${statusColors.pending}`} />
-                        <div>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <p className="font-medium">{shift.event?.title || 'Směna'}</p>
-                            {(shift as any).required_role && (
-                              <Badge className={`${staffRoleColors[(shift as any).required_role] || 'bg-gray-500'} text-white text-xs`}>
-                                {staffRoleLabels[(shift as any).required_role] || (shift as any).required_role}
+                  {Object.entries(
+                    pendingApplications.reduce((acc, app) => {
+                      if (!acc[app.shift_id]) acc[app.shift_id] = [];
+                      acc[app.shift_id].push(app);
+                      return acc;
+                    }, {} as Record<string, typeof pendingApplications>)
+                  ).map(([shiftId, apps]) => {
+                    const shift = shifts.find((s) => s.id === shiftId);
+                    if (!shift) return null;
+                    const requiredRole = (shift as any).required_role;
+                    return (
+                      <div
+                        key={shiftId}
+                        className="p-4 rounded-lg bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-900 space-y-3"
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className={`w-3 h-3 rounded-full mt-1.5 ${statusColors.pending}`} />
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="font-medium">{shift.event?.title || 'Směna'}</p>
+                              {requiredRole && (
+                                <Badge className={`${staffRoleColors[requiredRole] || 'bg-gray-500'} text-white text-xs`}>
+                                  {staffRoleLabels[requiredRole] || requiredRole}
+                                </Badge>
+                              )}
+                              <Badge variant="outline" className="text-xs">
+                                {apps.length} {apps.length === 1 ? 'zájemce' : 'zájemců'}
                               </Badge>
-                            )}
+                            </div>
+                            <p className="text-sm text-muted-foreground">
+                              {shift.event &&
+                                format(new Date(shift.event.start_time), 'd. MMMM yyyy, HH:mm', { locale: cs })}
+                            </p>
                           </div>
-                          <p className="text-sm text-muted-foreground">
-                            {shift.event && format(new Date(shift.event.start_time), 'd. MMMM yyyy, HH:mm', { locale: cs })}
-                          </p>
-                          <p className="text-sm font-medium text-yellow-700 dark:text-yellow-400 mt-1">
-                            Brigádník: {getStaffName(shift)}
-                          </p>
+                        </div>
+
+                        <div className="space-y-2 ml-6">
+                          {apps.map((app) => (
+                            <div
+                              key={app.id}
+                              className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-background rounded-md border"
+                            >
+                              <div>
+                                <p className="font-medium text-sm">{app.applicant_name || 'Neznámý'}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  Přihlášen{' '}
+                                  {format(new Date(app.created_at), 'd. MMM HH:mm', { locale: cs })}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleRejectApplication(app.id)}
+                                  disabled={isRejectingApp}
+                                  className="text-red-600 border-red-300 hover:bg-red-50"
+                                >
+                                  <XCircle className="h-4 w-4 mr-1" />
+                                  Zamítnout
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleApproveApplication(app.id)}
+                                  disabled={isApprovingApp}
+                                  className="bg-green-600 hover:bg-green-700"
+                                >
+                                  <CheckCircle className="h-4 w-4 mr-1" />
+                                  Schválit
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2 ml-7 sm:ml-0">
-                        <Button 
-                          variant="outline" 
-                          size="sm"
-                          onClick={() => handleRejectShift(shift.id)}
-                          disabled={isRejecting}
-                          className="text-red-600 border-red-300 hover:bg-red-50"
-                        >
-                          <XCircle className="h-4 w-4 mr-1" />
-                          Odmítnout
-                        </Button>
-                        <Button 
-                          size="sm"
-                          onClick={() => handleApproveShift(shift.id)}
-                          disabled={isApproving}
-                          className="bg-green-600 hover:bg-green-700"
-                        >
-                          <CheckCircle className="h-4 w-4 mr-1" />
-                          Schválit
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </CardContent>
+
               </Card>
             )}
           </TabsContent>
@@ -1097,23 +1185,47 @@ const Shifts = () => {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   {upcomingShiftsByEvent.map((eventItem) => (
-                    <div key={eventItem.eventId} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900 gap-4">
+                    <div key={eventItem.eventId} className="p-4 rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900 space-y-3">
                       <div className="flex items-start gap-4">
                         <div className="w-3 h-3 rounded-full mt-1.5 bg-blue-500" />
-                        <div>
+                        <div className="flex-1">
                           <p className="font-medium">{eventItem.event?.title || 'Akce'}</p>
                           <p className="text-sm text-muted-foreground">
                             {eventItem.event && format(new Date(eventItem.event.start_time), 'd. MMMM yyyy, HH:mm', { locale: cs })}
                           </p>
-                          <p className="text-sm font-medium text-blue-700 dark:text-blue-400 mt-1">
-                            Brigádníci ({eventItem.shifts.length}): {eventItem.staffNames.join(', ')}
-                          </p>
                         </div>
+                        <Badge variant="outline" className="border-blue-500 text-blue-600">
+                          <CheckCircle className="h-3 w-3 mr-1" />
+                          Připraveno
+                        </Badge>
                       </div>
-                      <Badge variant="outline" className="border-blue-500 text-blue-600">
-                        <CheckCircle className="h-3 w-3 mr-1" />
-                        Připraveno
-                      </Badge>
+                      <div className="ml-6 space-y-2">
+                        {eventItem.shifts.map((s: any) => (
+                          <div
+                            key={s.id}
+                            className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2 bg-background rounded border"
+                          >
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-sm font-medium">{s.claimed_profile?.full_name || 'Neznámý'}</span>
+                              {s.required_role && (
+                                <Badge className={`${staffRoleColors[s.required_role] || 'bg-gray-500'} text-white text-xs`}>
+                                  {staffRoleLabels[s.required_role] || s.required_role}
+                                </Badge>
+                              )}
+                            </div>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleRevokeApproval(s.id)}
+                              disabled={isRevoking}
+                              className="text-red-600 border-red-300 hover:bg-red-50"
+                            >
+                              <XCircle className="h-4 w-4 mr-1" />
+                              Odebrat
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   ))}
                 </CardContent>
