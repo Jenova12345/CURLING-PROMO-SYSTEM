@@ -48,19 +48,19 @@ export const useShiftApplications = () => {
     queryClient.invalidateQueries({ queryKey: ['shifts'] });
   };
 
-  // Worker applies to a shift
+  // Worker applies to a shift (upsert — re-apply allowed after rejected/cancelled)
   const applyToShift = useMutation({
     mutationFn: async (shiftId: string) => {
       if (!user) throw new Error('Nepřihlášený uživatel.');
       const { data, error } = await (supabase as any)
         .from('shift_applications')
-        .insert({ shift_id: shiftId, user_id: user.id, status: 'pending' })
+        .upsert(
+          { shift_id: shiftId, user_id: user.id, status: 'pending', updated_at: new Date().toISOString() },
+          { onConflict: 'shift_id,user_id' }
+        )
         .select()
         .single();
-      if (error) {
-        if (error.code === '23505') throw new Error('Na tuto směnu už jste se přihlásil.');
-        throw new Error(error.message || 'Nepodařilo se přihlásit.');
-      }
+      if (error) throw new Error(error.message || 'Nepodařilo se přihlásit.');
       return data;
     },
     onSuccess: invalidate,

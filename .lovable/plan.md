@@ -1,141 +1,57 @@
-## Approval workflow + revoke + nové notifikace
+## Cíl
 
-Změna z modelu "1 worker = update slot" na "N workerů aplikuje na 1 slot". Stávající `shifts` zůstává jako pre-vytvořený slot (status `open`/`claimed`/`completed`), nová tabulka `shift_applications` drží jednotlivé přihlášky.
-
----
-
-### 1. Databáze (SQL migrace)
-
-Nová tabulka:
-
-```sql
-CREATE TABLE public.shift_applications (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  shift_id uuid NOT NULL REFERENCES public.shifts(id) ON DELETE CASCADE,
-  user_id uuid NOT NULL,
-  status text NOT NULL DEFAULT 'pending'
-    CHECK (status IN ('pending','approved','rejected','cancelled')),
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (shift_id, user_id)
-);
-
-ALTER TABLE public.shift_applications ENABLE ROW LEVEL SECURITY;
-
--- Worker vidí svoje + admin vše + worker vidí aplikace na sloty kde sám aplikoval (volitelné)
-CREATE POLICY "view own or admin" ON public.shift_applications
-  FOR SELECT USING (user_id = auth.uid() OR has_role(auth.uid(),'admin'));
-
-CREATE POLICY "user insert own" ON public.shift_applications
-  FOR INSERT WITH CHECK (user_id = auth.uid());
-
-CREATE POLICY "user cancel own / admin update" ON public.shift_applications
-  FOR UPDATE USING (user_id = auth.uid() OR has_role(auth.uid(),'admin'));
-
-CREATE POLICY "admin delete" ON public.shift_applications
-  FOR DELETE USING (has_role(auth.uid(),'admin'));
-
-CREATE TRIGGER trg_updated_at_apps BEFORE UPDATE ON public.shift_applications
-  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
-```
-
-Validační trigger zabrání duplicitní pending aplikaci na sloty stejného eventu pro téhož usera (zachová stávající pravidlo "max 1 směna per event").
+Sjednotit logiku přihlašování na směny v Kalendáři s tou v Směnách a povolit opětovné přihlášení po zamítnutí nebo odebrání.
 
 ---
 
-### 2. Hook: `src/hooks/useShiftApplications.ts` (nový)
+## 1) `src/hooks/useShiftApplications.ts` — upsert v `applyToShift`
 
-```text
-useShiftApplications()
- ├── applications        – všechny (admin) / moje (staff)
- ├── myApplications      – moje pending/approved/rejected
- ├── applicationsByShift – Record<shiftId, Application[]>
- ├── applyToShift(shiftId)         INSERT {user_id, shift_id, status:'pending'}
- ├── cancelMyApplication(appId)    UPDATE status='cancelled' (vlastní)
- ├── approveApplication(appId)     – admin: UPDATE app → 'approved'
- │                                  + UPDATE shift → status='claimed', claimed_by=app.user_id
- │                                  + UPDATE ostatní pending apps stejného shiftu → 'rejected'
- ├── rejectApplication(appId)      UPDATE app → 'rejected'
- └── revokeApproval(appId)         – admin: UPDATE app → 'cancelled'
-                                    + UPDATE shift → status='open', claimed_by=null, claimed_at=null
-```
+Současná verze dělá `INSERT`, což padá na `UNIQUE (shift_id, user_id)`, pokud uživatel měl dřív přihlášku (i `rejected` / `cancelled`).
 
-Všechno přes react-query s `invalidateQueries(['shift_applications'])` + `['shifts']`.
+Změna:
+- Před vložením zkontrolovat existující záznam pro `(shift_id, user_id)`.
+  - Pokud existuje → `UPDATE` status na `pending` (a `updated_at` se přepíše triggerem).
+  - Pokud neexistuje → `INSERT` jako dnes.
+- Alternativně použít `.upsert({...}, { onConflict: 'shift_id,user_id' })` s `status: 'pending'`. Zvolím tuto variantu — jeden round-trip.
+- Zachovat hlášení chyb, ale odstranit speciální handling `23505`.
 
----
+## 2) `src/pages/IceCalendar.tsx` — napojit nový hook
 
-### 3. `src/hooks/useShifts.ts` – úpravy
+Nahradit volání `requestShift` z `useShifts` za `applyToShift` z `useShiftApplications` a zrcadlit UI ze `Shifts.tsx`.
 
-- Ponechat existující `requestShift`/`cancelRequest` ale **přesměrovat** na `useShiftApplications.applyToShift` (legacy alias).
-- `openShifts` zůstává (sloty kde `status='open'`).
-- Pro staff filter: slot zůstane viditelný **i když na něj uživatel už podal žádost** — místo skrytí přidat příznak `hasApplied`/`applicationStatus` z join s `shift_applications`.
-- `myEventIds` přestat blokovat zobrazení slotu jen kvůli pending aplikaci (nyní víc apps možných).
+Změny:
+- Importovat `useShiftApplications`, získat `myApplications`, `applyToShift`, `cancelMyApplication`, `isApplying`, `isCancelling`.
+- Odstranit `requestShift, isRequesting` z destrukce `useShifts`.
+- `handleRequestShift(shiftId)` → volá `applyToShift(shiftId)`, toast „Přihláška odeslána! Čeká na schválení adminem."
+- Přidat `handleCancelApplication(appId)` → volá `cancelMyApplication`.
+- `myEventIds` ponechat tak, jak je (vychází ze `shifts.claimed_by`, ne z aplikací) — tím zůstává směna viditelná i po `rejected`/`cancelled`.
+- `canRequestShift(shift)` ponechat (true pro grouped, jinak `status === 'open' && !myEventIds.has(event_id)`).
+- V buňce směny (řádky 989–1034) místo jediného tlačítka „Přihlásit" vykreslit stejný switch jako v `Shifts.tsx`:
+  - Najít `myApp = myApplications.find(a => a.shift_id === shiftIdToRequest && (a.status === 'pending' || a.status === 'approved'))`.
+  - Pokud `pending` → badge „Čeká na schválení" + tlačítko „Zrušit zájem" (volá `handleCancelApplication`).
+  - Pokud `approved` → badge „Schváleno" (read-only).
+  - Jinak (žádná aplikace, `rejected`, `cancelled`) → tlačítko „Mám zájem" (disabled při `isApplying`).
+- Pro grouped entry (více volných slotů na akci) použít první `_availableShiftIds[0]` jako cíl aplikace (zachovat dnešní chování), `myApp` u grouped záznamu se nehledá.
 
----
+## 3) `src/pages/Shifts.tsx` — povolit re-apply
 
-### 4. `src/pages/Shifts.tsx` – frontend
+Logika dnes už zobrazuje „Mám zájem", když `myApp` (pending/approved) neexistuje, takže pro `rejected`/`cancelled` aplikace se tlačítko ukáže automaticky. Po opravě upsertu v bodě 1 bude re-apply fungovat bez dalších změn.
 
-**Staff – Volné směny (cca ř. 567–633):**
-- Tlačítko `Přihlásit se` → **`Mám zájem`** (volá `applyToShift`).
-- Pokud user už má pending application na daný shift: tlačítko nahradit badge `Čeká na schválení` + button `Zrušit zájem`.
-- Pokud `rejected`: badge `Zamítnuto` (read-only).
-- Slot zůstává viditelný pro ostatní dokud nemá `status='claimed'`.
-
-**Staff – Moje směny:**
-- Sekce "Čeká na potvrzení" napojit na `myApplications` (status='pending') místo `myPendingShifts`.
-- "Potvrzené" napojit na shifty kde `claimed_by = me` (beze změny logiky).
-
-**Admin – Brigádníci k potvrzení:**
-- Nová sekce "Zájemci o směny": grupuj `applications` podle `shift_id`/eventu.
-- U každého zájemce 2 tlačítka: **Schválit** (`approveApplication`) + **Zamítnout** (`rejectApplication`).
-- Zobrazovat jméno, roli, čas podání žádosti.
-
-**Admin – Nadcházející / přiřazené směny (REVOKE):**
-- Pro každou `claimed` směnu přidat tlačítko **Odebrat** (`revokeApproval` na odpovídající approved application).
-- Po revoke se slot vrátí na `open` a viditelný v "Směny kde chybí brigádníci".
+Drobná úprava jen pro jistotu:
+- V sekci „Mám zájem" tlačítko jasně vystihne re-apply — text necháme „Mám zájem" (jednotné), žádné rozlišení.
 
 ---
 
-### 5. Dashboard banner – nové směny
+## Co se NEdotýká
 
-Nový komponent `src/components/NewShiftsAlert.tsx`:
-
-```text
-Logika:
-1. Z useShifts vezmi openShifts pro budoucí events (event.start_time > now()).
-2. Filtruj jen takové, kde required_role ∈ user.roles (nebo bez role).
-3. Spočítej hash = JSON.stringify(sorted(shift.id)).
-4. localStorage key: "newShiftsSeenHash:<userId>"
-5. Pokud hash !== uložený hash → render Alert (shadcn) s message:
-   "🔔 Jsou vypsány nové směny! Podívejte se do nabídky a přihlaste se."
-   + button "Zobrazit" → /shifts
-   + dismiss X → uloží aktuální hash do localStorage.
-6. Pokud hash === uložený → nic.
-```
-
-Render v `src/pages/Dashboard.tsx` nad Stats Grid, jen pro `isStaff` (kromě admin-only).
+- Databáze, RLS, triggery — beze změny.
+- `useShifts.ts` — beze změny (`requestShift` zůstane jako legacy alias pro zpětnou kompatibilitu, jen se z Kalendáře přestane volat).
+- Admin sekce (zájemci, odebrat) — beze změny.
 
 ---
 
-### 6. Typy
+## Akceptační kritéria
 
-`src/integrations/supabase/types.ts` se regeneruje po migraci; mezitím použít `as any` u shift_applications volání (stejně jako u `required_role`).
-
----
-
-### Soubory
-
-| Soubor | Akce |
-|---|---|
-| SQL migrace `shift_applications` + RLS | nová |
-| `src/hooks/useShiftApplications.ts` | nový |
-| `src/hooks/useShifts.ts` | filtr openShifts, expose applicationStatus |
-| `src/pages/Shifts.tsx` | staff tlačítko "Mám zájem", admin Schválit/Zamítnout/Odebrat |
-| `src/components/NewShiftsAlert.tsx` | nový – dashboard banner |
-| `src/pages/Dashboard.tsx` | mount NewShiftsAlert |
-
-### Otevřené body / poznámky
-
-- Při schválení aplikace na slot, který mezitím někdo jiný obsadil (`shift.status != 'open'`), vrátit chybu a invalidovat queries.
-- Po `approveApplication` automaticky ostatní pending na témž slotu → `rejected` (aby workeři viděli výsledek).
-- Revoke neresetuje historii applications, jen vrátí slot do `open` a danou aplikaci na `cancelled`; ostatní rejected zůstanou jako audit trail.
+- Z detailu dne v Kalendáři vidí brigádník u volné směny tlačítko „Mám zájem". Po kliku se zobrazí „Čeká na schválení" + „Zrušit zájem", směna zůstává viditelná dalším zájemcům.
+- Když admin schválí jiného brigádníka (a tím tohoto zamítne), uvidí dotyčný u směny opět „Mám zájem" jakmile admin schváleného odebere a směna se vrátí do `open`.
+- `applyToShift` nepadá na unikátním klíči ani při opakovaných pokusech.
