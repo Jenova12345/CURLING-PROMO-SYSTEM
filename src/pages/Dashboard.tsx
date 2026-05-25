@@ -8,6 +8,7 @@ import { Calendar, Clock, TrendingUp, Bell, MessageCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { Link } from 'react-router-dom';
+import NewShiftsAlert from '@/components/NewShiftsAlert';
 
 const Dashboard = () => {
   const { profile, roles, isAdmin, isStaff } = useAuth();
