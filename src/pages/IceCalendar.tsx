@@ -28,7 +28,14 @@ type Event = Database['public']['Tables']['events']['Row'] & { event_type: Event
 const IceCalendar = () => {
   const { isAdmin, isStaff, user } = useAuth();
   const { events, createEvent, updateEvent, deleteEvent, isCreating, isUpdating, isDeleting } = useEvents();
-  const { shifts, requestShift, isRequesting } = useShifts();
+  const { shifts } = useShifts();
+  const {
+    myApplications,
+    applyToShift,
+    cancelMyApplication,
+    isApplying,
+    isCancelling,
+  } = useShiftApplications();
   const { toast } = useToast();
   const { retryAfter, checkLimit } = useRateLimit('createEvent');
   const isMobile = useIsMobile();
