@@ -184,7 +184,7 @@ export function resetRateLimit(action: RateLimitAction): void {
 export function useRateLimit(action: RateLimitAction = 'default') {
   const [isLimited, setIsLimited] = useState(false);
   const [retryAfter, setRetryAfter] = useState('');
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // Cleanup timer on unmount
   useEffect(() => {
