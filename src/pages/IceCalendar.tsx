@@ -334,6 +334,16 @@ const IceCalendar = () => {
     }
   };
 
+  const handleCancelApplication = async (appId: string) => {
+    try {
+      await cancelMyApplication(appId);
+      toast({ title: 'Zájem zrušen' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nepodařilo se zrušit přihlášku.';
+      toast({ title: 'Chyba', description: message, variant: 'destructive' });
+    }
+  };
+
   const handleDayClick = (day: Date) => {
     const dayEvents = getEventsForDay(day);
     const dayShifts = (isAdmin || isStaff) ? getVisibleShiftsForDay(day) : [];
