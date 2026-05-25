@@ -63,10 +63,51 @@ export const useEvents = () => {
         .single();
 
       if (error) throw error;
+
+      // Sync shift slots to match new required_staff (commercial/recruitment only)
+      try {
+        const eventType = (updates.event_type ?? data.event_type) as string;
+        if (eventType === 'commercial' || eventType === 'recruitment') {
+          const desired = updates.required_staff ?? data.required_staff ?? 0;
+
+          const { data: existing, error: fetchErr } = await supabase
+            .from('shifts')
+            .select('id, status')
+            .eq('event_id', id);
+          if (fetchErr) throw fetchErr;
+
+          const currentCount = existing?.length ?? 0;
+          const openIds = (existing ?? [])
+            .filter((s) => s.status === 'open')
+            .map((s) => s.id);
+
+          if (desired > currentCount) {
+            const toInsert = Array.from({ length: desired - currentCount }, () => ({
+              event_id: id,
+              status: 'open' as const,
+            }));
+            const { error: insErr } = await supabase.from('shifts').insert(toInsert);
+            if (insErr) throw insErr;
+          } else if (desired < currentCount) {
+            const removeCount = Math.min(currentCount - desired, openIds.length);
+            if (removeCount > 0) {
+              const { error: delErr } = await supabase
+                .from('shifts')
+                .delete()
+                .in('id', openIds.slice(0, removeCount));
+              if (delErr) throw delErr;
+            }
+          }
+        }
+      } catch (syncErr) {
+        console.error('Shift slot sync failed:', syncErr);
+      }
+
       return data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['events'] });
+      queryClient.invalidateQueries({ queryKey: ['shifts'] });
     },
   });
 

@@ -1,57 +1,59 @@
 ## Cíl
 
-Sjednotit logiku přihlašování na směny v Kalendáři s tou v Směnách a povolit opětovné přihlášení po zamítnutí nebo odebrání.
+Při úpravě události (Admin změní Konfiguraci týmu) synchronizovat řádky v tabulce `shifts` tak, aby jejich počet odpovídal nově požadovanému počtu brigádníků. Bez zásahu do DB triggerů — vše ve frontend logice po `updateEvent`.
 
----
+## Důležitá poznámka k datovému modelu
 
-## 1) `src/hooks/useShiftApplications.ts` — upsert v `applyToShift`
+Tabulka `shifts` **nemá sloupec `role`** — sloty jsou bez rozlišení role (viz schéma: `id, event_id, status, claimed_by, ...`). Per‑role konfigurace žije pouze v `events.role_reqs` (JSONB) a slouží UI. Synchronizace proto poběží podle **celkového počtu** slotů na event (`getTotalStaff()` = součet `role_reqs`, tj. hodnota ukládaná do `events.required_staff`).
 
-Současná verze dělá `INSERT`, což padá na `UNIQUE (shift_id, user_id)`, pokud uživatel měl dřív přihlášku (i `rejected` / `cancelled`).
+Pokud později přibude `shifts.role`, sync se rozšíří na párování per role — teď to není možné bez migrace, kterou jsi v zadání vyloučil.
 
-Změna:
-- Před vložením zkontrolovat existující záznam pro `(shift_id, user_id)`.
-  - Pokud existuje → `UPDATE` status na `pending` (a `updated_at` se přepíše triggerem).
-  - Pokud neexistuje → `INSERT` jako dnes.
-- Alternativně použít `.upsert({...}, { onConflict: 'shift_id,user_id' })` s `status: 'pending'`. Zvolím tuto variantu — jeden round-trip.
-- Zachovat hlášení chyb, ale odstranit speciální handling `23505`.
+## 1) `src/hooks/useEvents.ts` — sync slotů v `updateEvent`
 
-## 2) `src/pages/IceCalendar.tsx` — napojit nový hook
+Po úspěšném `UPDATE events`:
 
-Nahradit volání `requestShift` z `useShifts` za `applyToShift` z `useShiftApplications` a zrcadlit UI ze `Shifts.tsx`.
+1. Načíst stávající sloty:
+   ```ts
+   const { data: existing } = await supabase
+     .from('shifts')
+     .select('id, status')
+     .eq('event_id', id);
+   ```
+2. Spočítat `desired = updates.required_staff ?? data.required_staff ?? 0` (pro `commercial` / `recruitment`; pro ostatní typy přeskočit sync).
+3. `currentCount = existing.length`, `openIds = existing.filter(s => s.status === 'open').map(s => s.id)`.
+4. **Přidat** (`desired > currentCount`):
+   ```ts
+   const toInsert = Array.from({ length: desired - currentCount }, () => ({
+     event_id: id, status: 'open' as const,
+   }));
+   await supabase.from('shifts').insert(toInsert);
+   ```
+5. **Odebrat** (`desired < currentCount`):
+   - `removeCount = Math.min(currentCount - desired, openIds.length)`
+   - `await supabase.from('shifts').delete().in('id', openIds.slice(0, removeCount))`
+   - Pokud `removeCount < (currentCount - desired)` (tj. víc obsazených než nová kapacita), tiše ponechat — admin musí nejprve obsazené ručně uvolnit. (Volitelně vrátit warning přes toast v UI, ale to je mimo zadání.)
+6. Invalidace cache:
+   ```ts
+   queryClient.invalidateQueries({ queryKey: ['shifts'] });
+   queryClient.invalidateQueries({ queryKey: ['events'] });
+   ```
+   (`events` invalidace už tam je, doplnit `shifts`.)
 
-Změny:
-- Importovat `useShiftApplications`, získat `myApplications`, `applyToShift`, `cancelMyApplication`, `isApplying`, `isCancelling`.
-- Odstranit `requestShift, isRequesting` z destrukce `useShifts`.
-- `handleRequestShift(shiftId)` → volá `applyToShift(shiftId)`, toast „Přihláška odeslána! Čeká na schválení adminem."
-- Přidat `handleCancelApplication(appId)` → volá `cancelMyApplication`.
-- `myEventIds` ponechat tak, jak je (vychází ze `shifts.claimed_by`, ne z aplikací) — tím zůstává směna viditelná i po `rejected`/`cancelled`.
-- `canRequestShift(shift)` ponechat (true pro grouped, jinak `status === 'open' && !myEventIds.has(event_id)`).
-- V buňce směny (řádky 989–1034) místo jediného tlačítka „Přihlásit" vykreslit stejný switch jako v `Shifts.tsx`:
-  - Najít `myApp = myApplications.find(a => a.shift_id === shiftIdToRequest && (a.status === 'pending' || a.status === 'approved'))`.
-  - Pokud `pending` → badge „Čeká na schválení" + tlačítko „Zrušit zájem" (volá `handleCancelApplication`).
-  - Pokud `approved` → badge „Schváleno" (read-only).
-  - Jinak (žádná aplikace, `rejected`, `cancelled`) → tlačítko „Mám zájem" (disabled při `isApplying`).
-- Pro grouped entry (více volných slotů na akci) použít první `_availableShiftIds[0]` jako cíl aplikace (zachovat dnešní chování), `myApp` u grouped záznamu se nehledá.
+Celý sync zabalit do try/catch a chybu jen logovat — update události samotný nesmí spadnout kvůli sync chybě (akce už byla uložená).
 
-## 3) `src/pages/Shifts.tsx` — povolit re-apply
+## 2) `src/pages/IceCalendar.tsx`
 
-Logika dnes už zobrazuje „Mám zájem", když `myApp` (pending/approved) neexistuje, takže pro `rejected`/`cancelled` aplikace se tlačítko ukáže automaticky. Po opravě upsertu v bodě 1 bude re-apply fungovat bez dalších změn.
-
-Drobná úprava jen pro jistotu:
-- V sekci „Mám zájem" tlačítko jasně vystihne re-apply — text necháme „Mám zájem" (jednotné), žádné rozlišení.
-
----
+Bez změn — `handleEditEvent` posílá nové `required_staff` přes `updateEvent`, hook se postará o zbytek.
 
 ## Co se NEdotýká
 
-- Databáze, RLS, triggery — beze změny.
-- `useShifts.ts` — beze změny (`requestShift` zůstane jako legacy alias pro zpětnou kompatibilitu, jen se z Kalendáře přestane volat).
-- Admin sekce (zájemci, odebrat) — beze změny.
-
----
+- DB migrace, triggery, RLS — beze změny.
+- `handle_new_commercial_event` trigger (vytvoření slotů při INSERTu) — beze změny.
+- `Shifts.tsx`, `useShifts.ts`, `useShiftApplications.ts` — beze změny.
 
 ## Akceptační kritéria
 
-- Z detailu dne v Kalendáři vidí brigádník u volné směny tlačítko „Mám zájem". Po kliku se zobrazí „Čeká na schválení" + „Zrušit zájem", směna zůstává viditelná dalším zájemcům.
-- Když admin schválí jiného brigádníka (a tím tohoto zamítne), uvidí dotyčný u směny opět „Mám zájem" jakmile admin schváleného odebere a směna se vrátí do `open`.
-- `applyToShift` nepadá na unikátním klíči ani při opakovaných pokusech.
+- Zvýšení počtu brigádníků v editaci → v `shifts` přibydou nové `open` řádky, v Kalendáři i Směnách se okamžitě objeví.
+- Snížení počtu → smažou se jen `open` sloty (claimed/completed zůstanou nedotčené).
+- Při totálním updatu nedojde k duplicitnímu volání invalidate (queryClient.invalidateQueries je idempotentní).
+- Pokud admin sníží kapacitu pod počet již obsazených, systém smaže všechny volné `open` sloty, obsazené ponechá.
