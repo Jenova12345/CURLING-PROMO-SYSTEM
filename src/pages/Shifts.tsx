@@ -144,27 +144,6 @@ const Shifts = () => {
     }
   }, [isAdmin, isStaff, isLoading, pendingShifts.length, eventsToComplete.length, activeTab]);
 
-  const handleRequestShift = async (shiftId: string) => {
-    // Rate limiting
-    if (!shiftActionRateLimit.checkLimit()) {
-      toast({
-        title: 'Příliš mnoho požadavků',
-        description: `Zkuste to znovu za ${shiftActionRateLimit.retryAfter}.`,
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    // Validate shift ID
-    const validation = safeValidate(shiftRequestSchema, { shiftId });
-    if (!validation.success) {
-      toast({
-        title: 'Chyba validace',
-        description: validation.error,
-        variant: 'destructive',
-      });
-      return;
-    }
 
   const handleRequestShift = async (shiftId: string) => {
     if (!shiftActionRateLimit.checkLimit()) {
