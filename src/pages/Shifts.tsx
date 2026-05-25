@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useShifts } from '@/hooks/useShifts';
+import { useShiftApplications } from '@/hooks/useShiftApplications';
 import { usePayouts } from '@/hooks/usePayouts';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
