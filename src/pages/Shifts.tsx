@@ -166,36 +166,71 @@ const Shifts = () => {
       return;
     }
 
-    try {
-      await requestShift(validation.data.shiftId);
+  const handleRequestShift = async (shiftId: string) => {
+    if (!shiftActionRateLimit.checkLimit()) {
       toast({
-        title: 'Přihláška odeslána!',
-        description: 'Čeká na schválení adminem.',
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Nepodařilo se přihlásit na směnu.';
-      toast({
-        title: 'Chyba',
-        description: message,
+        title: 'Příliš mnoho požadavků',
+        description: `Zkuste to znovu za ${shiftActionRateLimit.retryAfter}.`,
         variant: 'destructive',
       });
+      return;
+    }
+    const validation = safeValidate(shiftRequestSchema, { shiftId });
+    if (!validation.success) {
+      toast({ title: 'Chyba validace', description: validation.error, variant: 'destructive' });
+      return;
+    }
+    try {
+      await applyToShift(validation.data.shiftId);
+      toast({ title: 'Přihláška odeslána!', description: 'Čeká na schválení adminem.' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nepodařilo se přihlásit.';
+      toast({ title: 'Chyba', description: message, variant: 'destructive' });
     }
   };
 
-  const handleApproveShift = async (shiftId: string) => {
+  const handleCancelApplication = async (appId: string) => {
     try {
-      await approveShift(shiftId);
-      toast({
-        title: 'Směna schválena!',
-        description: 'Brigádník byl přiřazen na směnu.',
-      });
+      await cancelMyApplication(appId);
+      toast({ title: 'Přihláška zrušena' });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Nepodařilo se schválit směnu.';
-      toast({
-        title: 'Chyba',
-        description: message,
-        variant: 'destructive',
-      });
+      const message = error instanceof Error ? error.message : 'Nepodařilo se zrušit přihlášku.';
+      toast({ title: 'Chyba', description: message, variant: 'destructive' });
+    }
+  };
+
+  const handleApproveApplication = async (appId: string) => {
+    try {
+      await approveApplication(appId);
+      toast({ title: 'Přihláška schválena', description: 'Brigádník byl přiřazen na směnu.' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nepodařilo se schválit přihlášku.';
+      toast({ title: 'Chyba', description: message, variant: 'destructive' });
+    }
+  };
+
+  const handleRejectApplication = async (appId: string) => {
+    try {
+      await rejectApplication(appId);
+      toast({ title: 'Přihláška zamítnuta' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nepodařilo se zamítnout přihlášku.';
+      toast({ title: 'Chyba', description: message, variant: 'destructive' });
+    }
+  };
+
+  const handleRevokeApproval = async (shiftId: string) => {
+    const app = applicationsByShift[shiftId]?.find((a) => a.status === 'approved');
+    if (!app) {
+      toast({ title: 'Chyba', description: 'Schválená přihláška nenalezena.', variant: 'destructive' });
+      return;
+    }
+    try {
+      await revokeApproval(app.id);
+      toast({ title: 'Brigádník odebrán', description: 'Směna je opět volná.' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nepodařilo se odebrat brigádníka.';
+      toast({ title: 'Chyba', description: message, variant: 'destructive' });
     }
   };
 
