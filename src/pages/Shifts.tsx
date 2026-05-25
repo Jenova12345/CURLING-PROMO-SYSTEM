@@ -948,10 +948,10 @@ const Shifts = () => {
           </TabsContent>
         )}
 
-        {/* Pending Shifts (Admin) */}
+        {/* Pending Applications (Admin) */}
         {isAdmin && (
           <TabsContent value="pending" className="space-y-4">
-            {pendingShifts.length === 0 ? (
+            {pendingApplications.length === 0 ? (
               <Card>
                 <CardContent className="flex flex-col items-center justify-center py-12">
                   <UserCheck className="h-12 w-12 text-muted-foreground mb-4" />
@@ -963,56 +963,91 @@ const Shifts = () => {
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <AlertCircle className="h-5 w-5 text-yellow-500" />
-                    Brigádníci k potvrzení
+                    Zájemci o směny
                   </CardTitle>
-                  <CardDescription>Brigádníci čekající na schválení směny</CardDescription>
+                  <CardDescription>
+                    Brigádníci, kteří se přihlásili na volné směny. Vyberte, kdo směnu dostane.
+                  </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {pendingShifts.map((shift) => (
-                    <div key={shift.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-lg bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-900 gap-4">
-                      <div className="flex items-start gap-4">
-                        <div className={`w-3 h-3 rounded-full mt-1.5 ${statusColors.pending}`} />
-                        <div>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <p className="font-medium">{shift.event?.title || 'Směna'}</p>
-                            {(shift as any).required_role && (
-                              <Badge className={`${staffRoleColors[(shift as any).required_role] || 'bg-gray-500'} text-white text-xs`}>
-                                {staffRoleLabels[(shift as any).required_role] || (shift as any).required_role}
+                  {Object.entries(
+                    pendingApplications.reduce((acc, app) => {
+                      if (!acc[app.shift_id]) acc[app.shift_id] = [];
+                      acc[app.shift_id].push(app);
+                      return acc;
+                    }, {} as Record<string, typeof pendingApplications>)
+                  ).map(([shiftId, apps]) => {
+                    const shift = shifts.find((s) => s.id === shiftId);
+                    if (!shift) return null;
+                    const requiredRole = (shift as any).required_role;
+                    return (
+                      <div
+                        key={shiftId}
+                        className="p-4 rounded-lg bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-900 space-y-3"
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className={`w-3 h-3 rounded-full mt-1.5 ${statusColors.pending}`} />
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="font-medium">{shift.event?.title || 'Směna'}</p>
+                              {requiredRole && (
+                                <Badge className={`${staffRoleColors[requiredRole] || 'bg-gray-500'} text-white text-xs`}>
+                                  {staffRoleLabels[requiredRole] || requiredRole}
+                                </Badge>
+                              )}
+                              <Badge variant="outline" className="text-xs">
+                                {apps.length} {apps.length === 1 ? 'zájemce' : 'zájemců'}
                               </Badge>
-                            )}
+                            </div>
+                            <p className="text-sm text-muted-foreground">
+                              {shift.event &&
+                                format(new Date(shift.event.start_time), 'd. MMMM yyyy, HH:mm', { locale: cs })}
+                            </p>
                           </div>
-                          <p className="text-sm text-muted-foreground">
-                            {shift.event && format(new Date(shift.event.start_time), 'd. MMMM yyyy, HH:mm', { locale: cs })}
-                          </p>
-                          <p className="text-sm font-medium text-yellow-700 dark:text-yellow-400 mt-1">
-                            Brigádník: {getStaffName(shift)}
-                          </p>
+                        </div>
+
+                        <div className="space-y-2 ml-6">
+                          {apps.map((app) => (
+                            <div
+                              key={app.id}
+                              className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-background rounded-md border"
+                            >
+                              <div>
+                                <p className="font-medium text-sm">{app.applicant_name || 'Neznámý'}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  Přihlášen{' '}
+                                  {format(new Date(app.created_at), 'd. MMM HH:mm', { locale: cs })}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleRejectApplication(app.id)}
+                                  disabled={isRejectingApp}
+                                  className="text-red-600 border-red-300 hover:bg-red-50"
+                                >
+                                  <XCircle className="h-4 w-4 mr-1" />
+                                  Zamítnout
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleApproveApplication(app.id)}
+                                  disabled={isApprovingApp}
+                                  className="bg-green-600 hover:bg-green-700"
+                                >
+                                  <CheckCircle className="h-4 w-4 mr-1" />
+                                  Schválit
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2 ml-7 sm:ml-0">
-                        <Button 
-                          variant="outline" 
-                          size="sm"
-                          onClick={() => handleRejectShift(shift.id)}
-                          disabled={isRejecting}
-                          className="text-red-600 border-red-300 hover:bg-red-50"
-                        >
-                          <XCircle className="h-4 w-4 mr-1" />
-                          Odmítnout
-                        </Button>
-                        <Button 
-                          size="sm"
-                          onClick={() => handleApproveShift(shift.id)}
-                          disabled={isApproving}
-                          className="bg-green-600 hover:bg-green-700"
-                        >
-                          <CheckCircle className="h-4 w-4 mr-1" />
-                          Schválit
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </CardContent>
+
               </Card>
             )}
           </TabsContent>
