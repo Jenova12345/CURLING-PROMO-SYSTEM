@@ -54,6 +54,9 @@ const Dashboard = () => {
         </p>
       </div>
 
+      {/* New shifts alert (workers) */}
+      <NewShiftsAlert />
+
       {/* Stats Grid */}
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
         <Card>
