@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useEvents } from '@/hooks/useEvents';
 import { useShifts } from '@/hooks/useShifts';
+import { useShiftApplications } from '@/hooks/useShiftApplications';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -28,7 +29,14 @@ type Event = Database['public']['Tables']['events']['Row'] & { event_type: Event
 const IceCalendar = () => {
   const { isAdmin, isStaff, user } = useAuth();
   const { events, createEvent, updateEvent, deleteEvent, isCreating, isUpdating, isDeleting } = useEvents();
-  const { shifts, requestShift, isRequesting } = useShifts();
+  const { shifts } = useShifts();
+  const {
+    myApplications,
+    applyToShift,
+    cancelMyApplication,
+    isApplying,
+    isCancelling,
+  } = useShiftApplications();
   const { toast } = useToast();
   const { retryAfter, checkLimit } = useRateLimit('createEvent');
   const isMobile = useIsMobile();
@@ -311,7 +319,7 @@ const IceCalendar = () => {
 
   const handleRequestShift = async (shiftId: string) => {
     try {
-      await requestShift(shiftId);
+      await applyToShift(shiftId);
       toast({
         title: 'Přihláška odeslána!',
         description: 'Čeká na schválení adminem.',
@@ -323,6 +331,16 @@ const IceCalendar = () => {
         description: message,
         variant: 'destructive',
       });
+    }
+  };
+
+  const handleCancelApplication = async (appId: string) => {
+    try {
+      await cancelMyApplication(appId);
+      toast({ title: 'Zájem zrušen' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nepodařilo se zrušit přihlášku.';
+      toast({ title: 'Chyba', description: message, variant: 'destructive' });
     }
   };
 
@@ -1020,15 +1038,47 @@ const IceCalendar = () => {
                                   </div>
                                 </div>
 
-                                {isStaff && canRequestShift(shift) && (
-                                  <Button 
-                                    size="sm"
-                                    onClick={() => handleRequestShift(shiftIdToRequest)}
-                                    disabled={isRequesting}
-                                  >
-                                    {isRequesting ? 'Zpracování...' : 'Přihlásit'}
-                                  </Button>
-                                )}
+                                {isStaff && canRequestShift(shift) && (() => {
+                                  const myApp = !isGrouped
+                                    ? myApplications.find(
+                                        (a) => a.shift_id === shift.id && (a.status === 'pending' || a.status === 'approved')
+                                      )
+                                    : undefined;
+                                  if (myApp?.status === 'approved') {
+                                    return (
+                                      <Badge variant="outline" className="border-green-500 text-green-600">
+                                        Schváleno
+                                      </Badge>
+                                    );
+                                  }
+                                  if (myApp?.status === 'pending') {
+                                    return (
+                                      <div className="flex items-center gap-2">
+                                        <Badge variant="outline" className="border-yellow-500 text-yellow-600">
+                                          <Clock className="h-3 w-3 mr-1" />
+                                          Čeká na schválení
+                                        </Badge>
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={() => handleCancelApplication(myApp.id)}
+                                          disabled={isCancelling}
+                                        >
+                                          Zrušit zájem
+                                        </Button>
+                                      </div>
+                                    );
+                                  }
+                                  return (
+                                    <Button
+                                      size="sm"
+                                      onClick={() => handleRequestShift(shiftIdToRequest)}
+                                      disabled={isApplying}
+                                    >
+                                      {isApplying ? 'Zpracování...' : 'Mám zájem'}
+                                    </Button>
+                                  );
+                                })()}
                               </div>
                             );
                           })}
