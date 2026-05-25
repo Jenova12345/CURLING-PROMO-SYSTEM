@@ -40,7 +40,7 @@ export const useEvents = () => {
         .insert({
           ...eventData,
           created_by: user?.id,
-        })
+        } as any)
         .select()
         .single();
 
