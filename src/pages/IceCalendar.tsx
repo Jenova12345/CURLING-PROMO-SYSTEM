@@ -319,7 +319,7 @@ const IceCalendar = () => {
 
   const handleRequestShift = async (shiftId: string) => {
     try {
-      await requestShift(shiftId);
+      await applyToShift(shiftId);
       toast({
         title: 'Přihláška odeslána!',
         description: 'Čeká na schválení adminem.',
