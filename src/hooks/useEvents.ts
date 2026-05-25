@@ -57,7 +57,7 @@ export const useEvents = () => {
     mutationFn: async ({ id, ...updates }: Partial<CreateEventData> & { id: string }) => {
       const { data, error } = await supabase
         .from('events')
-        .update(updates)
+        .update(updates as any)
         .eq('id', id)
         .select()
         .single();
