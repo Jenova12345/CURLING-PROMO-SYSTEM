@@ -1038,15 +1038,47 @@ const IceCalendar = () => {
                                   </div>
                                 </div>
 
-                                {isStaff && canRequestShift(shift) && (
-                                  <Button 
-                                    size="sm"
-                                    onClick={() => handleRequestShift(shiftIdToRequest)}
-                                    disabled={isRequesting}
-                                  >
-                                    {isRequesting ? 'Zpracování...' : 'Přihlásit'}
-                                  </Button>
-                                )}
+                                {isStaff && canRequestShift(shift) && (() => {
+                                  const myApp = !isGrouped
+                                    ? myApplications.find(
+                                        (a) => a.shift_id === shift.id && (a.status === 'pending' || a.status === 'approved')
+                                      )
+                                    : undefined;
+                                  if (myApp?.status === 'approved') {
+                                    return (
+                                      <Badge variant="outline" className="border-green-500 text-green-600">
+                                        Schváleno
+                                      </Badge>
+                                    );
+                                  }
+                                  if (myApp?.status === 'pending') {
+                                    return (
+                                      <div className="flex items-center gap-2">
+                                        <Badge variant="outline" className="border-yellow-500 text-yellow-600">
+                                          <Clock className="h-3 w-3 mr-1" />
+                                          Čeká na schválení
+                                        </Badge>
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={() => handleCancelApplication(myApp.id)}
+                                          disabled={isCancelling}
+                                        >
+                                          Zrušit zájem
+                                        </Button>
+                                      </div>
+                                    );
+                                  }
+                                  return (
+                                    <Button
+                                      size="sm"
+                                      onClick={() => handleRequestShift(shiftIdToRequest)}
+                                      disabled={isApplying}
+                                    >
+                                      {isApplying ? 'Zpracování...' : 'Mám zájem'}
+                                    </Button>
+                                  );
+                                })()}
                               </div>
                             );
                           })}
