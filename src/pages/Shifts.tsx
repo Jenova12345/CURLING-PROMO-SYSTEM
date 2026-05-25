@@ -1185,23 +1185,47 @@ const Shifts = () => {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   {upcomingShiftsByEvent.map((eventItem) => (
-                    <div key={eventItem.eventId} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900 gap-4">
+                    <div key={eventItem.eventId} className="p-4 rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900 space-y-3">
                       <div className="flex items-start gap-4">
                         <div className="w-3 h-3 rounded-full mt-1.5 bg-blue-500" />
-                        <div>
+                        <div className="flex-1">
                           <p className="font-medium">{eventItem.event?.title || 'Akce'}</p>
                           <p className="text-sm text-muted-foreground">
                             {eventItem.event && format(new Date(eventItem.event.start_time), 'd. MMMM yyyy, HH:mm', { locale: cs })}
                           </p>
-                          <p className="text-sm font-medium text-blue-700 dark:text-blue-400 mt-1">
-                            Brigádníci ({eventItem.shifts.length}): {eventItem.staffNames.join(', ')}
-                          </p>
                         </div>
+                        <Badge variant="outline" className="border-blue-500 text-blue-600">
+                          <CheckCircle className="h-3 w-3 mr-1" />
+                          Připraveno
+                        </Badge>
                       </div>
-                      <Badge variant="outline" className="border-blue-500 text-blue-600">
-                        <CheckCircle className="h-3 w-3 mr-1" />
-                        Připraveno
-                      </Badge>
+                      <div className="ml-6 space-y-2">
+                        {eventItem.shifts.map((s: any) => (
+                          <div
+                            key={s.id}
+                            className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2 bg-background rounded border"
+                          >
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-sm font-medium">{s.claimed_profile?.full_name || 'Neznámý'}</span>
+                              {s.required_role && (
+                                <Badge className={`${staffRoleColors[s.required_role] || 'bg-gray-500'} text-white text-xs`}>
+                                  {staffRoleLabels[s.required_role] || s.required_role}
+                                </Badge>
+                              )}
+                            </div>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleRevokeApproval(s.id)}
+                              disabled={isRevoking}
+                              className="text-red-600 border-red-300 hover:bg-red-50"
+                            >
+                              <XCircle className="h-4 w-4 mr-1" />
+                              Odebrat
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   ))}
                 </CardContent>
