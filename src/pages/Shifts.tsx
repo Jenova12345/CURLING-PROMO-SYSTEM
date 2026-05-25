@@ -638,14 +638,38 @@ const Shifts = () => {
                               {eventItem.hourlyRate} Kč/h
                             </span>
                           </div>
-                          <Button 
-                            onClick={() => handleRequestShift(shift.id)} 
-                            disabled={isRequesting}
-                            size="sm"
-                            className="whitespace-nowrap"
-                          >
-                            {isRequesting ? 'Zpracování...' : 'Přihlásit se'}
-                          </Button>
+                          {(() => {
+                            const myApp = myApplications.find(
+                              (a) => a.shift_id === shift.id && (a.status === 'pending' || a.status === 'approved')
+                            );
+                            if (myApp?.status === 'pending') {
+                              return (
+                                <div className="flex items-center gap-2">
+                                  <Badge variant="outline" className="border-yellow-500 text-yellow-600">
+                                    <Clock className="h-3 w-3 mr-1" />
+                                    Čeká na schválení
+                                  </Badge>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleCancelApplication(myApp.id)}
+                                  >
+                                    Zrušit zájem
+                                  </Button>
+                                </div>
+                              );
+                            }
+                            return (
+                              <Button
+                                onClick={() => handleRequestShift(shift.id)}
+                                disabled={isApplying}
+                                size="sm"
+                                className="whitespace-nowrap"
+                              >
+                                {isApplying ? 'Zpracování...' : 'Mám zájem'}
+                              </Button>
+                            );
+                          })()}
                         </div>
                       ))}
                     </div>
