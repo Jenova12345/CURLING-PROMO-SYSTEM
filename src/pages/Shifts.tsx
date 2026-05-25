@@ -79,6 +79,20 @@ const Shifts = () => {
     isLoading 
   } = useShifts();
   const { myPayouts } = usePayouts();
+  const {
+    myApplications,
+    applicationsByShift,
+    pendingApplications,
+    applyToShift,
+    cancelMyApplication,
+    approveApplication,
+    rejectApplication,
+    revokeApproval,
+    isApplying,
+    isApproving: isApprovingApp,
+    isRejecting: isRejectingApp,
+    isRevoking,
+  } = useShiftApplications();
   const { toast } = useToast();
 
   // Rate limiting hooks
