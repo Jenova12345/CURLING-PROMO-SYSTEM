@@ -1,9 +1,29 @@
+-- #############################################################################
+-- ##  ⚠⚠⚠  ZASTARALÉ — NESPOUŠTĚT!  (DEPRECATED 2026-07-15)  ⚠⚠⚠            ##
+-- #############################################################################
+-- ##                                                                         ##
+-- ##  Tento skript je ODLOŽENÝ a NESMÍ se spouštět proti žádné databázi.     ##
+-- ##                                                                         ##
+-- ##  DŮVODY:                                                                ##
+-- ##  1) BEZPEČNOST: obsahuje `GRANT ALL ... TO anon` (níže) — dal by        ##
+-- ##     anonymním klientům plný přístup ke všem tabulkám a OBEŠEL by RLS.    ##
+-- ##  2) NEAKTUÁLNÍ SCHÉMA: enum `app_role` (jen 5 rolí) a `event_type`      ##
+-- ##     (jen 3 typy) nesedí s produkcí (8 rolí / 4 typy); chybí sloupce     ##
+-- ##     events.role_reqs a shifts.required_role. Viz docs/SCHEMA_DRIFT.md.  ##
+-- ##  3) NAHRAZENO: jediný zdroj pravdy pro schéma je nyní                    ##
+-- ##     supabase/migrations/20260715000000_baseline_production.sql          ##
+-- ##                                                                         ##
+-- ##  Soubor ponecháváme jen jako historický artefakt (nic nemažeme).        ##
+-- ##  Pro nasazení schématu použij Supabase CLI + migrace, viz DEPLOYMENT.md.##
+-- ##                                                                         ##
+-- #############################################################################
+
 -- =====================================================
 -- MLADÉ KAMENY - FINÁLNÍ PRODUKČNÍ MIGRACE
 -- =====================================================
 -- Verze: 2.0 (Production Ready)
 -- Datum: 2025-01
--- 
+--
 -- INSTRUKCE:
 -- 1. Spusť tento skript na PRÁZDNÉ Supabase databázi
 -- 2. Po spuštění nastav admina pomocí SQL příkazu v sekci na konci

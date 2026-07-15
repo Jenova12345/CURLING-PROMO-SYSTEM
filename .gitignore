@@ -12,6 +12,12 @@ dist
 dist-ssr
 *.local
 
+# Lokální env — obsahuje klíče, NEPATŘÍ do gitu (produkční hodnoty jsou v Netlify env).
+# .env.example (šablona bez tajemství) se verzuje schválně.
+.env
+.env.*
+!.env.example
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -22,3 +28,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Zálohy databáze — obsahují citlivá data (čísla účtů členů). NIKDY do gitu!
+backups/

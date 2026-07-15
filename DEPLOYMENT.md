@@ -29,9 +29,26 @@ Tento dokument popisuje postup pro nasazení aplikace na vlastní infrastrukturu
 
 ## Krok 2: Spuštění databázového schématu
 
-1. V Supabase dashboard jdi do **SQL Editor**
-2. Zkopíruj celý obsah souboru `MIGRATION_SCRIPT.sql`
-3. Vlož a spusť - vytvoří všechny tabulky, funkce, triggery, RLS politiky a views
+Jediný zdroj pravdy pro schéma je složka **`supabase/migrations/`** — konkrétně baseline
+`20260715000000_baseline_production.sql` (přesný stav produkce) + případné novější migrace.
+
+> ⚠️ **NEPOUŽÍVEJ `MIGRATION_SCRIPT.sql.DEPRECATED`.** Je zastaralý, nesedí s produkčním
+> schématem a obsahuje `GRANT ALL ... TO anon` (obchází RLS). Nespouštět.
+
+**Doporučený postup (Supabase CLI):**
+```bash
+# jednorázově: propoj repo s cloudovým projektem
+supabase link --project-ref <PROJECT_REF>
+
+# aplikace migrací z repa na DB
+supabase db push
+```
+
+Pro lokální vývoj reprodukuje schéma na čisté DB příkaz `supabase db reset`
+(spustí baseline + migrace). Viz `docs/STAV.md` → vývojové prostředí.
+
+> Pozn.: `handle_new_user` trigger visí na `auth.users` (mimo schéma `public`), takže není
+> v baseline — při čisté obnově ho vytvoř ručně, viz `docs/SCHEMA_DRIFT.md`.
 
 ---
 
@@ -69,6 +86,13 @@ V **Settings → API** zkopíruj:
 ### 5a. Environment variables
 1. Zkopíruj `.env.example` jako `.env`
 2. Vyplň hodnoty z kroku 4
+
+> 🔐 **Klíče a git.** `.env` je v `.gitignore` a **NEpatří do gitu** — je jen pro lokální
+> vývoj. Produkční hodnoty (`VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`,
+> `VITE_SUPABASE_PROJECT_ID`) se nastavují v **Netlify → Site settings → Environment
+> variables**, odkud je Netlify vloží do buildu (přebíjí repo `.env`).
+> Do frontendu patří **jen anon/publishable** klíč. **`service_role` klíč NIKDY** není
+> ve frontendu, v `.env` ani v gitu — používá se výhradně server-side.
 
 ### 5b. Odstranění Lovable závislostí
 
@@ -182,7 +206,7 @@ WHERE user_id = (SELECT id FROM auth.users WHERE email = 'trener@email.cz');
 ## Checklist
 
 - [ ] Vytvořen Supabase projekt
-- [ ] Spuštěn MIGRATION_SCRIPT.sql
+- [ ] Aplikováno schéma z `supabase/migrations/` (baseline) přes Supabase CLI
 - [ ] Nastaveny Auth URL redirects
 - [ ] Kód nahrán na GitHub
 - [ ] Odstraněn lovable-tagger z kódu
@@ -198,7 +222,7 @@ WHERE user_id = (SELECT id FROM auth.users WHERE email = 'trener@email.cz');
 ```
 ├── src/                          # Frontend kód
 ├── public/                       # Statické soubory
-├── MIGRATION_SCRIPT.sql          # Databázové schéma
+├── supabase/migrations/          # Databázové schéma (baseline + migrace) — ZDROJ PRAVDY
 ├── package.json                  # (upravit - odstranit lovable-tagger)
 ├── vite.config.ts                # (upravit - odstranit componentTagger)
 ├── tailwind.config.ts
