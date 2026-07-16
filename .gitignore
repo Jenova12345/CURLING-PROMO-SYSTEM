@@ -14,9 +14,16 @@ dist-ssr
 
 # Lokální env — obsahuje klíče, NEPATŘÍ do gitu (produkční hodnoty jsou v Netlify env).
 # .env.example (šablona bez tajemství) se verzuje schválně.
+# .env.local míří na lokální Supabase (dev) — taky se necommituje (spadá pod .env.*).
 .env
 .env.*
+.env.local
 !.env.example
+
+# Supabase lokální stav (generuje CLI — nepatří do gitu)
+supabase/.branches
+supabase/.temp
+supabase/.env
 
 # Editor directories and files
 .vscode/*
