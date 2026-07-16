@@ -22,12 +22,17 @@ u vyřešených bodů je poznámka.
 - Rozhodující důkaz: tento projekt obsahuje **živá, aktuální data** (směny a akce až do července 2026) —
   do něj reálně zapisuje běžící aplikace. To je jediný projekt viditelný v našem Supabase účtu a je
   z něj i záloha z Fáze 0. **Záloha tedy sedí na produkci.**
-- Repo naopak na několika místech odkazuje **zastaralý** projekt `raxbmhfnifplapnqczbg` (původní Lovable):
-  `.env`, `supabase/config.toml`, `preconnect` v `index.html`. Na živém webu se ale uplatní **Netlify
+- Repo dřív na několika místech odkazovalo **zastaralý** projekt `raxbmhfnifplapnqczbg` (původní Lovable):
+  `.env`, `supabase/config.toml`, `preconnect` v `index.html`. Na živém webu se uplatní **Netlify
   env proměnné**, které repo `.env` při buildu přebíjejí.
-- **Zbývá potvrdit (akce pro Tomáše):** Netlify → Site settings → Environment variables → hodnota
-  `VITE_SUPABASE_URL` / `VITE_SUPABASE_PROJECT_ID` (nebo `netlify env:list`). Po potvrzení srovnáme
-  repo (`.env`, `config.toml`, `index.html`) na `fareavttiwkamrukpfqk` — **zatím NEMĚNÍME**, jen evidujeme nesoulad.
+- **✅ POTVRZENO (16. 7. 2026):** Netlify env `VITE_SUPABASE_URL = https://fareavttiwkamrukpfqk.supabase.co`
+  → produkce je **`fareavttiwkamrukpfqk`**.
+- **✅ SROVNÁNO:** repo konfigurace přepnuta z `raxbmhfnifplapnqczbg` na `fareavttiwkamrukpfqk`:
+  - `supabase/config.toml` (`project_id`) — verzováno,
+  - `index.html` (`preconnect`) — verzováno,
+  - `.env` (URL, project_id, anon klíč) — jen lokálně (soubor je v `.gitignore`, do gitu nejde),
+  - `.env.example` — doplněna poznámka o produkčním projektu + Netlify (bez reálného klíče).
+  V repu už `raxbmhfnifplapnqczbg` **nikde nefiguruje** jako aktivní konfigurace.
 
 ### 2. Baseline migrace = jediný zdroj pravdy pro schéma
 
@@ -107,7 +112,7 @@ Aplikace je psaná **česky**, mobile-first (má `manifest.json`, `display: stan
 | Routing | `react-router-dom` v7 (BrowserRouter, SPA) |
 | Data | `@tanstack/react-query` v5 nad `@supabase/supabase-js` v2 |
 | Formuláře | `react-hook-form` + `zod` (schémata v `src/lib/validation.ts`) |
-| Backend | Supabase (Postgres, Auth, RLS) — v repu `raxbmhfnifplapnqczbg`, ale **produkce je `fareavttiwkamrukpfqk`** (repo hodnota je zastaralá, viz „Fáze 1" níže) |
+| Backend | Supabase (Postgres, Auth, RLS) — **produkce `fareavttiwkamrukpfqk`** (potvrzeno Netlify env; repo konfigurace ve Fázi 1 srovnána, viz níže) |
 | Hosting | Netlify, auto-deploy z GitHubu |
 
 Původ: **Lovable** (generátor). Zbytky jsou pořád v repu — viz Rizika.
@@ -388,7 +393,8 @@ Potřebné proměnné (vzor je v `.env.example`):
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | anon/public klíč |
 | `VITE_SUPABASE_PROJECT_ID` | ID projektu (kód ho ale reálně nepoužívá) |
 
-ID projektu `raxbmhfnifplapnqczbg` je navíc **natvrdo** ještě na dvou místech: `supabase/config.toml` a `preconnect` v `index.html`.
+ID projektu bylo natvrdo ještě na dvou místech (`supabase/config.toml` a `preconnect` v `index.html`) —
+ve Fázi 1 srovnáno ze zastaralého `raxbmhfnifplapnqczbg` na produkční `fareavttiwkamrukpfqk` (viz sekce „Fáze 1").
 
 **Co je potřeba pro lokální spuštění** (zatím nespuštěno, jen popis):
 
