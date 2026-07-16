@@ -60,6 +60,7 @@ jdou jako další migrace nad baseline, ne přepisem historie.
 1. Plánuj první. U každého netriviálního úkolu nejdřív připrav plán a nech si ho schválit, než začneš měnit kód nebo databázi.
 2. Agenti jako kontrolní brány. Před dokončením každé změny ji nech zkontrolovat příslušnými specializovanými agenty. Povinné brány: (a) Bezpečnost/RLS u čehokoli kolem přístupů, auth, RLS a klíčů; (b) Databáze/migrace u každé migrace (bezpečná, vratná, bez ztráty dat); (c) Code review u implementace před commitem.
 3. Záloha před zásahem do produkce. Nikdy neaplikuj změnu na produkční DB bez čerstvé zálohy a odsouhlasení PM.
+   - **Supabase CLI proti produkci = zakázáno bez výslovného souhlasu PM a čerstvé zálohy.** NIKDY nespouštěj `supabase db push` ani `supabase link` proti produkci sám od sebe. Pozor: `supabase/config.toml` má `project_id` mířící na **produkci** (`fareavttiwkamrukpfqk`), takže `supabase db push` by schéma nahrál rovnou na ostrou DB. Lokální vývoj (`supabase start`, `supabase db reset`) je bezpečný a míří jen na lokální Docker.
 4. Nic nemazat natvrdo, vše auditovat.
 5. Změna je hotová, teprve až projde svými bránami.
 
