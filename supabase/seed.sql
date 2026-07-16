@@ -84,3 +84,36 @@ UPDATE public.profiles SET phone = '+420700000004'
 -- 5) Jeden fiktivní testovací „klub" (chat_groups; prázdné authorized_roles = veřejné)
 INSERT INTO public.chat_groups (name, description, whatsapp_url, authorized_roles)
 VALUES ('Test Klub', 'Fiktivní testovací klub (seed)', 'https://example.com/test-klub', '{}');
+
+-- =============================================================================
+-- Etapa 1 — FIKTIVNÍ rezervační data (jen lokál)
+-- =============================================================================
+
+-- Placeholder ceník JEN pro lokál (v produkci sazby nastaví admin; migrace je nechá NULL)
+UPDATE public.settings SET club_default_rate = 500, commercial_default_rate = 1000;
+
+-- Subjekty: 2 kluby + 1 komerční (IČO/DIČ fiktivní)
+INSERT INTO public.subjects (id, type, name, ico, dic, address, default_rate) VALUES
+  ('aaaa1111-0000-0000-0000-000000000001', 'club', 'Mladé kameny', NULL, NULL, NULL, NULL),
+  ('aaaa1111-0000-0000-0000-000000000002', 'club', 'Curling Ostrava', NULL, NULL, NULL, 450),
+  ('bbbb2222-0000-0000-0000-000000000001', 'commercial', 'Testovací Firma s.r.o.',
+   '00000019', 'CZ00000019', 'Testovací 1, 700 30 Ostrava', NULL);
+
+-- Zástupci klubů (napojení na testovací uživatele z části výše)
+--   clen@test.local (4444…)  → Mladé kameny
+--   instruktor@test.local (2222…) → Curling Ostrava (pro test izolace mezi kluby)
+INSERT INTO public.subject_reps (subject_id, user_id) VALUES
+  ('aaaa1111-0000-0000-0000-000000000001', '44444444-4444-4444-4444-444444444444'),
+  ('aaaa1111-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222222');
+
+-- Rezervace (rate_per_hour necháme na triggeru — vezme default_rate subjektu ?? ceník).
+-- Plátna referencujeme podle jména (jejich UUID generuje migrace).
+INSERT INTO public.reservations (sheet_id, subject_id, start_at, end_at, status, note) VALUES
+  ((SELECT id FROM public.sheets WHERE name = 'Plátno 1'),
+   'aaaa1111-0000-0000-0000-000000000001', '2026-07-20 10:00+02', '2026-07-20 11:30+02', 'confirmed', 'MK trénink'),
+  ((SELECT id FROM public.sheets WHERE name = 'Plátno 2'),
+   'aaaa1111-0000-0000-0000-000000000002', '2026-07-20 10:00+02', '2026-07-20 11:30+02', 'confirmed', 'Curling Ostrava trénink'),
+  ((SELECT id FROM public.sheets WHERE name = 'Plátno 1'),
+   'bbbb2222-0000-0000-0000-000000000001', '2026-07-20 14:00+02', '2026-07-20 15:30+02', 'confirmed', 'Firemní akce'),
+  ((SELECT id FROM public.sheets WHERE name = 'Plátno 1'),
+   'aaaa1111-0000-0000-0000-000000000001', '2026-07-20 12:00+02', '2026-07-20 13:30+02', 'cancelled', 'Zrušený test');
