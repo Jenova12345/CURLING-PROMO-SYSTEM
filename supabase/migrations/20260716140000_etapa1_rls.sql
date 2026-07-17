@@ -93,9 +93,12 @@ CREATE POLICY "audit_log_select_admin" ON public.audit_log
   FOR SELECT TO authenticated USING (has_role(auth.uid(), 'admin'));
 
 -- -----------------------------------------------------------------------------
--- GUARD: zástupce klubu smí rezervaci POUZE stornovat (ne měnit) — admin smí vše
+-- GUARD: co smí ne-admin (zástupce klubu) na rezervaci — admin smí vše
+--   INSERT: zakládat smí (RLS hlídá jeho klub), ale nesmí podvrhnout autora,
+--           stav, cenu ani korekce (ochrana auditu i fakturace).
+--   UPDATE: smí POUZE stornovat vlastní rezervaci (confirmed -> cancelled).
 -- -----------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION public.guard_reservation_rep_update()
+CREATE OR REPLACE FUNCTION public.guard_reservation_rep_changes()
  RETURNS trigger
  LANGUAGE plpgsql
  SECURITY DEFINER
@@ -106,6 +109,20 @@ BEGIN
     RETURN NEW;  -- admin: bez omezení (korekce, přeobsazení, soft-delete)
   END IF;
 
+  IF TG_OP = 'INSERT' THEN
+    -- Ne-admin nesmí při zakládání podvrhnout autora/stav/cenu/korekce.
+    -- (Že subjekt patří jeho klubu, vynucuje RLS WITH CHECK.)
+    NEW.created_by        := auth.uid();
+    NEW.status            := 'confirmed';
+    NEW.deleted_at        := NULL;
+    NEW.rate_per_hour     := NULL;   -- sazbu dopočítá pricing trigger z ceníku
+    NEW.corrected_hours   := NULL;   -- korekce jsou výhradně adminské
+    NEW.corrected_amount  := NULL;
+    NEW.correction_reason := NULL;
+    RETURN NEW;
+  END IF;
+
+  -- TG_OP = 'UPDATE'
   IF NOT public.is_subject_rep(OLD.subject_id) THEN
     RAISE EXCEPTION 'Nemáte právo měnit tuto rezervaci';
   END IF;
@@ -129,9 +146,9 @@ BEGIN
 END;
 $$;
 
--- Název začíná tak, aby guard běžel před pricing/updated triggery (abecední pořadí).
-CREATE TRIGGER trg_reservations_a_guard_rep BEFORE UPDATE ON public.reservations
-  FOR EACH ROW EXECUTE FUNCTION public.guard_reservation_rep_update();
+-- Název začíná „a_", aby guard běžel PŘED pricing/updated triggery (abecední pořadí).
+CREATE TRIGGER trg_reservations_a_guard BEFORE INSERT OR UPDATE ON public.reservations
+  FOR EACH ROW EXECUTE FUNCTION public.guard_reservation_rep_changes();
 
 -- -----------------------------------------------------------------------------
 -- MASKOVACÍ VIEW: obsazenost pro kalendář (bez identity a částek cizích klubů)

@@ -132,15 +132,8 @@ AS $$
 DECLARE
   _rate numeric;
 BEGIN
-  -- Ne-admin nesmí při zakládání podvrhnout sazbu ani korekci: sazbu určí server
-  -- (snapshot z ceníku), korekce jsou výhradně adminské. (Na UPDATE hlídá guard trigger.)
-  IF TG_OP = 'INSERT' AND NOT has_role(auth.uid(), 'admin') THEN
-    NEW.rate_per_hour     := NULL;
-    NEW.corrected_hours   := NULL;
-    NEW.corrected_amount  := NULL;
-    NEW.correction_reason := NULL;
-  END IF;
-
+  -- Pozn.: ne-adminovi vynuluje sazbu/korekce už guard trigger (trg_reservations_a_guard),
+  -- který běží dřív; tady se sazba jen dopočítá z ceníku a spočítají hodiny/částka.
   IF TG_OP = 'INSERT' AND NEW.rate_per_hour IS NULL THEN
     SELECT COALESCE(s.default_rate,
              CASE s.type WHEN 'club' THEN st.club_default_rate
