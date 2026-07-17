@@ -117,3 +117,23 @@ INSERT INTO public.reservations (sheet_id, subject_id, start_at, end_at, status,
    'bbbb2222-0000-0000-0000-000000000001', '2026-07-20 14:00+02', '2026-07-20 15:30+02', 'confirmed', 'Firemní akce'),
   ((SELECT id FROM public.sheets WHERE name = 'Plátno 1'),
    'aaaa1111-0000-0000-0000-000000000001', '2026-07-20 12:00+02', '2026-07-20 13:30+02', 'cancelled', 'Zrušený test');
+
+-- Sjednocený kalendář: akce navázané na rezervaci ledu (test event_id vazby)
+--   interní trénink (bez fakturačního subjektu) + komerční akce (trigger vygeneruje směnu)
+INSERT INTO public.events (id, title, event_type, start_time, end_time, required_staff, role_reqs) VALUES
+  ('cccc3333-0000-0000-0000-000000000001', 'Trénink MK', 'training',
+   '2026-07-21 16:00+02', '2026-07-21 17:30+02', 0, '{}'::jsonb),
+  ('cccc3333-0000-0000-0000-000000000002', 'Firemní teambuilding', 'commercial',
+   '2026-07-21 09:00+02', '2026-07-21 11:00+02', 1, '{"instructor": 1}'::jsonb);
+
+-- Navázané rezervace ledu. Seed běží jako postgres (ne-admin kontext) → guard by event_id
+-- vynuloval; pro tyto důvěryhodné seed řádky ho dočasně vypneme (pricing dál běží).
+ALTER TABLE public.reservations DISABLE TRIGGER trg_reservations_a_guard;
+INSERT INTO public.reservations (sheet_id, subject_id, event_id, start_at, end_at, note) VALUES
+  -- interní rezervace ledu pro trénink (subject NULL = neúčtuje se)
+  ((SELECT id FROM public.sheets WHERE name = 'Plátno 2'), NULL,
+   'cccc3333-0000-0000-0000-000000000001', '2026-07-21 16:00+02', '2026-07-21 17:30+02', 'Trénink (interní)'),
+  -- komerční rezervace ledu navázaná na akci se štábem
+  ((SELECT id FROM public.sheets WHERE name = 'Plátno 1'), 'bbbb2222-0000-0000-0000-000000000001',
+   'cccc3333-0000-0000-0000-000000000002', '2026-07-21 09:00+02', '2026-07-21 11:00+02', 'Komerční akce vč. štábu');
+ALTER TABLE public.reservations ENABLE TRIGGER trg_reservations_a_guard;
