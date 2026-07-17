@@ -25,6 +25,7 @@ export const RATE_LIMIT_CONFIG = {
   
   // Data mutations - moderate limits
   createEvent: { maxAttempts: 10, windowMs: 60 * 1000, cooldownMs: 30 * 1000 },
+  createReservation: { maxAttempts: 15, windowMs: 60 * 1000, cooldownMs: 20 * 1000 },
   updateProfile: { maxAttempts: 10, windowMs: 60 * 1000, cooldownMs: 30 * 1000 },
   shiftAction: { maxAttempts: 20, windowMs: 60 * 1000, cooldownMs: 15 * 1000 },
   

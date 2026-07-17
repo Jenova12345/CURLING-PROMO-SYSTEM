@@ -280,6 +280,21 @@ export const eventSchema = z.object({
 );
 
 /**
+ * Reservation form validation (rezervace ledu)
+ * Validates that end_at is after start_at
+ */
+export const reservationSchema = z.object({
+  sheet_id: uuidSchema,
+  subject_id: uuidSchema,
+  start_at: z.string().refine((val) => !isNaN(Date.parse(val)), 'Neplatný formát data/času'),
+  end_at: z.string().refine((val) => !isNaN(Date.parse(val)), 'Neplatný formát data/času'),
+  note: notesSchema,
+}).refine(
+  (data) => new Date(data.end_at) > new Date(data.start_at),
+  { message: 'Konec rezervace musí být po jejím začátku', path: ['end_at'] }
+);
+
+/**
  * Complete shift form validation
  */
 export const completeShiftSchema = z.object({

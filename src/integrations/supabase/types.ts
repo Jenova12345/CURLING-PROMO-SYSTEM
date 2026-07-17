@@ -7,13 +7,66 @@ export type Json =
   | Json[]
 
 export type Database = {
-  // Allows to automatically instantiate createClient with right options
-  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
-  __InternalSupabase: {
-    PostgrestVersion: "14.1"
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
   }
   public: {
     Tables: {
+      audit_log: {
+        Row: {
+          action: string
+          changed_at: string
+          changed_by: string | null
+          id: string
+          new_data: Json | null
+          old_data: Json | null
+          record_id: string | null
+          table_name: string
+        }
+        Insert: {
+          action: string
+          changed_at?: string
+          changed_by?: string | null
+          id?: string
+          new_data?: Json | null
+          old_data?: Json | null
+          record_id?: string | null
+          table_name: string
+        }
+        Update: {
+          action?: string
+          changed_at?: string
+          changed_by?: string | null
+          id?: string
+          new_data?: Json | null
+          old_data?: Json | null
+          record_id?: string | null
+          table_name?: string
+        }
+        Relationships: []
+      }
       chat_groups: {
         Row: {
           authorized_roles: Database["public"]["Enums"]["app_role"][]
@@ -62,6 +115,7 @@ export type Database = {
           event_type: Database["public"]["Enums"]["event_type"]
           id: string
           required_staff: number | null
+          role_reqs: Json | null
           start_time: string
           title: string
           updated_at: string
@@ -74,6 +128,7 @@ export type Database = {
           event_type?: Database["public"]["Enums"]["event_type"]
           id?: string
           required_staff?: number | null
+          role_reqs?: Json | null
           start_time: string
           title: string
           updated_at?: string
@@ -86,6 +141,7 @@ export type Database = {
           event_type?: Database["public"]["Enums"]["event_type"]
           id?: string
           required_staff?: number | null
+          role_reqs?: Json | null
           start_time?: string
           title?: string
           updated_at?: string
@@ -181,6 +237,178 @@ export type Database = {
         }
         Relationships: []
       }
+      reservations: {
+        Row: {
+          amount: number | null
+          corrected_amount: number | null
+          corrected_hours: number | null
+          correction_reason: string | null
+          created_at: string
+          created_by: string | null
+          deleted_at: string | null
+          end_at: string
+          hours: number | null
+          id: string
+          note: string | null
+          rate_per_hour: number | null
+          sheet_id: string
+          start_at: string
+          status: Database["public"]["Enums"]["reservation_status"]
+          subject_id: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          amount?: number | null
+          corrected_amount?: number | null
+          corrected_hours?: number | null
+          correction_reason?: string | null
+          created_at?: string
+          created_by?: string | null
+          deleted_at?: string | null
+          end_at: string
+          hours?: number | null
+          id?: string
+          note?: string | null
+          rate_per_hour?: number | null
+          sheet_id: string
+          start_at: string
+          status?: Database["public"]["Enums"]["reservation_status"]
+          subject_id: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          amount?: number | null
+          corrected_amount?: number | null
+          corrected_hours?: number | null
+          correction_reason?: string | null
+          created_at?: string
+          created_by?: string | null
+          deleted_at?: string | null
+          end_at?: string
+          hours?: number | null
+          id?: string
+          note?: string | null
+          rate_per_hour?: number | null
+          sheet_id?: string
+          start_at?: string
+          status?: Database["public"]["Enums"]["reservation_status"]
+          subject_id?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "reservations_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "reservations_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "reservations_sheet_id_fkey"
+            columns: ["sheet_id"]
+            isOneToOne: false
+            referencedRelation: "sheets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reservations_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reservations_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "reservations_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
+      settings: {
+        Row: {
+          club_default_rate: number | null
+          commercial_default_rate: number | null
+          id: string
+          opening_hours: Json
+          singleton: boolean
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          club_default_rate?: number | null
+          commercial_default_rate?: number | null
+          id?: string
+          opening_hours: Json
+          singleton?: boolean
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          club_default_rate?: number | null
+          commercial_default_rate?: number | null
+          id?: string
+          opening_hours?: Json
+          singleton?: boolean
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "settings_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "settings_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
+      sheets: {
+        Row: {
+          active: boolean
+          created_at: string
+          id: string
+          name: string
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          id?: string
+          name: string
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          id?: string
+          name?: string
+        }
+        Relationships: []
+      }
       shift_applications: {
         Row: {
           created_at: string
@@ -228,6 +456,7 @@ export type Database = {
           id: string
           notes: string | null
           payout_id: string | null
+          required_role: Database["public"]["Enums"]["app_role"] | null
           status: Database["public"]["Enums"]["shift_status"]
           updated_at: string
         }
@@ -242,6 +471,7 @@ export type Database = {
           id?: string
           notes?: string | null
           payout_id?: string | null
+          required_role?: Database["public"]["Enums"]["app_role"] | null
           status?: Database["public"]["Enums"]["shift_status"]
           updated_at?: string
         }
@@ -256,6 +486,7 @@ export type Database = {
           id?: string
           notes?: string | null
           payout_id?: string | null
+          required_role?: Database["public"]["Enums"]["app_role"] | null
           status?: Database["public"]["Enums"]["shift_status"]
           updated_at?: string
         }
@@ -273,6 +504,140 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "payouts"
             referencedColumns: ["id"]
+          },
+        ]
+      }
+      subject_reps: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          subject_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          subject_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          subject_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "subject_reps_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "subject_reps_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "subject_reps_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "subject_reps_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "subject_reps_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
+      subjects: {
+        Row: {
+          address: string | null
+          created_at: string
+          created_by: string | null
+          default_rate: number | null
+          deleted_at: string | null
+          dic: string | null
+          ico: string | null
+          id: string
+          name: string
+          type: Database["public"]["Enums"]["subject_type"]
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          address?: string | null
+          created_at?: string
+          created_by?: string | null
+          default_rate?: number | null
+          deleted_at?: string | null
+          dic?: string | null
+          ico?: string | null
+          id?: string
+          name: string
+          type: Database["public"]["Enums"]["subject_type"]
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          address?: string | null
+          created_at?: string
+          created_by?: string | null
+          default_rate?: number | null
+          deleted_at?: string | null
+          dic?: string | null
+          ico?: string | null
+          id?: string
+          name?: string
+          type?: Database["public"]["Enums"]["subject_type"]
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "subjects_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "subjects_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "subjects_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "subjects_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
           },
         ]
       }
@@ -329,6 +694,35 @@ export type Database = {
         }
         Relationships: []
       }
+      reservations_calendar: {
+        Row: {
+          end_at: string | null
+          sheet_id: string | null
+          start_at: string | null
+          status: Database["public"]["Enums"]["reservation_status"] | null
+        }
+        Insert: {
+          end_at?: string | null
+          sheet_id?: string | null
+          start_at?: string | null
+          status?: Database["public"]["Enums"]["reservation_status"] | null
+        }
+        Update: {
+          end_at?: string | null
+          sheet_id?: string | null
+          start_at?: string | null
+          status?: Database["public"]["Enums"]["reservation_status"] | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "reservations_sheet_id_fkey"
+            columns: ["sheet_id"]
+            isOneToOne: false
+            referencedRelation: "sheets"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
       get_user_role: {
@@ -342,6 +736,7 @@ export type Database = {
         }
         Returns: boolean
       }
+      is_subject_rep: { Args: { _subject: string }; Returns: boolean }
     }
     Enums: {
       app_role:
@@ -353,8 +748,10 @@ export type Database = {
         | "instructor"
         | "bar_staff"
         | "manager"
-      event_type: "commercial" | "training" | "maintenance"
+      event_type: "commercial" | "training" | "maintenance" | "recruitment"
+      reservation_status: "confirmed" | "cancelled"
       shift_status: "open" | "pending" | "claimed" | "completed" | "cancelled"
+      subject_type: "club" | "commercial"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -480,6 +877,9 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
       app_role: [
@@ -492,8 +892,11 @@ export const Constants = {
         "bar_staff",
         "manager",
       ],
-      event_type: ["commercial", "training", "maintenance"],
+      event_type: ["commercial", "training", "maintenance", "recruitment"],
+      reservation_status: ["confirmed", "cancelled"],
       shift_status: ["open", "pending", "claimed", "completed", "cancelled"],
+      subject_type: ["club", "commercial"],
     },
   },
 } as const
+

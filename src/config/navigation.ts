@@ -1,6 +1,7 @@
-import { 
-  Calendar, 
-  Clock, 
+import {
+  Calendar,
+  CalendarCheck,
+  Clock,
   Users, 
   LayoutDashboard, 
   MessageCircle, 
@@ -24,14 +25,20 @@ export const NAV_ITEMS: NavItem[] = [
     icon: LayoutDashboard,
     roles: ['admin', 'trainer', 'part_time_staff', 'instructor', 'bar_staff', 'manager', 'pro_player', 'hobby_player']
   },
-  { 
-    path: '/calendar', 
-    label: 'Kalendář', 
+  {
+    path: '/calendar',
+    label: 'Kalendář',
     icon: Calendar,
     roles: ['admin', 'trainer', 'part_time_staff', 'instructor', 'bar_staff', 'manager', 'pro_player', 'hobby_player']
   },
-  { 
-    path: '/shifts', 
+  {
+    path: '/reservations',
+    label: 'Rezervace',
+    icon: CalendarCheck,
+    roles: ['admin', 'trainer', 'part_time_staff', 'instructor', 'bar_staff', 'manager', 'pro_player', 'hobby_player']
+  },
+  {
+    path: '/shifts',
     label: 'Směny', 
     icon: Clock,
     roles: ['admin', 'part_time_staff', 'instructor', 'bar_staff', 'manager']

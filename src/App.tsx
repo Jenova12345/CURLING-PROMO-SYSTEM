@@ -10,6 +10,7 @@ import ForgotPassword from "./pages/ForgotPassword";
 import UpdatePassword from "./pages/UpdatePassword";
 import Dashboard from "./pages/Dashboard";
 import IceCalendar from "./pages/IceCalendar";
+import Reservations from "./pages/Reservations";
 import Shifts from "./pages/Shifts";
 import Payouts from "./pages/Payouts";
 import Profile from "./pages/Profile";
@@ -34,6 +35,7 @@ const App = () => (
             <Route element={<AppLayout />}>
               <Route path="/" element={<Dashboard />} />
               <Route path="/calendar" element={<IceCalendar />} />
+              <Route path="/reservations" element={<Reservations />} />
               <Route path="/shifts" element={<Shifts />} />
               <Route path="/payouts" element={<Payouts />} />
               <Route path="/profile" element={<Profile />} />
