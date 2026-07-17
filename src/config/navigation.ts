@@ -1,6 +1,5 @@
 import {
   Calendar,
-  CalendarCheck,
   Clock,
   Users, 
   LayoutDashboard, 
@@ -29,12 +28,6 @@ export const NAV_ITEMS: NavItem[] = [
     path: '/calendar',
     label: 'Kalendář',
     icon: Calendar,
-    roles: ['admin', 'trainer', 'part_time_staff', 'instructor', 'bar_staff', 'manager', 'pro_player', 'hobby_player']
-  },
-  {
-    path: '/reservations',
-    label: 'Rezervace',
-    icon: CalendarCheck,
     roles: ['admin', 'trainer', 'part_time_staff', 'instructor', 'bar_staff', 'manager', 'pro_player', 'hobby_player']
   },
   {

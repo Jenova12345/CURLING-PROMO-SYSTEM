@@ -247,6 +247,7 @@ export type Database = {
           created_by: string | null
           deleted_at: string | null
           end_at: string
+          event_id: string | null
           hours: number | null
           id: string
           note: string | null
@@ -254,7 +255,7 @@ export type Database = {
           sheet_id: string
           start_at: string
           status: Database["public"]["Enums"]["reservation_status"]
-          subject_id: string
+          subject_id: string | null
           updated_at: string
           updated_by: string | null
         }
@@ -267,6 +268,7 @@ export type Database = {
           created_by?: string | null
           deleted_at?: string | null
           end_at: string
+          event_id?: string | null
           hours?: number | null
           id?: string
           note?: string | null
@@ -274,7 +276,7 @@ export type Database = {
           sheet_id: string
           start_at: string
           status?: Database["public"]["Enums"]["reservation_status"]
-          subject_id: string
+          subject_id?: string | null
           updated_at?: string
           updated_by?: string | null
         }
@@ -287,6 +289,7 @@ export type Database = {
           created_by?: string | null
           deleted_at?: string | null
           end_at?: string
+          event_id?: string | null
           hours?: number | null
           id?: string
           note?: string | null
@@ -294,7 +297,7 @@ export type Database = {
           sheet_id?: string
           start_at?: string
           status?: Database["public"]["Enums"]["reservation_status"]
-          subject_id?: string
+          subject_id?: string | null
           updated_at?: string
           updated_by?: string | null
         }
@@ -312,6 +315,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "profiles_public"
             referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "reservations_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
           },
           {
             foreignKeyName: "reservations_sheet_id_fkey"

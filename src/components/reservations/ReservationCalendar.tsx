@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { format, addDays, isSameDay, startOfWeek } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
-import type { Sheet, ReservationRow, CalendarSlot } from '@/hooks/useReservations';
+import type { Sheet, ReservationRow, CalendarSlot, ShiftFill } from '@/hooks/useReservations';
 
 const PX_PER_MIN = 1; // 1 minuta = 1 px
 
@@ -16,6 +16,7 @@ interface Props {
   sheets: Sheet[];
   reservations: ReservationRow[]; // plné (moje/vše dle role)
   calendar: CalendarSlot[];        // obsazenost všech (maskovaná)
+  shiftFill?: Record<string, ShiftFill>; // event_id → obsazenost štábu (admin/staff)
   openHour: number;
   closeHour: number;
   canBook: boolean;
@@ -26,7 +27,7 @@ interface Props {
 const fmtKc = (n: number) => `${n.toLocaleString('cs-CZ')} Kč`;
 
 export function ReservationCalendar({
-  view, currentDate, sheets, reservations, calendar,
+  view, currentDate, sheets, reservations, calendar, shiftFill = {},
   openHour, closeHour, canBook, onSlotClick, onReservationClick,
 }: Props) {
   const openMin = openHour * 60;
@@ -76,8 +77,7 @@ export function ReservationCalendar({
         className={cn('relative flex-1 border-l', canBook && 'cursor-pointer')}
         style={{ height: gridHeight }}
         onClick={(e) => handleColumnClick(e, sheet.id, day)}
-        role={canBook ? 'button' : undefined}
-        aria-label={`${sheet.name}, ${format(day, 'd. M.', { locale: cs })}${canBook ? ' — klikni pro rezervaci' : ''}`}
+        aria-label={`${sheet.name}, ${format(day, 'd. M.', { locale: cs })}${canBook ? ' — klikni na volný čas pro rezervaci' : ''}`}
       >
         {/* hodinové linky */}
         {hours.map((h) => (
@@ -99,6 +99,9 @@ export function ReservationCalendar({
 
           if (full) {
             const amount = full.corrected_amount ?? full.amount;
+            const label = full.subjects?.name ?? full.events?.title ?? 'Rezervace';
+            const fill = full.event_id ? shiftFill[full.event_id] : undefined;
+            const isCommercial = full.events?.event_type === 'commercial';
             return (
               <button
                 key={slot.start_at + sheet.id}
@@ -111,7 +114,15 @@ export function ReservationCalendar({
                 )}
                 style={{ top, height }}
               >
-                <div className="truncate text-xs font-medium">{full.subjects?.name ?? 'Rezervace'}</div>
+                <div className="flex items-center gap-1">
+                  <span className="truncate text-xs font-medium">{label}</span>
+                  {isCommercial && fill && (
+                    <span className={cn(
+                      'ml-auto shrink-0 rounded px-1 text-[10px] font-semibold',
+                      fill.filled >= fill.total ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700',
+                    )}>{fill.filled}/{fill.total}</span>
+                  )}
+                </div>
                 <div className="truncate text-[11px] text-muted-foreground">{timeLabel}</div>
                 {view === 'day' && amount != null && (
                   <div className="text-[11px] text-muted-foreground">{fmtKc(Number(amount))}</div>

@@ -2,15 +2,14 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import AppLayout from "@/components/layout/AppLayout";
 import Auth from "./pages/Auth";
 import ForgotPassword from "./pages/ForgotPassword";
 import UpdatePassword from "./pages/UpdatePassword";
 import Dashboard from "./pages/Dashboard";
-import IceCalendar from "./pages/IceCalendar";
-import Reservations from "./pages/Reservations";
+import Calendar from "./pages/Calendar";
 import Shifts from "./pages/Shifts";
 import Payouts from "./pages/Payouts";
 import Profile from "./pages/Profile";
@@ -34,8 +33,9 @@ const App = () => (
             <Route path="/update-password" element={<UpdatePassword />} />
             <Route element={<AppLayout />}>
               <Route path="/" element={<Dashboard />} />
-              <Route path="/calendar" element={<IceCalendar />} />
-              <Route path="/reservations" element={<Reservations />} />
+              <Route path="/calendar" element={<Calendar />} />
+              {/* Rezervace sloučeny do Kalendáře — starý odkaz přesměruj */}
+              <Route path="/reservations" element={<Navigate to="/calendar" replace />} />
               <Route path="/shifts" element={<Shifts />} />
               <Route path="/payouts" element={<Payouts />} />
               <Route path="/profile" element={<Profile />} />

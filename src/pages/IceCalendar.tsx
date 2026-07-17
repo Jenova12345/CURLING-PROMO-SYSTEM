@@ -1,3 +1,7 @@
+// ⚠️ DEAD CODE — NEROUTOVANÉ, jen reference.
+// Nahrazeno sjednoceným kalendářem (src/pages/Calendar.tsx). Ponecháno kvůli logice
+// správy událostí (edit/delete akcí, přihlašování na směny), která se do sjednoceného
+// kalendáře zatím NEPORTOVALA. Needitovat; buď doportovat do Calendar.tsx, nebo smazat.
 import { useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useEvents } from '@/hooks/useEvents';
