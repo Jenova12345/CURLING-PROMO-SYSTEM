@@ -5,6 +5,9 @@ import {
   LayoutDashboard, 
   MessageCircle, 
   Wallet,
+  Coins,
+  Building2,
+  Settings,
   User,
   HelpCircle,
   LucideIcon
@@ -42,14 +45,32 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Wallet,
     roles: ['admin']
   },
-  { 
-    path: '/members', 
-    label: 'Členové', 
+  {
+    path: '/members',
+    label: 'Členové',
     icon: Users,
     roles: ['admin']
   },
-  { 
-    path: '/communication', 
+  {
+    path: '/subjects',
+    label: 'Subjekty',
+    icon: Building2,
+    roles: ['admin']
+  },
+  {
+    path: '/dues',
+    label: 'Kdo dluží',
+    icon: Coins,
+    roles: ['admin']
+  },
+  {
+    path: '/settings',
+    label: 'Nastavení',
+    icon: Settings,
+    roles: ['admin']
+  },
+  {
+    path: '/communication',
     label: 'Komunikace', 
     icon: MessageCircle,
     roles: ['admin', 'trainer', 'part_time_staff', 'instructor', 'bar_staff', 'manager', 'pro_player', 'hobby_player']

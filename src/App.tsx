@@ -10,6 +10,10 @@ import ForgotPassword from "./pages/ForgotPassword";
 import UpdatePassword from "./pages/UpdatePassword";
 import Dashboard from "./pages/Dashboard";
 import Calendar from "./pages/Calendar";
+import Dues from "./pages/Dues";
+import Subjects from "./pages/Subjects";
+import Settings from "./pages/Settings";
+import Portal from "./pages/Portal";
 import Shifts from "./pages/Shifts";
 import Payouts from "./pages/Payouts";
 import Profile from "./pages/Profile";
@@ -28,6 +32,7 @@ const App = () => (
         <Sonner />
         <BrowserRouter>
           <Routes>
+            <Route path="/portal" element={<Portal />} />
             <Route path="/auth" element={<Auth />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/update-password" element={<UpdatePassword />} />
@@ -37,6 +42,9 @@ const App = () => (
               {/* Rezervace sloučeny do Kalendáře — starý odkaz přesměruj */}
               <Route path="/reservations" element={<Navigate to="/calendar" replace />} />
               <Route path="/shifts" element={<Shifts />} />
+              <Route path="/dues" element={<Dues />} />
+              <Route path="/subjects" element={<Subjects />} />
+              <Route path="/settings" element={<Settings />} />
               <Route path="/payouts" element={<Payouts />} />
               <Route path="/profile" element={<Profile />} />
               <Route path="/members" element={<Members />} />
