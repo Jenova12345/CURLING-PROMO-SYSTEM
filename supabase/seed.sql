@@ -44,6 +44,12 @@ INSERT INTO auth.users (
    extensions.crypt('Heslo1234', extensions.gen_salt('bf')),
    now(), now(), now(),
    '{"provider":"email","providers":["email"]}', '{"full_name":"Test Clen"}',
+   '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '55555555-5555-5555-5555-555555555555',
+   'authenticated', 'authenticated', 'clen2@test.local',
+   extensions.crypt('Heslo1234', extensions.gen_salt('bf')),
+   now(), now(), now(),
+   '{"provider":"email","providers":["email"]}', '{"full_name":"Test Clen2 (člen)"}',
    '', '', '', '');
 
 -- 2) Auth identities (potřebné pro e-mail/heslo login v GoTrue)
@@ -62,6 +68,9 @@ INSERT INTO auth.identities (
    now(), now(), now()),
   ('44444444-4444-4444-4444-444444444444', '44444444-4444-4444-4444-444444444444',
    '{"sub":"44444444-4444-4444-4444-444444444444","email":"clen@test.local"}', 'email',
+   now(), now(), now()),
+  ('55555555-5555-5555-5555-555555555555', '55555555-5555-5555-5555-555555555555',
+   '{"sub":"55555555-5555-5555-5555-555555555555","email":"clen2@test.local"}', 'email',
    now(), now(), now());
 
 -- 3) Doplňkové role (trigger už každému dal hobby_player)
@@ -102,9 +111,11 @@ INSERT INTO public.subjects (id, type, name, ico, dic, address, default_rate) VA
 -- Zástupci klubů (napojení na testovací uživatele z části výše)
 --   clen@test.local (4444…)  → Mladé kameny
 --   instruktor@test.local (2222…) → Curling Ostrava (pro test izolace mezi kluby)
-INSERT INTO public.subject_reps (subject_id, user_id) VALUES
-  ('aaaa1111-0000-0000-0000-000000000001', '44444444-4444-4444-4444-444444444444'),
-  ('aaaa1111-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222222');
+--   clen  = ZÁSTUPCE (rep) MK, instruktor = zástupce Curling Ostrava, clen2 = ČLEN (member) MK
+INSERT INTO public.subject_reps (subject_id, user_id, level) VALUES
+  ('aaaa1111-0000-0000-0000-000000000001', '44444444-4444-4444-4444-444444444444', 'rep'),
+  ('aaaa1111-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222222', 'rep'),
+  ('aaaa1111-0000-0000-0000-000000000001', '55555555-5555-5555-5555-555555555555', 'member');
 
 -- Rezervace (rate_per_hour necháme na triggeru — vezme default_rate subjektu ?? ceník).
 -- Plátna referencujeme podle jména (jejich UUID generuje migrace).
@@ -136,4 +147,8 @@ INSERT INTO public.reservations (sheet_id, subject_id, event_id, start_at, end_a
   -- komerční rezervace ledu navázaná na akci se štábem
   ((SELECT id FROM public.sheets WHERE name = 'Plátno 1'), 'bbbb2222-0000-0000-0000-000000000001',
    'cccc3333-0000-0000-0000-000000000002', '2026-07-21 09:00+02', '2026-07-21 11:00+02', 'Komerční akce vč. štábu');
+-- Klubová rezervace vytvořená ČLENEM (clen2) — test „člen edituje jen svou"; created_by explicitně.
+INSERT INTO public.reservations (sheet_id, subject_id, created_by, start_at, end_at, note) VALUES
+  ((SELECT id FROM public.sheets WHERE name = 'Plátno 1'), 'aaaa1111-0000-0000-0000-000000000001',
+   '55555555-5555-5555-5555-555555555555', '2026-07-23 09:00+02', '2026-07-23 10:30+02', 'Rezervace člena MK');
 ALTER TABLE public.reservations ENABLE TRIGGER trg_reservations_a_guard;
