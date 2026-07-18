@@ -35,6 +35,7 @@ export interface CreateClubReservation {
   start_at: string;
   end_at: string;
   note?: string;
+  rate_per_hour?: number; // jen admin (guard u ne-admina stejně vynuluje)
 }
 
 export interface CreateCommercialBooking {
@@ -45,6 +46,19 @@ export interface CreateCommercialBooking {
   note?: string;
   title: string;
   role_reqs: Record<string, number>; // {instructor, bar_staff, manager} > 0
+  rate_per_hour?: number; // jen admin
+}
+
+export type SubjectRepLevel = Database['public']['Enums']['subject_rep_level'];
+export type Membership = { subject_id: string; level: SubjectRepLevel };
+
+// Pole rezervace, která smí upravit i ne-admin (guard pouští sheet/time/note; rate jen admin).
+export interface UpdateReservationFields {
+  sheet_id?: string;
+  start_at?: string;
+  end_at?: string;
+  note?: string | null;
+  rate_per_hour?: number; // jen admin
 }
 
 export interface CreateInternalBooking {
@@ -134,6 +148,17 @@ export const useReservations = (range: DateRange | null) => {
     enabled: !!user,
   });
 
+  // Moje napojení na kluby (úroveň) — pro rozhodnutí, co smím editovat/stornovat.
+  const { data: myMemberships = [] } = useQuery({
+    queryKey: ['my-memberships'],
+    queryFn: async () => {
+      const { data, error } = await supabase.from('subject_reps').select('subject_id, level');
+      if (error) throw error;
+      return (data ?? []) as Membership[];
+    },
+    enabled: !!user,
+  });
+
   const { data: settings = null } = useQuery({
     queryKey: ['reservation-settings'],
     queryFn: async () => {
@@ -180,7 +205,7 @@ export const useReservations = (range: DateRange | null) => {
     mutationFn: async (input: CreateClubReservation) => {
       const { data, error } = await supabase
         .from('reservations')
-        .insert({ sheet_id: input.sheet_id, subject_id: input.subject_id, start_at: input.start_at, end_at: input.end_at, note: input.note || null })
+        .insert({ sheet_id: input.sheet_id, subject_id: input.subject_id, start_at: input.start_at, end_at: input.end_at, note: input.note || null, rate_per_hour: input.rate_per_hour ?? null })
         .select().single();
       if (error) throw mapReservationError(error);
       return data;
@@ -204,7 +229,7 @@ export const useReservations = (range: DateRange | null) => {
 
       const { data, error } = await supabase
         .from('reservations')
-        .insert({ sheet_id: input.sheet_id, subject_id: input.subject_id, start_at: input.start_at, end_at: input.end_at, note: input.note || null, event_id: ev.id })
+        .insert({ sheet_id: input.sheet_id, subject_id: input.subject_id, start_at: input.start_at, end_at: input.end_at, note: input.note || null, event_id: ev.id, rate_per_hour: input.rate_per_hour ?? null })
         .select().single();
       if (error) {
         // úklid, ať nezůstane osiřelá akce+směny (CASCADE smaže i směny)
@@ -240,6 +265,45 @@ export const useReservations = (range: DateRange | null) => {
     onSuccess: invalidate,
   });
 
+  // Editace bezpečných polí rezervace (sheet/time/note; rate jen admin — hlídá guard).
+  const updateReservation = useMutation({
+    mutationFn: async ({ id, fields }: { id: string; fields: UpdateReservationFields }) => {
+      const { error } = await supabase.from('reservations').update(fields).eq('id', id);
+      if (error) throw mapReservationError(error);
+    },
+    onSuccess: invalidate,
+  });
+
+  // Editace navázané akce (název / časy) — jen admin (events RLS admin).
+  const updateEvent = useMutation({
+    mutationFn: async ({ id, fields }: { id: string; fields: { title?: string; start_time?: string; end_time?: string } }) => {
+      const { error } = await supabase.from('events').update(fields).eq('id', id);
+      if (error) throw new Error('Nepodařilo se upravit akci.');
+    },
+    onSuccess: invalidate,
+  });
+
+  // ARES: serverová edge funkce načte firmu podle IČO (obchodniJmeno/adresa/dic).
+  const aresLookup = async (ico: string): Promise<{ name: string; address: string; dic: string }> => {
+    const { data, error } = await supabase.functions.invoke('ares-lookup', { body: { ico } });
+    if (error) throw new Error('Nepodařilo se spojit s ARESem.');
+    if (data?.error) throw new Error(data.error);
+    return data as { name: string; address: string; dic: string };
+  };
+
+  // Založení komerčního subjektu (firmy) — jen admin (subjects RLS).
+  const createSubject = useMutation({
+    mutationFn: async (s: { name: string; ico?: string; dic?: string; address?: string }) => {
+      const { data, error } = await supabase
+        .from('subjects')
+        .insert({ type: 'commercial', name: s.name, ico: s.ico || null, dic: s.dic || null, address: s.address || null })
+        .select().single();
+      if (error) throw new Error('Nepodařilo se založit firmu.');
+      return data as Subject;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['my-subjects'] }),
+  });
+
   // Storno (DB trigger navíc zruší volné směny navázané akce).
   const cancelReservation = useMutation({
     mutationFn: async (id: string) => {
@@ -262,14 +326,20 @@ export const useReservations = (range: DateRange | null) => {
     calendar,
     sheets,
     mySubjects,
+    myMemberships,
     settings,
     shiftFill,
     isLoading: reservationsLoading || calendarLoading,
     createClub: createClub.mutateAsync,
     createCommercial: createCommercial.mutateAsync,
     createInternal: createInternal.mutateAsync,
+    updateReservation: updateReservation.mutateAsync,
+    updateEvent: updateEvent.mutateAsync,
+    aresLookup,
+    createSubject: createSubject.mutateAsync,
     cancelReservation: cancelReservation.mutateAsync,
     isCreating: createClub.isPending || createCommercial.isPending || createInternal.isPending,
+    isUpdating: updateReservation.isPending || updateEvent.isPending,
     isCancelling: cancelReservation.isPending,
   };
 };

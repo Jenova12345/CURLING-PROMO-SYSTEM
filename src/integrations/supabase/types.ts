@@ -522,6 +522,7 @@ export type Database = {
           created_at: string
           created_by: string | null
           id: string
+          level: Database["public"]["Enums"]["subject_rep_level"]
           subject_id: string
           user_id: string
         }
@@ -529,6 +530,7 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           id?: string
+          level?: Database["public"]["Enums"]["subject_rep_level"]
           subject_id: string
           user_id: string
         }
@@ -536,6 +538,7 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           id?: string
+          level?: Database["public"]["Enums"]["subject_rep_level"]
           subject_id?: string
           user_id?: string
         }
@@ -746,6 +749,7 @@ export type Database = {
         }
         Returns: boolean
       }
+      is_subject_member: { Args: { _subject: string }; Returns: boolean }
       is_subject_rep: { Args: { _subject: string }; Returns: boolean }
     }
     Enums: {
@@ -761,6 +765,7 @@ export type Database = {
       event_type: "commercial" | "training" | "maintenance" | "recruitment"
       reservation_status: "confirmed" | "cancelled"
       shift_status: "open" | "pending" | "claimed" | "completed" | "cancelled"
+      subject_rep_level: "rep" | "member"
       subject_type: "club" | "commercial"
     }
     CompositeTypes: {
@@ -905,6 +910,7 @@ export const Constants = {
       event_type: ["commercial", "training", "maintenance", "recruitment"],
       reservation_status: ["confirmed", "cancelled"],
       shift_status: ["open", "pending", "claimed", "completed", "cancelled"],
+      subject_rep_level: ["rep", "member"],
       subject_type: ["club", "commercial"],
     },
   },

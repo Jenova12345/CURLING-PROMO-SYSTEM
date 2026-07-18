@@ -18,6 +18,7 @@ import { useRateLimit } from '@/hooks/useRateLimit';
 import { useReservations, type ReservationRow } from '@/hooks/useReservations';
 import { ReservationCalendar } from '@/components/reservations/ReservationCalendar';
 import { ReservationDialog } from '@/components/reservations/ReservationDialog';
+import { ObsazeniDetail } from '@/components/reservations/ObsazeniDetail';
 
 type View = 'day' | 'week' | 'month';
 
@@ -53,7 +54,7 @@ function reservationLabel(r: ReservationRow): string {
 
 const Calendar = () => {
   const { toast } = useToast();
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
   const { checkLimit } = useRateLimit('createReservation');
 
   const [view, setView] = useState<View>('week');
@@ -61,6 +62,7 @@ const Calendar = () => {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [defaultSheetId, setDefaultSheetId] = useState<string | undefined>();
   const [defaultStart, setDefaultStart] = useState<Date | undefined>();
+  const [editing, setEditing] = useState<ReservationRow | null>(null);
   const [detail, setDetail] = useState<ReservationRow | null>(null);
 
   const range = useMemo(() => {
@@ -77,9 +79,19 @@ const Calendar = () => {
   }, [view, currentDate]);
 
   const {
-    reservations, calendar, sheets, mySubjects, settings, shiftFill, isLoading,
-    createClub, createCommercial, createInternal, cancelReservation, isCreating, isCancelling,
+    reservations, calendar, sheets, mySubjects, myMemberships, settings, shiftFill, isLoading,
+    createClub, createCommercial, createInternal, updateReservation, updateEvent,
+    aresLookup, createSubject, cancelReservation, isCreating, isUpdating, isCancelling,
   } = useReservations(range);
+
+  // Kdo smí rezervaci editovat/stornovat: admin vše; zástupce celý svůj klub; člen jen svou.
+  const canManage = (r: ReservationRow): boolean => {
+    if (isAdmin) return true;
+    if (!r.subject_id) return false; // interní jen admin
+    const m = myMemberships.find((x) => x.subject_id === r.subject_id);
+    if (!m) return false;
+    return m.level === 'rep' || r.created_by === user?.id;
+  };
 
   const { open: openHour, close: closeHour } = useMemo(() => parseOpeningHours(settings?.opening_hours), [settings]);
   const canBook = isAdmin || mySubjects.length > 0;
@@ -96,11 +108,14 @@ const Calendar = () => {
   }, [view, currentDate]);
 
   const handleSlotClick = (sheetId: string, start: Date) => {
-    setDefaultSheetId(sheetId); setDefaultStart(start); setDialogOpen(true);
+    setEditing(null); setDefaultSheetId(sheetId); setDefaultStart(start); setDialogOpen(true);
   };
   const openNew = () => {
     const base = new Date(currentDate); base.setHours(openHour, 0, 0, 0);
-    setDefaultSheetId(sheets[0]?.id); setDefaultStart(base); setDialogOpen(true);
+    setEditing(null); setDefaultSheetId(sheets[0]?.id); setDefaultStart(base); setDialogOpen(true);
+  };
+  const openEdit = (r: ReservationRow) => {
+    setDetail(null); setEditing(r); setDialogOpen(true);
   };
   const guard = async <T,>(fn: () => Promise<T>): Promise<T> => {
     if (!checkLimit()) throw new Error('Příliš mnoho pokusů. Zkuste to za chvíli.');
@@ -221,16 +236,23 @@ const Calendar = () => {
 
       <ReservationDialog
         open={dialogOpen}
-        onOpenChange={setDialogOpen}
+        onOpenChange={(o) => { setDialogOpen(o); if (!o) setEditing(null); }}
         isAdmin={isAdmin}
         sheets={sheets}
         subjects={mySubjects}
+        settings={settings}
         defaultSheetId={defaultSheetId}
         defaultStart={defaultStart}
+        editing={editing}
         isCreating={isCreating}
+        isUpdating={isUpdating}
         onClub={(d) => guard(() => createClub(d))}
         onCommercial={(d) => guard(() => createCommercial(d))}
         onInternal={(d) => guard(() => createInternal(d))}
+        onUpdateReservation={updateReservation}
+        onUpdateEvent={updateEvent}
+        onAresLookup={aresLookup}
+        onCreateSubject={createSubject}
       />
 
       <AlertDialog open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
@@ -251,11 +273,14 @@ const Calendar = () => {
                         {' '}({Number(detail.corrected_hours ?? detail.hours)} h × {fmtKc(Number(detail.rate_per_hour))}/h)</div>
                     )}
                     {detail.event_id && shiftFill[detail.event_id] && (
-                      <div>Štáb: {shiftFill[detail.event_id].filled}/{shiftFill[detail.event_id].total} obsazeno</div>
+                      <div>Obsazení: {shiftFill[detail.event_id].filled}/{shiftFill[detail.event_id].total}</div>
                     )}
                     {detail.note && <div className="text-muted-foreground">Poznámka: {detail.note}</div>}
                     {detail.event_id && (
-                      <div className="text-muted-foreground text-xs">Storno zruší i volné směny této akce; obsazené zůstanou.</div>
+                      <div className="text-muted-foreground text-xs">Storno zruší i volné/nepotvrzené směny této akce; potvrzené zůstanou.</div>
+                    )}
+                    {isAdmin && detail.event_id && detail.events?.event_type === 'commercial' && (
+                      <ObsazeniDetail eventId={detail.event_id} />
                     )}
                   </>
                 )}
@@ -264,10 +289,15 @@ const Calendar = () => {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Zavřít</AlertDialogCancel>
-            <AlertDialogAction onClick={(e) => { e.preventDefault(); handleCancel(); }} disabled={isCancelling}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              {isCancelling ? 'Ruším…' : 'Stornovat rezervaci'}
-            </AlertDialogAction>
+            {detail && canManage(detail) && (
+              <>
+                <Button variant="outline" onClick={() => openEdit(detail)}>Upravit</Button>
+                <AlertDialogAction onClick={(e) => { e.preventDefault(); handleCancel(); }} disabled={isCancelling}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                  {isCancelling ? 'Ruším…' : 'Stornovat'}
+                </AlertDialogAction>
+              </>
+            )}
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
