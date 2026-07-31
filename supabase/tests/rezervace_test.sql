@@ -654,6 +654,31 @@ BEGIN
     'vlastní storno se orazítkuje správně');
 END $$;
 
+-- -----------------------------------------------------------------------------
+-- 17) Whitelist nejde obejít ani zakládáním (INSERT větev guardu)
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _ser uuid; _res uuid;
+BEGIN
+  PERFORM pg_temp.prihlas('44444444-4444-4444-4444-444444444444');
+  SELECT series_id INTO _ser FROM public.reservations WHERE series_id IS NOT NULL LIMIT 1;
+
+  -- přímý zápis nesmí propašovat sérii, autora ani potvrzení
+  INSERT INTO public.reservations (sheet_id, subject_id, start_at, end_at, series_id, created_by, approved_at)
+  VALUES (pg_temp.draha(1), 'aaaa1111-0000-0000-0000-000000000001',
+          pg_temp.cas('2027-01-20 17:00'), pg_temp.cas('2027-01-20 18:00'),
+          _ser, '11111111-1111-1111-1111-111111111111', now() - interval '1 year')
+  RETURNING id INTO _res;
+
+  PERFORM pg_temp.tvrd(
+    (SELECT series_id IS NULL AND created_by = '44444444-4444-4444-4444-444444444444'
+       FROM public.reservations WHERE id = _res),
+    'guard při zakládání zahodí cizí sérii i podvrženého autora');
+  PERFORM pg_temp.tvrd(
+    (SELECT approved_at > now() - interval '1 minute' FROM public.reservations WHERE id = _res),
+    'zástupci se rezervace potvrdí teď, ne zpětně');
+END $$;
+
 DO $$ BEGIN RAISE NOTICE '=== VŠECHNY TESTY PROŠLY ==='; END $$;
 
 ROLLBACK;

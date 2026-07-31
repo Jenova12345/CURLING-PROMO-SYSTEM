@@ -90,6 +90,7 @@ BEGIN
     NEW.cancelled_at      := NULL;
     NEW.cancelled_by      := NULL;
     NEW.cancel_reason     := NULL;
+    NEW.series_id         := NULL;   -- sérii zakládá jen create_booking_series (hlídá si subjekt)
     -- Zástupce klubu rezervuje rovnou platně, člen čeká na potvrzení zástupcem.
     IF public.is_subject_rep(NEW.subject_id) THEN
       NEW.approved_at := now();
