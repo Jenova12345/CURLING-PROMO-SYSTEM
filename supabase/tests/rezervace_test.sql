@@ -597,6 +597,63 @@ BEGIN
   PERFORM pg_temp.tvrd(_zapis = 0, format('kalendářní view mají jen právo číst (nalezeno %s zápisových)', _zapis));
 END $$;
 
+-- -----------------------------------------------------------------------------
+-- 16) Audit rezervace nejde přepsat ani „prázdnou" hodnotou (rekontrola brány)
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _r jsonb; _res uuid; _stamp timestamptz; _duvod text;
+BEGIN
+  -- admin založí a stornuje rezervaci klubu (s důvodem)
+  PERFORM pg_temp.prihlas('11111111-1111-1111-1111-111111111111');
+  _r := public.create_booking(
+    ARRAY[pg_temp.draha(2)], 'training', 'Rezervace pro audit',
+    pg_temp.cas('2027-01-12 17:00'), pg_temp.cas('2027-01-12 18:00'),
+    'aaaa1111-0000-0000-0000-000000000001');
+  _res := ((_r->'reservation_ids')->>0)::uuid;
+  PERFORM public.cancel_booking(_res, 'single', 'Přebito komerční akcí');
+
+  -- zástupce klubu si na cizím stornu nesmí přepsat příběh
+  PERFORM pg_temp.prihlas('44444444-4444-4444-4444-444444444444');
+  PERFORM pg_temp.ocekavej_chybu(
+    format('UPDATE public.reservations SET cancel_reason = ''Zrušili jsme si sami'' WHERE id = %L::uuid', _res),
+    'kdo rezervaci zrušil', 'cizí důvod storna nejde přepsat');
+  PERFORM pg_temp.ocekavej_chybu(
+    format('UPDATE public.reservations SET cancelled_at = NULL WHERE id = %L::uuid', _res),
+    'nelze smazat', 'razítko storna nejde vynulovat');
+
+  SELECT cancelled_at, cancel_reason INTO _stamp, _duvod
+    FROM public.reservations WHERE id = _res;
+  PERFORM pg_temp.tvrd(_stamp IS NOT NULL AND _duvod = 'Přebito komerční akcí',
+    'původní stopa storna zůstala nedotčená');
+
+  -- potvrzení nejde vynulovat (jinak by zmizelo, že ho někdo dal)
+  _r := public.create_booking(
+    ARRAY[pg_temp.draha(2)], 'training', 'Rezervace k odpotvrzení',
+    pg_temp.cas('2027-01-13 17:00'), pg_temp.cas('2027-01-13 18:00'),
+    'aaaa1111-0000-0000-0000-000000000001');
+  _res := ((_r->'reservation_ids')->>0)::uuid;
+  PERFORM pg_temp.ocekavej_chybu(
+    format('UPDATE public.reservations SET approved_at = NULL WHERE id = %L::uuid', _res),
+    'odebrat jen správce', 'potvrzení nejde vynulovat');
+
+  -- whitelist: sloupec mimo povolené se odmítne bez ohledu na to, že guard o něm neví
+  PERFORM pg_temp.ocekavej_chybu(
+    format('UPDATE public.reservations SET created_at = now() - interval ''1 year'' WHERE id = %L::uuid', _res),
+    'smí měnit jen správce', 'sloupec mimo whitelist se odmítne');
+  PERFORM pg_temp.ocekavej_chybu(
+    format('UPDATE public.reservations SET amount = 1 WHERE id = %L::uuid', _res),
+    'smí měnit jen správce', 'částku ne-admin nepřepíše ani naslepo');
+
+  -- legitimní cesty ale musí dál fungovat
+  UPDATE public.reservations SET note = 'poznámka od zástupce' WHERE id = _res;
+  PERFORM pg_temp.tvrd((SELECT note = 'poznámka od zástupce' FROM public.reservations WHERE id = _res),
+    'poznámku zástupce změnit smí');
+  PERFORM public.cancel_booking(_res, 'single', 'vlastní storno');
+  PERFORM pg_temp.tvrd(
+    (SELECT cancelled_by = '44444444-4444-4444-4444-444444444444' FROM public.reservations WHERE id = _res),
+    'vlastní storno se orazítkuje správně');
+END $$;
+
 DO $$ BEGIN RAISE NOTICE '=== VŠECHNY TESTY PROŠLY ==='; END $$;
 
 ROLLBACK;
