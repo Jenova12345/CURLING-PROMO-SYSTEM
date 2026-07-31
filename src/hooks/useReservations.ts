@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
-import { Database } from '@/integrations/supabase/types';
+import { Database, Json } from '@/integrations/supabase/types';
 
 type SubjectType = Database['public']['Enums']['subject_type'];
 export type EventType = Database['public']['Enums']['event_type'];
@@ -187,7 +187,7 @@ export const useReservations = (range: DateRange | null) => {
     p_end: input.end_at,
     p_subject_id: input.subject_id ?? undefined,
     p_note: input.note ?? undefined,
-    p_role_reqs: (input.role_reqs ?? {}) as never,
+    p_role_reqs: (input.role_reqs ?? {}) as Json,
     p_rate: input.rate_per_hour ?? undefined,
   });
 

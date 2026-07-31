@@ -368,7 +368,10 @@ export function ReservationDialog({
     try {
       // EDITACE — název/poznámka/sazba + případný přesun času nebo dráhy
       if (isEdit && editing) {
-        const movedTime = toIso(startHour) !== editing.start_at || toIso(endHour) !== editing.end_at;
+        // Porovnáváme okamžiky, ne řetězce — z databáze chodí jiný formát než z toISOString().
+        const sameMoment = (a: string, b: string) => new Date(a).getTime() === new Date(b).getTime();
+        const movedTime =
+          !sameMoment(toIso(startHour), editing.start_at!) || !sameMoment(toIso(endHour), editing.end_at!);
         const movedSheet = sheetIds[0] !== editing.sheet_id;
         if (movedTime || (movedSheet && editingLanes === 1)) {
           await api.moveBooking({

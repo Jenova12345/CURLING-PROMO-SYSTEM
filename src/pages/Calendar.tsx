@@ -26,7 +26,7 @@ type View = 'day' | 'week' | 'month';
 const DAY_NAMES = ['Po', 'Út', 'St', 'Čt', 'Pá', 'So', 'Ne'];
 const fmtKc = (n: number) => `${n.toLocaleString('cs-CZ')} Kč`;
 
-export const EVENT_TYPE_LABELS: Record<string, string> = {
+const EVENT_TYPE_LABELS: Record<string, string> = {
   commercial: 'Komerční akce',
   recruitment: 'Náborová akce',
   tournament: 'Turnaj',
@@ -35,7 +35,7 @@ export const EVENT_TYPE_LABELS: Record<string, string> = {
 };
 
 // Barva podle typu akce (stejná paleta se používá i v mřížce kalendáře).
-export function chipClass(r: CalendarReservation): string {
+function chipClass(r: CalendarReservation): string {
   switch (r.event_type) {
     case 'commercial':
     case 'recruitment': return 'bg-green-100 text-green-800';
@@ -46,7 +46,7 @@ export function chipClass(r: CalendarReservation): string {
 }
 
 // Název, který vidí VŠICHNI přihlášení (klub / akce) — maskuje se jen částka.
-export function reservationLabel(r: CalendarReservation): string {
+function reservationLabel(r: CalendarReservation): string {
   if (r.subject_name && r.event_title) return `${r.subject_name} — ${r.event_title}`;
   return r.event_title ?? r.subject_name ?? 'Rezervace';
 }
