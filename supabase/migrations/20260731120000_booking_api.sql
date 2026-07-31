@@ -54,15 +54,19 @@ CREATE VIEW public.reservations_calendar
     CASE WHEN has_role(auth.uid(), 'admin') OR r.created_by = auth.uid() THEN r.amount END           AS amount,
     CASE WHEN has_role(auth.uid(), 'admin') OR r.created_by = auth.uid() THEN r.corrected_hours END  AS corrected_hours,
     CASE WHEN has_role(auth.uid(), 'admin') OR r.created_by = auth.uid() THEN r.corrected_amount END AS corrected_amount,
-    (has_role(auth.uid(), 'admin') OR r.created_by = auth.uid()) AS can_see_amount,
+    -- COALESCE: u starých rezervací bez autora by porovnání dalo NULL a klient by
+    -- musel řešit tri-state; takhle je odpověď vždy true/false
+    COALESCE(has_role(auth.uid(), 'admin') OR r.created_by = auth.uid(), false) AS can_see_amount,
     -- co smí přihlášený s rezervací dělat (aby to FE nemusel dopočítávat z rolí)
-    (has_role(auth.uid(), 'admin')
-     OR (r.subject_id IS NOT NULL AND public.is_subject_rep(r.subject_id))
-     OR (r.subject_id IS NOT NULL AND public.is_subject_member(r.subject_id) AND r.created_by = auth.uid())
-    ) AS can_manage,
-    (has_role(auth.uid(), 'admin')
-     OR (r.subject_id IS NOT NULL AND public.is_subject_rep(r.subject_id))
-    ) AS can_approve
+    COALESCE(
+      has_role(auth.uid(), 'admin')
+      OR (r.subject_id IS NOT NULL AND public.is_subject_rep(r.subject_id))
+      OR (r.subject_id IS NOT NULL AND public.is_subject_member(r.subject_id) AND r.created_by = auth.uid()),
+      false) AS can_manage,
+    COALESCE(
+      has_role(auth.uid(), 'admin')
+      OR (r.subject_id IS NOT NULL AND public.is_subject_rep(r.subject_id)),
+      false) AS can_approve
   FROM public.reservations r
   LEFT JOIN public.subjects s  ON s.id  = r.subject_id
   LEFT JOIN public.events   e  ON e.id  = r.event_id

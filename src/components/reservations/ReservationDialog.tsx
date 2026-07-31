@@ -170,7 +170,9 @@ export function ReservationDialog({
       setSheetIds(editing.sheet_id ? [editing.sheet_id] : []);
       setDate(format(start, 'yyyy-MM-dd'));
       setStartHour(start.getHours());
-      setEndHour(end.getHours() === 0 ? 24 : end.getHours());
+      // Konec o půlnoci (starší data z doby před validací) posuneme na 23:00 —
+      // „24:00" by se do formuláře ani do data nedalo přeložit.
+      setEndHour(end.getHours() === 0 ? 23 : end.getHours());
       setNote(editing.note ?? '');
       setTitle(editing.event_title ?? '');
       setTitleTouched(true);
