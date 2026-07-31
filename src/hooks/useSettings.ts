@@ -40,7 +40,13 @@ export const useSettings = () => {
   };
 
   const updateSettings = useMutation({
-    mutationFn: async (fields: { club_default_rate?: number | null; commercial_default_rate?: number | null; opening_hours?: OpeningHours }) => {
+    mutationFn: async (fields: {
+      club_default_rate?: number | null;
+      commercial_default_rate?: number | null;
+      training_rate?: number | null;
+      tournament_rate?: number | null;
+      opening_hours?: OpeningHours;
+    }) => {
       const { error } = await supabase.from('settings').update(fields).eq('singleton', true);
       if (error) throw new Error('Nepodařilo se uložit nastavení.');
     },

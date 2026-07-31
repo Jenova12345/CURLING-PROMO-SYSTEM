@@ -14,12 +14,17 @@ export type DueReservation = {
   corrected_hours: number | null;
   corrected_amount: number | null;
   subject_id: string;
-  subjects: { name: string; type: SubjectType } | null;
+  subject_name: string | null;
+  subject_type: SubjectType | null;
+  sheet_name: string | null;
+  event_title: string | null;
 };
 
 export type DueRow = { subjectId: string; name: string; type: SubjectType; hours: number; amount: number; count: number };
 
-// Podklady „kdo kolik dluží" za období. Interní (subject NULL) se nepočítá; jen confirmed.
+// Podklady „kdo kolik dluží" za období. Čte se z view reservations_billing, které
+// pouští částky jen adminovi (obyčejný uživatel dostane prázdný výsledek i přes API).
+// Interní rezervace (bez subjektu) se nepočítají; jen confirmed.
 export const useDues = (range: { from: string; to: string } | null) => {
   const { user, isAdmin } = useAuth();
 
@@ -27,11 +32,8 @@ export const useDues = (range: { from: string; to: string } | null) => {
     queryKey: ['dues', range?.from, range?.to],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from('reservations')
-        .select('id, start_at, end_at, hours, amount, corrected_hours, corrected_amount, subject_id, subjects(name, type)')
-        .eq('status', 'confirmed')
-        .is('deleted_at', null)
-        .not('subject_id', 'is', null)
+        .from('reservations_billing')
+        .select('id, start_at, end_at, hours, amount, corrected_hours, corrected_amount, subject_id, subject_name, subject_type, sheet_name, event_title')
         .gte('start_at', range!.from)
         .lt('start_at', range!.to)
         .order('start_at', { ascending: true });
@@ -46,7 +48,7 @@ export const useDues = (range: { from: string; to: string } | null) => {
     const hours = Number(r.corrected_hours ?? r.hours ?? 0);
     const amount = Number(r.corrected_amount ?? r.amount ?? 0);
     const key = r.subject_id;
-    const cur = bySubject.get(key) ?? { subjectId: key, name: r.subjects?.name ?? 'Neznámý', type: r.subjects?.type ?? 'club', hours: 0, amount: 0, count: 0 };
+    const cur = bySubject.get(key) ?? { subjectId: key, name: r.subject_name ?? 'Neznámý', type: r.subject_type ?? 'club', hours: 0, amount: 0, count: 0 };
     cur.hours += hours; cur.amount += amount; cur.count += 1;
     bySubject.set(key, cur);
   }

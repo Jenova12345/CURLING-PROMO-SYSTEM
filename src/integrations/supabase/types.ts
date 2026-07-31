@@ -106,6 +106,70 @@ export type Database = {
         }
         Relationships: []
       }
+      email_outbox: {
+        Row: {
+          attempts: number
+          body: string
+          created_at: string
+          email: string
+          id: string
+          last_error: string | null
+          notification_id: string | null
+          sent_at: string | null
+          status: string
+          subject: string
+          user_id: string | null
+        }
+        Insert: {
+          attempts?: number
+          body: string
+          created_at?: string
+          email: string
+          id?: string
+          last_error?: string | null
+          notification_id?: string | null
+          sent_at?: string | null
+          status?: string
+          subject: string
+          user_id?: string | null
+        }
+        Update: {
+          attempts?: number
+          body?: string
+          created_at?: string
+          email?: string
+          id?: string
+          last_error?: string | null
+          notification_id?: string | null
+          sent_at?: string | null
+          status?: string
+          subject?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "email_outbox_notification_id_fkey"
+            columns: ["notification_id"]
+            isOneToOne: false
+            referencedRelation: "notifications"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "email_outbox_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "email_outbox_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
       events: {
         Row: {
           created_at: string
@@ -147,6 +211,105 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
+      }
+      notifications: {
+        Row: {
+          body: string | null
+          created_at: string
+          created_by: string | null
+          id: string
+          link: string | null
+          read_at: string | null
+          reservation_id: string | null
+          subject_id: string | null
+          title: string
+          type: string
+          user_id: string
+        }
+        Insert: {
+          body?: string | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          link?: string | null
+          read_at?: string | null
+          reservation_id?: string | null
+          subject_id?: string | null
+          title: string
+          type: string
+          user_id: string
+        }
+        Update: {
+          body?: string | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          link?: string | null
+          read_at?: string | null
+          reservation_id?: string | null
+          subject_id?: string | null
+          title?: string
+          type?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notifications_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "notifications_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "notifications_reservation_id_fkey"
+            columns: ["reservation_id"]
+            isOneToOne: false
+            referencedRelation: "reservations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "notifications_reservation_id_fkey"
+            columns: ["reservation_id"]
+            isOneToOne: false
+            referencedRelation: "reservations_billing"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "notifications_reservation_id_fkey"
+            columns: ["reservation_id"]
+            isOneToOne: false
+            referencedRelation: "reservations_calendar"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "notifications_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "notifications_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "notifications_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+        ]
       }
       payouts: {
         Row: {
@@ -240,6 +403,11 @@ export type Database = {
       reservations: {
         Row: {
           amount: number | null
+          approved_at: string | null
+          approved_by: string | null
+          cancel_reason: string | null
+          cancelled_at: string | null
+          cancelled_by: string | null
           corrected_amount: number | null
           corrected_hours: number | null
           correction_reason: string | null
@@ -252,6 +420,7 @@ export type Database = {
           id: string
           note: string | null
           rate_per_hour: number | null
+          series_id: string | null
           sheet_id: string
           start_at: string
           status: Database["public"]["Enums"]["reservation_status"]
@@ -261,6 +430,11 @@ export type Database = {
         }
         Insert: {
           amount?: number | null
+          approved_at?: string | null
+          approved_by?: string | null
+          cancel_reason?: string | null
+          cancelled_at?: string | null
+          cancelled_by?: string | null
           corrected_amount?: number | null
           corrected_hours?: number | null
           correction_reason?: string | null
@@ -273,6 +447,7 @@ export type Database = {
           id?: string
           note?: string | null
           rate_per_hour?: number | null
+          series_id?: string | null
           sheet_id: string
           start_at: string
           status?: Database["public"]["Enums"]["reservation_status"]
@@ -282,6 +457,11 @@ export type Database = {
         }
         Update: {
           amount?: number | null
+          approved_at?: string | null
+          approved_by?: string | null
+          cancel_reason?: string | null
+          cancelled_at?: string | null
+          cancelled_by?: string | null
           corrected_amount?: number | null
           corrected_hours?: number | null
           correction_reason?: string | null
@@ -294,6 +474,7 @@ export type Database = {
           id?: string
           note?: string | null
           rate_per_hour?: number | null
+          series_id?: string | null
           sheet_id?: string
           start_at?: string
           status?: Database["public"]["Enums"]["reservation_status"]
@@ -302,6 +483,34 @@ export type Database = {
           updated_by?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "reservations_approved_by_fkey"
+            columns: ["approved_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "reservations_approved_by_fkey"
+            columns: ["approved_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "reservations_cancelled_by_fkey"
+            columns: ["cancelled_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "reservations_cancelled_by_fkey"
+            columns: ["cancelled_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
           {
             foreignKeyName: "reservations_created_by_fkey"
             columns: ["created_by"]
@@ -357,27 +566,36 @@ export type Database = {
         Row: {
           club_default_rate: number | null
           commercial_default_rate: number | null
+          email_notifications_enabled: boolean
           id: string
           opening_hours: Json
           singleton: boolean
+          tournament_rate: number | null
+          training_rate: number | null
           updated_at: string
           updated_by: string | null
         }
         Insert: {
           club_default_rate?: number | null
           commercial_default_rate?: number | null
+          email_notifications_enabled?: boolean
           id?: string
           opening_hours: Json
           singleton?: boolean
+          tournament_rate?: number | null
+          training_rate?: number | null
           updated_at?: string
           updated_by?: string | null
         }
         Update: {
           club_default_rate?: number | null
           commercial_default_rate?: number | null
+          email_notifications_enabled?: boolean
           id?: string
           opening_hours?: Json
           singleton?: boolean
+          tournament_rate?: number | null
+          training_rate?: number | null
           updated_at?: string
           updated_by?: string | null
         }
@@ -456,6 +674,8 @@ export type Database = {
       }
       shifts: {
         Row: {
+          cancelled_at: string | null
+          cancelled_by: string | null
           claimed_at: string | null
           claimed_by: string | null
           completed_at: string | null
@@ -471,6 +691,8 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          cancelled_at?: string | null
+          cancelled_by?: string | null
           claimed_at?: string | null
           claimed_by?: string | null
           completed_at?: string | null
@@ -486,6 +708,8 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          cancelled_at?: string | null
+          cancelled_by?: string | null
           claimed_at?: string | null
           claimed_by?: string | null
           completed_at?: string | null
@@ -501,6 +725,20 @@ export type Database = {
           updated_at?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "shifts_cancelled_by_fkey"
+            columns: ["cancelled_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "shifts_cancelled_by_fkey"
+            columns: ["cancelled_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
           {
             foreignKeyName: "shifts_event_id_fkey"
             columns: ["event_id"]
@@ -707,24 +945,25 @@ export type Database = {
         }
         Relationships: []
       }
-      reservations_calendar: {
+      reservations_billing: {
         Row: {
+          amount: number | null
+          corrected_amount: number | null
+          corrected_hours: number | null
+          correction_reason: string | null
           end_at: string | null
+          event_title: string | null
+          event_type: Database["public"]["Enums"]["event_type"] | null
+          hours: number | null
+          id: string | null
+          note: string | null
+          rate_per_hour: number | null
           sheet_id: string | null
+          sheet_name: string | null
           start_at: string | null
-          status: Database["public"]["Enums"]["reservation_status"] | null
-        }
-        Insert: {
-          end_at?: string | null
-          sheet_id?: string | null
-          start_at?: string | null
-          status?: Database["public"]["Enums"]["reservation_status"] | null
-        }
-        Update: {
-          end_at?: string | null
-          sheet_id?: string | null
-          start_at?: string | null
-          status?: Database["public"]["Enums"]["reservation_status"] | null
+          subject_id: string | null
+          subject_name: string | null
+          subject_type: Database["public"]["Enums"]["subject_type"] | null
         }
         Relationships: [
           {
@@ -734,10 +973,181 @@ export type Database = {
             referencedRelation: "sheets"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "reservations_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      reservations_calendar: {
+        Row: {
+          amount: number | null
+          approved_at: string | null
+          can_approve: boolean | null
+          can_manage: boolean | null
+          can_see_amount: boolean | null
+          cancel_reason: string | null
+          cancelled_at: string | null
+          cancelled_by: string | null
+          cancelled_by_name: string | null
+          corrected_amount: number | null
+          corrected_hours: number | null
+          created_at: string | null
+          created_by: string | null
+          created_by_name: string | null
+          end_at: string | null
+          event_id: string | null
+          event_title: string | null
+          event_type: Database["public"]["Enums"]["event_type"] | null
+          hours: number | null
+          id: string | null
+          note: string | null
+          rate_per_hour: number | null
+          series_id: string | null
+          sheet_id: string | null
+          start_at: string | null
+          status: Database["public"]["Enums"]["reservation_status"] | null
+          subject_id: string | null
+          subject_name: string | null
+          subject_type: Database["public"]["Enums"]["subject_type"] | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "reservations_cancelled_by_fkey"
+            columns: ["cancelled_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "reservations_cancelled_by_fkey"
+            columns: ["cancelled_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "reservations_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "reservations_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "reservations_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reservations_sheet_id_fkey"
+            columns: ["sheet_id"]
+            isOneToOne: false
+            referencedRelation: "sheets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reservations_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects"
+            referencedColumns: ["id"]
+          },
         ]
       }
     }
     Functions: {
+      approve_reservation: {
+        Args: { p_reservation_id: string }
+        Returns: undefined
+      }
+      booking_priority: {
+        Args: { _type: Database["public"]["Enums"]["event_type"] }
+        Returns: number
+      }
+      can_manage_reservation: {
+        Args: { _reservation: string }
+        Returns: boolean
+      }
+      cancel_booking: {
+        Args: { p_reason?: string; p_reservation_id: string; p_scope?: string }
+        Returns: Json
+      }
+      check_booking_conflicts: {
+        Args: {
+          p_end: string
+          p_ignore_event?: string
+          p_ignore_reservation?: string
+          p_kind?: string
+          p_sheet_ids: string[]
+          p_start: string
+        }
+        Returns: {
+          can_override: boolean
+          end_at: string
+          event_title: string
+          event_type: Database["public"]["Enums"]["event_type"]
+          reservation_id: string
+          sheet_id: string
+          sheet_name: string
+          start_at: string
+          subject_name: string
+        }[]
+      }
+      create_booking: {
+        Args: {
+          p_end: string
+          p_kind: string
+          p_note?: string
+          p_override?: boolean
+          p_rate?: number
+          p_role_reqs?: Json
+          p_series_id?: string
+          p_sheet_ids: string[]
+          p_start: string
+          p_subject_id?: string
+          p_title: string
+        }
+        Returns: Json
+      }
+      create_booking_series: {
+        Args: {
+          p_end: string
+          p_kind: string
+          p_note?: string
+          p_rate?: number
+          p_role_reqs?: Json
+          p_sheet_ids: string[]
+          p_start: string
+          p_subject_id?: string
+          p_title: string
+          p_until: string
+          p_weekdays: number[]
+        }
+        Returns: Json
+      }
+      find_subject_by_ico: {
+        Args: { p_ico: string }
+        Returns: {
+          address: string
+          dic: string
+          ico: string
+          id: string
+          name: string
+          type: Database["public"]["Enums"]["subject_type"]
+        }[]
+      }
       get_user_role: {
         Args: { _user_id: string }
         Returns: Database["public"]["Enums"]["app_role"]
@@ -751,6 +1161,43 @@ export type Database = {
       }
       is_subject_member: { Args: { _subject: string }; Returns: boolean }
       is_subject_rep: { Args: { _subject: string }; Returns: boolean }
+      move_booking: {
+        Args: {
+          p_end: string
+          p_reservation_id: string
+          p_sheet_id?: string
+          p_start: string
+        }
+        Returns: Json
+      }
+      notify_user: {
+        Args: {
+          _body: string
+          _link?: string
+          _reservation_id?: string
+          _subject_id?: string
+          _title: string
+          _type: string
+          _user: string
+        }
+        Returns: string
+      }
+      reservation_priority: {
+        Args: {
+          _event_type: Database["public"]["Enums"]["event_type"]
+          _subject_type: Database["public"]["Enums"]["subject_type"]
+        }
+        Returns: number
+      }
+      update_booking: {
+        Args: {
+          p_note?: string
+          p_rate?: number
+          p_reservation_id: string
+          p_title?: string
+        }
+        Returns: undefined
+      }
     }
     Enums: {
       app_role:
@@ -762,7 +1209,12 @@ export type Database = {
         | "instructor"
         | "bar_staff"
         | "manager"
-      event_type: "commercial" | "training" | "maintenance" | "recruitment"
+      event_type:
+        | "commercial"
+        | "training"
+        | "maintenance"
+        | "recruitment"
+        | "tournament"
       reservation_status: "confirmed" | "cancelled"
       shift_status: "open" | "pending" | "claimed" | "completed" | "cancelled"
       subject_rep_level: "rep" | "member"
@@ -907,7 +1359,13 @@ export const Constants = {
         "bar_staff",
         "manager",
       ],
-      event_type: ["commercial", "training", "maintenance", "recruitment"],
+      event_type: [
+        "commercial",
+        "training",
+        "maintenance",
+        "recruitment",
+        "tournament",
+      ],
       reservation_status: ["confirmed", "cancelled"],
       shift_status: ["open", "pending", "claimed", "completed", "cancelled"],
       subject_rep_level: ["rep", "member"],

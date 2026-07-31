@@ -18,6 +18,8 @@ const Settings = () => {
 
   const [club, setClub] = useState('');
   const [commercial, setCommercial] = useState('');
+  const [training, setTraining] = useState('');
+  const [tournament, setTournament] = useState('');
   const [hours, setHours] = useState<OpeningHours>({});
   const [newSheet, setNewSheet] = useState('');
 
@@ -25,6 +27,8 @@ const Settings = () => {
     if (!settings) return;
     setClub(settings.club_default_rate != null ? String(settings.club_default_rate) : '');
     setCommercial(settings.commercial_default_rate != null ? String(settings.commercial_default_rate) : '');
+    setTraining(settings.training_rate != null ? String(settings.training_rate) : '');
+    setTournament(settings.tournament_rate != null ? String(settings.tournament_rate) : '');
     setHours((settings.opening_hours as OpeningHours) ?? {});
   }, [settings]);
 
@@ -32,13 +36,19 @@ const Settings = () => {
 
   if (!isAdmin) return <div className="p-6 text-muted-foreground">Nastavení může spravovat jen správce.</div>;
 
+  const parseRate = (v: string): number | null => (v.trim() ? Number(v.replace(',', '.')) : null);
+
   const saveRates = async () => {
-    const c = club.trim() ? Number(club.replace(',', '.')) : null;
-    const k = commercial.trim() ? Number(commercial.replace(',', '.')) : null;
-    if ((c != null && (isNaN(c) || c <= 0)) || (k != null && (isNaN(k) || k <= 0))) {
+    const values = {
+      club_default_rate: parseRate(club),
+      commercial_default_rate: parseRate(commercial),
+      training_rate: parseRate(training),
+      tournament_rate: parseRate(tournament),
+    };
+    if (Object.values(values).some((v) => v != null && (isNaN(v) || v <= 0))) {
       toast({ title: 'Neplatná sazba', description: 'Zadej kladná čísla.', variant: 'destructive' }); return;
     }
-    try { await updateSettings({ club_default_rate: c, commercial_default_rate: k }); toast({ title: 'Ceník uložen' }); }
+    try { await updateSettings(values); toast({ title: 'Ceník uložen' }); }
     catch (e) { toast({ title: 'Chyba', description: e instanceof Error ? e.message : '', variant: 'destructive' }); }
   };
 
@@ -62,14 +72,22 @@ const Settings = () => {
       {isLoading ? <div className="text-muted-foreground">Načítám…</div> : (
         <>
           <Card>
-            <CardHeader><CardTitle>Ceník (výchozí sazby)</CardTitle>
-              <CardDescription>Použije se, pokud subjekt nemá vlastní sazbu. Sazba se u rezervace uloží jako snapshot.</CardDescription></CardHeader>
+            <CardHeader><CardTitle>Ceník (výchozí sazby podle typu akce)</CardTitle>
+              <CardDescription>
+                Sazba se u rezervace předvyplní podle typu akce a uloží se jako snapshot (pozdější změna ceníku
+                nepřepočítá starší rezervace). Vlastní sazba subjektu má přednost. Prázdné pole u tréninku
+                a turnaje znamená „použij sazbu klubu".
+              </CardDescription></CardHeader>
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2"><Label htmlFor="rate-club">Klub (Kč/h)</Label>
-                  <Input id="rate-club" value={club} inputMode="numeric" onChange={(e) => setClub(e.target.value)} /></div>
-                <div className="space-y-2"><Label htmlFor="rate-com">Komerční (Kč/h)</Label>
+                <div className="space-y-2"><Label htmlFor="rate-training">Trénink (Kč/h)</Label>
+                  <Input id="rate-training" value={training} inputMode="numeric" placeholder="jako klub" onChange={(e) => setTraining(e.target.value)} /></div>
+                <div className="space-y-2"><Label htmlFor="rate-tournament">Turnaj (Kč/h)</Label>
+                  <Input id="rate-tournament" value={tournament} inputMode="numeric" placeholder="jako klub" onChange={(e) => setTournament(e.target.value)} /></div>
+                <div className="space-y-2"><Label htmlFor="rate-com">Komerční akce (Kč/h)</Label>
                   <Input id="rate-com" value={commercial} inputMode="numeric" onChange={(e) => setCommercial(e.target.value)} /></div>
+                <div className="space-y-2"><Label htmlFor="rate-club">Klub — výchozí (Kč/h)</Label>
+                  <Input id="rate-club" value={club} inputMode="numeric" onChange={(e) => setClub(e.target.value)} /></div>
               </div>
               <Button onClick={saveRates} disabled={isSaving}>Uložit ceník</Button>
             </CardContent>

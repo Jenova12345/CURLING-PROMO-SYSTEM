@@ -66,12 +66,23 @@ export const useSubjectsAdmin = () => {
     return data as { name: string; address: string; dic: string };
   };
 
+  // Existuje už subjekt s tímhle IČO? (server — cizí subjekty admin sice vidí, ale
+  // kontrola musí projít i soft-smazané/cizí případy jednotně)
+  const findSubjectByIco = async (ico: string): Promise<Subject | null> => {
+    const { data, error } = await supabase.rpc('find_subject_by_ico', { p_ico: ico });
+    if (error) throw new Error('Ověření IČO selhalo.');
+    return ((data ?? []) as Subject[])[0] ?? null;
+  };
+
   const createSubject = useMutation({
     mutationFn: async (s: { type: SubjectType; name: string; ico?: string; dic?: string; address?: string; default_rate?: number | null }) => {
       const { error } = await supabase.from('subjects').insert({
         type: s.type, name: s.name, ico: s.ico || null, dic: s.dic || null, address: s.address || null, default_rate: s.default_rate ?? null,
       });
-      if (error) throw new Error('Nepodařilo se založit subjekt.');
+      if (error) {
+        if (error.code === '23505') throw new Error('Subjekt s tímto IČO už v systému je.');
+        throw new Error('Nepodařilo se založit subjekt.');
+      }
     },
     onSuccess: invalidate,
   });
@@ -117,7 +128,7 @@ export const useSubjectsAdmin = () => {
   });
 
   return {
-    subjects, reps, profiles, isLoading, aresLookup,
+    subjects, reps, profiles, isLoading, aresLookup, findSubjectByIco,
     createSubject: createSubject.mutateAsync,
     updateSubject: updateSubject.mutateAsync,
     deleteSubject: deleteSubject.mutateAsync,

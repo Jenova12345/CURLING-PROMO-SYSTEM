@@ -4,18 +4,19 @@ import {
   startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths,
 } from 'date-fns';
 import { cs } from 'date-fns/locale';
-import { ChevronLeft, ChevronRight, CalendarCheck, Plus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CalendarCheck, Plus, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialog, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRateLimit } from '@/hooks/useRateLimit';
-import { useReservations, type ReservationRow } from '@/hooks/useReservations';
+import { useReservations, type CalendarReservation } from '@/hooks/useReservations';
 import { ReservationCalendar } from '@/components/reservations/ReservationCalendar';
 import { ReservationDialog } from '@/components/reservations/ReservationDialog';
 import { ObsazeniDetail } from '@/components/reservations/ObsazeniDetail';
@@ -25,8 +26,33 @@ type View = 'day' | 'week' | 'month';
 const DAY_NAMES = ['Po', 'Út', 'St', 'Čt', 'Pá', 'So', 'Ne'];
 const fmtKc = (n: number) => `${n.toLocaleString('cs-CZ')} Kč`;
 
+export const EVENT_TYPE_LABELS: Record<string, string> = {
+  commercial: 'Komerční akce',
+  recruitment: 'Náborová akce',
+  tournament: 'Turnaj',
+  training: 'Trénink',
+  maintenance: 'Údržba ledu',
+};
+
+// Barva podle typu akce (stejná paleta se používá i v mřížce kalendáře).
+export function chipClass(r: CalendarReservation): string {
+  switch (r.event_type) {
+    case 'commercial':
+    case 'recruitment': return 'bg-green-100 text-green-800';
+    case 'tournament': return 'bg-purple-100 text-purple-800';
+    case 'maintenance': return 'bg-orange-100 text-orange-800';
+    default: return 'bg-blue-100 text-blue-800';
+  }
+}
+
+// Název, který vidí VŠICHNI přihlášení (klub / akce) — maskuje se jen částka.
+export function reservationLabel(r: CalendarReservation): string {
+  if (r.subject_name && r.event_title) return `${r.subject_name} — ${r.event_title}`;
+  return r.event_title ?? r.subject_name ?? 'Rezervace';
+}
+
 function parseOpeningHours(openingHours: unknown): { open: number; close: number } {
-  const fallback = { open: 8, close: 22 };
+  const fallback = { open: 7, close: 22 };
   if (!openingHours || typeof openingHours !== 'object') return fallback;
   let open = 24, close = 0, seen = false;
   for (const v of Object.values(openingHours as Record<string, { open?: string; close?: string }>)) {
@@ -40,21 +66,9 @@ function parseOpeningHours(openingHours: unknown): { open: number; close: number
   return { open, close };
 }
 
-// Barva chipu podle typu rezervace/akce.
-function chipClass(r: ReservationRow): string {
-  const t = r.events?.event_type;
-  if (t === 'commercial') return 'bg-green-100 text-green-800';
-  if (t === 'training') return 'bg-blue-100 text-blue-800';
-  if (t === 'maintenance') return 'bg-orange-100 text-orange-800';
-  return 'bg-slate-100 text-slate-800'; // klubová (bez akce)
-}
-function reservationLabel(r: ReservationRow): string {
-  return r.subjects?.name ?? r.events?.title ?? 'Rezervace';
-}
-
 const Calendar = () => {
   const { toast } = useToast();
-  const { isAdmin, user } = useAuth();
+  const { isAdmin } = useAuth();
   const { checkLimit } = useRateLimit('createReservation');
 
   const [view, setView] = useState<View>('week');
@@ -62,8 +76,9 @@ const Calendar = () => {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [defaultSheetId, setDefaultSheetId] = useState<string | undefined>();
   const [defaultStart, setDefaultStart] = useState<Date | undefined>();
-  const [editing, setEditing] = useState<ReservationRow | null>(null);
-  const [detail, setDetail] = useState<ReservationRow | null>(null);
+  const [editing, setEditing] = useState<CalendarReservation | null>(null);
+  const [detail, setDetail] = useState<CalendarReservation | null>(null);
+  const [cancelling, setCancelling] = useState<CalendarReservation | null>(null);
 
   const range = useMemo(() => {
     if (view === 'day') {
@@ -78,23 +93,22 @@ const Calendar = () => {
     return { from: from.toISOString(), to: addDays(endOfMonth(currentDate), 1).toISOString() };
   }, [view, currentDate]);
 
+  const api = useReservations(range);
   const {
-    reservations, calendar, sheets, mySubjects, myMemberships, settings, shiftFill, isLoading,
-    createClub, createCommercial, createInternal, updateReservation, updateEvent,
-    aresLookup, createSubject, cancelReservation, isCreating, isUpdating, isCancelling,
-  } = useReservations(range);
+    reservations, sheets, mySubjects, myMemberships, settings, shiftFill, isLoading,
+    cancelBooking, approveReservation, isCancelling, isApproving,
+  } = api;
 
-  // Kdo smí rezervaci editovat/stornovat: admin vše; zástupce celý svůj klub; člen jen svou.
-  const canManage = (r: ReservationRow): boolean => {
-    if (isAdmin) return true;
-    if (!r.subject_id) return false; // interní jen admin
-    const m = myMemberships.find((x) => x.subject_id === r.subject_id);
-    if (!m) return false;
-    return m.level === 'rep' || r.created_by === user?.id;
-  };
+  const sheetName = (id: string | null) => sheets.find((s) => s.id === id)?.name ?? 'Dráha';
 
-  const { open: openHour, close: closeHour } = useMemo(() => parseOpeningHours(settings?.opening_hours), [settings]);
-  const canBook = isAdmin || mySubjects.length > 0;
+  // Kolik drah drží stejná akce (kvůli stornu „celé akce" a přesunu).
+  const lanesOfEvent = (r: CalendarReservation | null) =>
+    r?.event_id ? reservations.filter((x) => x.event_id === r.event_id).length : 1;
+
+  const { open: openHour, close: closeHour } = useMemo(
+    () => parseOpeningHours(settings?.opening_hours), [settings],
+  );
+  const canBook = isAdmin || mySubjects.some((s) => myMemberships.some((m) => m.subject_id === s.id));
 
   const goPrev = () => setCurrentDate((d) => view === 'day' ? subDays(d, 1) : view === 'week' ? subWeeks(d, 1) : subMonths(d, 1));
   const goNext = () => setCurrentDate((d) => view === 'day' ? addDays(d, 1) : view === 'week' ? addWeeks(d, 1) : addMonths(d, 1));
@@ -114,22 +128,44 @@ const Calendar = () => {
     const base = new Date(currentDate); base.setHours(openHour, 0, 0, 0);
     setEditing(null); setDefaultSheetId(sheets[0]?.id); setDefaultStart(base); setDialogOpen(true);
   };
-  const openEdit = (r: ReservationRow) => {
+  const openEdit = (r: CalendarReservation) => {
     setDetail(null); setEditing(r); setDialogOpen(true);
   };
-  const guard = async <T,>(fn: () => Promise<T>): Promise<T> => {
+
+  // Zakládání rezervací drží rate limit (ochrana proti překlikání i proti robotům).
+  const limit = () => {
     if (!checkLimit()) throw new Error('Příliš mnoho pokusů. Zkuste to za chvíli.');
-    return fn();
   };
 
-  const handleCancel = async () => {
-    if (!detail) return;
+  const handleCancel = async (scope: 'single' | 'event' | 'series') => {
+    if (!cancelling) return;
     try {
-      await cancelReservation(detail.id);
-      toast({ title: 'Rezervace stornována' });
-      setDetail(null);
+      await cancelBooking({ id: cancelling.id!, scope });
+      toast({ title: scope === 'single' ? 'Rezervace stornována' : scope === 'event' ? 'Akce stornována' : 'Série stornována' });
+      setCancelling(null); setDetail(null);
     } catch (error) {
       toast({ title: 'Chyba', description: error instanceof Error ? error.message : 'Nepodařilo se stornovat.', variant: 'destructive' });
+    }
+  };
+
+  const handleApprove = async (r: CalendarReservation) => {
+    try {
+      await approveReservation(r.id!);
+      toast({ title: 'Rezervace potvrzena' });
+      setDetail(null);
+    } catch (error) {
+      toast({ title: 'Chyba', description: error instanceof Error ? error.message : 'Nepodařilo se potvrdit.', variant: 'destructive' });
+    }
+  };
+
+  const handleMove = async (r: CalendarReservation, start: Date, end: Date, sheetId: string) => {
+    try {
+      await api.moveBooking({
+        id: r.id!, start_at: start.toISOString(), end_at: end.toISOString(), sheet_id: sheetId,
+      });
+      toast({ title: 'Rezervace přesunuta', description: `${format(start, 'EEEE d. M. HH:mm', { locale: cs })}–${format(end, 'HH:mm')}` });
+    } catch (error) {
+      toast({ title: 'Přesun se nepovedl', description: error instanceof Error ? error.message : 'Zkuste to znovu.', variant: 'destructive' });
     }
   };
 
@@ -139,8 +175,11 @@ const Calendar = () => {
     return eachDayOfInterval({ start: startOfMonth(currentDate), end: endOfMonth(currentDate) });
   }, [view, currentDate]);
   const reservationsByDay = (day: Date) =>
-    reservations.filter((r) => isSameDay(new Date(r.start_at), day));
+    reservations.filter((r) => isSameDay(new Date(r.start_at!), day));
   const monthLead = view === 'month' ? (startOfMonth(currentDate).getDay() + 6) % 7 : 0;
+
+  const detailLanes = lanesOfEvent(detail);
+  const cancelLanes = lanesOfEvent(cancelling);
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-6">
@@ -150,7 +189,7 @@ const Calendar = () => {
             <CalendarCheck className="h-6 w-6" /> Kalendář ledu
           </h1>
           <p className="text-muted-foreground mt-1 text-sm md:text-base">
-            {canBook ? 'Rezervace ledu, komerční akce i tréninky na jednom místě.' : 'Přehled obsazenosti pláten.'}
+            {canBook ? 'Rezervace ledu, komerční akce i tréninky na jednom místě.' : 'Přehled obsazenosti drah.'}
           </p>
         </div>
         {canBook && (
@@ -176,7 +215,7 @@ const Calendar = () => {
 
       {!canBook && (
         <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
-          Pro vytváření rezervací musíte být zástupcem klubu. Kontaktujte správce haly.
+          Rezervovat můžou členové a zástupci klubů. Pokud za klub rezervovat potřebujete, ozvěte se správci haly.
         </div>
       )}
 
@@ -206,7 +245,7 @@ const Calendar = () => {
                       <div className="mt-1 space-y-0.5">
                         {dayRes.slice(0, 3).map((r) => (
                           <div key={r.id} className={cn('truncate rounded px-1 text-[10px]', chipClass(r))}>
-                            {format(new Date(r.start_at), 'HH:mm')} {reservationLabel(r)}
+                            {format(new Date(r.start_at!), 'HH:mm')} {reservationLabel(r)}
                           </div>
                         ))}
                         {dayRes.length > 3 && <div className="text-[10px] text-muted-foreground">+{dayRes.length - 3} dalších</div>}
@@ -222,13 +261,13 @@ const Calendar = () => {
               currentDate={currentDate}
               sheets={sheets}
               reservations={reservations}
-              calendar={calendar}
               shiftFill={shiftFill}
               openHour={openHour}
               closeHour={closeHour}
               canBook={canBook}
               onSlotClick={handleSlotClick}
               onReservationClick={setDetail}
+              onMove={handleMove}
             />
           )}
         </CardContent>
@@ -240,21 +279,27 @@ const Calendar = () => {
         isAdmin={isAdmin}
         sheets={sheets}
         subjects={mySubjects}
+        memberships={myMemberships}
         settings={settings}
         defaultSheetId={defaultSheetId}
         defaultStart={defaultStart}
         editing={editing}
-        isCreating={isCreating}
-        isUpdating={isUpdating}
-        onClub={(d) => guard(() => createClub(d))}
-        onCommercial={(d) => guard(() => createCommercial(d))}
-        onInternal={(d) => guard(() => createInternal(d))}
-        onUpdateReservation={updateReservation}
-        onUpdateEvent={updateEvent}
-        onAresLookup={aresLookup}
-        onCreateSubject={createSubject}
+        editingLanes={lanesOfEvent(editing)}
+        api={{
+          createBooking: (input) => { limit(); return api.createBooking(input); },
+          createSeries: (input) => { limit(); return api.createSeries(input); },
+          updateBooking: api.updateBooking,
+          moveBooking: api.moveBooking,
+          checkConflicts: api.checkConflicts,
+          aresLookup: api.aresLookup,
+          findSubjectByIco: api.findSubjectByIco,
+          createSubject: api.createSubject,
+          isCreating: api.isCreating,
+          isUpdating: api.isUpdating,
+        }}
       />
 
+      {/* Detail rezervace */}
       <AlertDialog open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -264,22 +309,51 @@ const Calendar = () => {
                 {detail && (
                   <>
                     <div>
-                      {format(new Date(detail.start_at), 'EEEE d. MMMM, HH:mm', { locale: cs })}
-                      {' – '}{format(new Date(detail.end_at), 'HH:mm', { locale: cs })}
+                      {format(new Date(detail.start_at!), 'EEEE d. MMMM, HH:mm', { locale: cs })}
+                      {' – '}{format(new Date(detail.end_at!), 'HH:mm', { locale: cs })}
                     </div>
-                    {detail.events?.event_type && <div>Typ: {detail.events.event_type === 'commercial' ? 'komerční akce' : detail.events.event_type === 'training' ? 'trénink' : detail.events.event_type === 'maintenance' ? 'údržba' : 'akce'}</div>}
-                    {(detail.corrected_amount ?? detail.amount) != null && (
-                      <div>Částka: {fmtKc(Number(detail.corrected_amount ?? detail.amount))}
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <Badge variant="outline">{EVENT_TYPE_LABELS[detail.event_type ?? 'training'] ?? 'Akce'}</Badge>
+                      <Badge variant="secondary">{sheetName(detail.sheet_id)}</Badge>
+                      {detailLanes > 1 && <Badge variant="secondary">obě dráhy</Badge>}
+                      {detail.series_id && <Badge variant="secondary">opakovaná</Badge>}
+                      {!detail.approved_at && (
+                        <Badge variant="outline" className="border-amber-500 text-amber-600">
+                          <Clock className="mr-1 h-3 w-3" /> čeká na potvrzení
+                        </Badge>
+                      )}
+                    </div>
+                    {detail.can_see_amount && (detail.corrected_amount ?? detail.amount) != null && (
+                      <div className="pt-1">Částka: {fmtKc(Number(detail.corrected_amount ?? detail.amount))}
                         {' '}({Number(detail.corrected_hours ?? detail.hours)} h × {fmtKc(Number(detail.rate_per_hour))}/h)</div>
                     )}
                     {detail.event_id && shiftFill[detail.event_id] && (
-                      <div>Obsazení: {shiftFill[detail.event_id].filled}/{shiftFill[detail.event_id].total}</div>
+                      <div>Obsazení štábu: {shiftFill[detail.event_id].filled}/{shiftFill[detail.event_id].total}</div>
                     )}
                     {detail.note && <div className="text-muted-foreground">Poznámka: {detail.note}</div>}
-                    {detail.event_id && (
+
+                    {/* audit — kdo zadal, kdo zrušil */}
+                    <div className="pt-2 text-xs text-muted-foreground">
+                      <div>
+                        Zadal: <span className="font-medium">{detail.created_by_name ?? 'neznámý'}</span>
+                        {detail.created_at && ` · ${format(new Date(detail.created_at), 'd. M. yyyy HH:mm')}`}
+                      </div>
+                      {detail.approved_at && (
+                        <div>Potvrzeno: {format(new Date(detail.approved_at), 'd. M. yyyy HH:mm')}</div>
+                      )}
+                      {detail.cancelled_at && (
+                        <div>
+                          Zrušil: <span className="font-medium">{detail.cancelled_by_name ?? 'neznámý'}</span>
+                          {` · ${format(new Date(detail.cancelled_at), 'd. M. yyyy HH:mm')}`}
+                          {detail.cancel_reason && ` — ${detail.cancel_reason}`}
+                        </div>
+                      )}
+                    </div>
+
+                    {detail.event_id && detailLanes === 1 && (
                       <div className="text-muted-foreground text-xs">Storno zruší i volné/nepotvrzené směny této akce; potvrzené zůstanou.</div>
                     )}
-                    {isAdmin && detail.event_id && detail.events?.event_type === 'commercial' && (
+                    {isAdmin && detail.event_id && (detail.event_type === 'commercial' || detail.event_type === 'recruitment') && (
                       <ObsazeniDetail eventId={detail.event_id} />
                     )}
                   </>
@@ -289,14 +363,55 @@ const Calendar = () => {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Zavřít</AlertDialogCancel>
-            {detail && canManage(detail) && (
+            {detail?.can_approve && !detail.approved_at && (
+              <Button variant="outline" onClick={() => handleApprove(detail)} disabled={isApproving}>
+                {isApproving ? 'Potvrzuji…' : 'Potvrdit rezervaci'}
+              </Button>
+            )}
+            {detail?.can_manage && detail.status === 'confirmed' && (
               <>
                 <Button variant="outline" onClick={() => openEdit(detail)}>Upravit</Button>
-                <AlertDialogAction onClick={(e) => { e.preventDefault(); handleCancel(); }} disabled={isCancelling}
-                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                  {isCancelling ? 'Ruším…' : 'Stornovat'}
-                </AlertDialogAction>
+                <Button
+                  variant="destructive"
+                  onClick={() => { setCancelling(detail); setDetail(null); }}
+                >
+                  Stornovat
+                </Button>
               </>
+            )}
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Storno — u akce na obou drahách a u série se doptáme na rozsah */}
+      <AlertDialog open={!!cancelling} onOpenChange={(o) => !o && setCancelling(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Stornovat rezervaci?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {cancelling && (
+                <>
+                  {reservationLabel(cancelling)} — {format(new Date(cancelling.start_at!), 'EEEE d. M. HH:mm', { locale: cs })}
+                  {cancelLanes > 1 && '. Akce běží na obou drahách.'}
+                  {cancelling.series_id && ' Rezervace je součástí opakované série.'}
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-col gap-2 sm:flex-row">
+            <AlertDialogCancel>Zpět</AlertDialogCancel>
+            <Button variant="destructive" onClick={() => handleCancel('single')} disabled={isCancelling}>
+              {cancelLanes > 1 ? 'Jen tuhle dráhu' : 'Stornovat'}
+            </Button>
+            {cancelLanes > 1 && (
+              <Button variant="destructive" onClick={() => handleCancel('event')} disabled={isCancelling}>
+                Celou akci (obě dráhy)
+              </Button>
+            )}
+            {cancelling?.series_id && (
+              <Button variant="destructive" onClick={() => handleCancel('series')} disabled={isCancelling}>
+                Celou sérii (budoucí termíny)
+              </Button>
             )}
           </AlertDialogFooter>
         </AlertDialogContent>

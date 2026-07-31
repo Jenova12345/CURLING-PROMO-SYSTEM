@@ -100,7 +100,7 @@ const Dues = () => {
               <div className="space-y-1 text-sm">
                 {reservations.map((r) => (
                   <div key={r.id} className="flex items-center justify-between gap-2 border-b py-1 last:border-0">
-                    <span className="font-medium">{r.subjects?.name}</span>
+                    <span className="font-medium">{r.subject_name}{r.event_title ? ` — ${r.event_title}` : ''}</span>
                     <span className="text-muted-foreground">{format(new Date(r.start_at), 'HH:mm')}–{format(new Date(r.end_at), 'HH:mm')}</span>
                     <span>{fmtH(Number(r.corrected_hours ?? r.hours ?? 0))}</span>
                     <span className="font-semibold">{fmtKc(Number(r.corrected_amount ?? r.amount ?? 0))}</span>

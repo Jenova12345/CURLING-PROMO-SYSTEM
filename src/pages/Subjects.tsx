@@ -163,9 +163,23 @@ function CreateSubjectDialog({ open, onOpenChange, admin, onErr }: {
   const reset = () => { setType('club'); setName(''); setRate(''); setIco(''); setDic(''); setAddress(''); };
 
   const ares = async () => {
-    if (!/^\d{8}$/.test(ico.trim())) { onErr(new Error('IČO musí mít 8 číslic.')); return; }
+    const clean = ico.trim();
+    if (!/^\d{8}$/.test(clean)) { onErr(new Error('IČO musí mít 8 číslic.')); return; }
     setAresLoading(true);
-    try { const d = await admin.aresLookup(ico.trim()); setName(d.name); setAddress(d.address); setDic(d.dic); toast({ title: 'Načteno z ARESu' }); }
+    try {
+      // Nejdřív kontrola duplicity — stejné IČO nesmí v systému vzniknout dvakrát.
+      const existing = await admin.findSubjectByIco(clean);
+      if (existing) {
+        toast({
+          title: 'Subjekt s tímto IČO už existuje',
+          description: `${existing.name} — použijte stávající záznam, nezakládejte nový.`,
+        });
+        return;
+      }
+      const d = await admin.aresLookup(clean);
+      setName(d.name); setAddress(d.address); setDic(d.dic);
+      toast({ title: 'Načteno z ARESu' });
+    }
     catch (e) { onErr(e); } finally { setAresLoading(false); }
   };
 
