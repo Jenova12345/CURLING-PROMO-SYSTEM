@@ -115,7 +115,11 @@ END;
 $$;
 
 -- Stávající (historické) rezervace ber jako potvrzené — vznikly před zavedením schvalování.
+-- Trigger set_updated_fields při migraci vypínáme: bez přihlášeného uživatele by
+-- přepsal updated_by na NULL a všem řádkům posunul updated_at (ztráta stopy v auditu).
+ALTER TABLE public.reservations DISABLE TRIGGER trg_reservations_updated;
 UPDATE public.reservations SET approved_at = created_at WHERE approved_at IS NULL;
+ALTER TABLE public.reservations ENABLE TRIGGER trg_reservations_updated;
 
 -- -----------------------------------------------------------------------------
 -- 2) SMĚNY — audit zrušení
