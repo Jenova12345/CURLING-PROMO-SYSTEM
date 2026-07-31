@@ -677,6 +677,16 @@ BEGIN
   PERFORM pg_temp.tvrd(
     (SELECT approved_at > now() - interval '1 minute' FROM public.reservations WHERE id = _res),
     'zástupci se rezervace potvrdí teď, ne zpětně');
+
+  -- rezervaci nejde zpětně datovat (audit „kdy to kdo zadal")
+  INSERT INTO public.reservations (sheet_id, subject_id, start_at, end_at, created_at)
+  VALUES (pg_temp.draha(2), 'aaaa1111-0000-0000-0000-000000000001',
+          pg_temp.cas('2027-01-21 17:00'), pg_temp.cas('2027-01-21 18:00'),
+          '2020-01-01T00:00:00Z')
+  RETURNING id INTO _res;
+  PERFORM pg_temp.tvrd(
+    (SELECT created_at > now() - interval '1 minute' FROM public.reservations WHERE id = _res),
+    'rezervaci nelze zpětně datovat');
 END $$;
 
 DO $$ BEGIN RAISE NOTICE '=== VŠECHNY TESTY PROŠLY ==='; END $$;

@@ -65,6 +65,13 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  -- Servisní klíč (service_role) se sem dostane bez přihlášeného uživatele přes
+  -- PostgREST. Zápis mu nepovolíme — obešel by kontrolu kolizí i schvalování —
+  -- ale ať hláška rovnou řekne kudy, jinak to vypadá jako chyba oprávnění uživatele.
+  IF auth.uid() IS NULL AND session_user = 'authenticator' THEN
+    RAISE EXCEPTION 'Servisní zápis do rezervací jde jen přes RPC (create_booking, move_booking, cancel_booking, …)';
+  END IF;
+
   -- Zápis z důvěryhodných RPC funkcí (public.create_booking a spol.), které samy ověřují
   -- práva, kolize a priority. GUC je transakčně lokální; přes PostgREST ho klient nenastaví
   -- a RPC funkce ho po svých zápisech samy vypínají, aby zvýšené oprávnění neplatilo
@@ -78,7 +85,12 @@ BEGIN
   END IF;
 
   IF TG_OP = 'INSERT' THEN
-    -- Zástupce i člen zakládají jen čistě klubovou rezervaci; nic nepodvrhnou.
+    -- Zástupce i člen zakládají jen čistě klubovou rezervaci. Od klienta se přebírá
+    -- pouze dráha, subjekt, čas a poznámka — všechno ostatní se tady přepisuje.
+    -- (Kdo sem bude přidávat sloupec, musí ho v tomhle výčtu ošetřit; úpravy hlídá
+    -- whitelist v UPDATE větvi níž.)
+    NEW.created_at        := now();   -- rezervaci nelze zpětně datovat
+    NEW.updated_at        := now();
     NEW.created_by        := auth.uid();
     NEW.status            := 'confirmed';
     NEW.deleted_at        := NULL;
