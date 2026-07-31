@@ -147,7 +147,7 @@ export function ReservationDialog({
   const totalStaff = Object.values(roleCounts).reduce((a, b) => a + b, 0);
   const rateNum = rate.trim() ? Number(rate.replace(',', '.')) : undefined;
   const busy = isCreating || isUpdating || aresLoading;
-  // u komerční editace nelze měnit čas/plátno/obsazení (řeší se storno + nová)
+  // u komerční editace nelze měnit čas/dráha/obsazení (řeší se storno + nová)
   const lockTime = isEdit && type === 'commercial';
 
   const handleAres = async () => {
@@ -208,7 +208,7 @@ export function ReservationDialog({
           await onUpdateReservation({ id: editing.id, fields: { sheet_id: sheetId, start_at, end_at, note: noteVal ?? null } });
           if (editing.event_id) await onUpdateEvent({ id: editing.event_id, fields: { title: sanitizeText(title), start_time: start_at, end_time: end_at } });
         } else {
-          // commercial: jen název/poznámka/sazba (čas/plátno/obsazení = storno+nová)
+          // commercial: jen název/poznámka/sazba (čas/dráha/obsazení = storno+nová)
           if (!title.trim()) { toast({ title: 'Vyplň název', variant: 'destructive' }); return; }
           await onUpdateReservation({ id: editing.id, fields: { note: noteVal ?? null, ...(adminRate ? { rate_per_hour: adminRate } : {}) } });
           if (editing.event_id) await onUpdateEvent({ id: editing.event_id, fields: { title: sanitizeText(title) } });
@@ -251,7 +251,7 @@ export function ReservationDialog({
         <DialogHeader className="flex-shrink-0">
           <DialogTitle>{isEdit ? 'Upravit rezervaci' : 'Nová rezervace'}</DialogTitle>
           <DialogDescription>
-            {isEdit ? 'Uprav údaje rezervace.' : 'Zarezervuj plátno. U komerční akce se založí i obsazení (směny).'}
+            {isEdit ? 'Uprav údaje rezervace.' : 'Zarezervuj dráhu. U komerční akce se založí i obsazení (směny).'}
           </DialogDescription>
         </DialogHeader>
 
@@ -321,9 +321,9 @@ export function ReservationDialog({
           )}
 
           <div className="space-y-2">
-            <Label>Plátno</Label>
+            <Label>Dráha</Label>
             <Select value={sheetId} onValueChange={setSheetId} disabled={lockTime}>
-              <SelectTrigger><SelectValue placeholder="Vyber plátno" /></SelectTrigger>
+              <SelectTrigger><SelectValue placeholder="Vyber dráhu" /></SelectTrigger>
               <SelectContent>{sheets.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
             </Select>
           </div>
@@ -344,7 +344,7 @@ export function ReservationDialog({
             </div>
           </div>
           {lockTime && (
-            <p className="text-xs text-muted-foreground">Čas, plátno a obsazení u komerční akce změň přes storno a novou rezervaci.</p>
+            <p className="text-xs text-muted-foreground">Čas, dráha a obsazení u komerční akce změň přes storno a novou rezervaci.</p>
           )}
 
           {/* Sazba — jen klub/komerční; editace jen admin */}

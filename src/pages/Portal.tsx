@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { CalendarCheck, LogIn } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { BRAND } from '@/config/brand';
 
 // Minimalistický veřejný vstup do systému (odkaz z webu i odjinud).
 const Portal = () => (
@@ -12,7 +13,7 @@ const Portal = () => (
           <CalendarCheck className="h-7 w-7" />
         </div>
         <div>
-          <h1 className="text-2xl font-bold">Mladé kameny — rezervační systém</h1>
+          <h1 className="text-2xl font-bold">{BRAND.portalTitle}</h1>
           <p className="text-muted-foreground mt-2 text-sm">
             Rezervace ledu, komerční akce a směny na jednom místě. Pro vstup se přihlas.
           </p>

@@ -4,8 +4,8 @@ import { cn } from '@/lib/utils';
 import { LogOut, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
-import logo from '@/assets/logo.png';
 import { NAV_ITEMS, ROLE_LABELS, filterNavItemsByRoles } from '@/config/navigation';
+import { BRAND } from '@/config/brand';
 
 const Sidebar = () => {
   const { profile, roles, signOut } = useAuth();
@@ -22,10 +22,10 @@ const Sidebar = () => {
     <aside className="flex h-screen w-64 flex-col border-r bg-card">
       {/* Logo */}
       <div className="flex h-16 items-center gap-3 px-6 border-b">
-        <img src={logo} alt="Mladé Kameny" className="h-10 w-auto" />
+        <img src="/logo-placeholder.svg" alt={BRAND.name} className="h-10 w-auto" />
         <div>
-          <h1 className="font-bold text-lg leading-none">Mladé kameny</h1>
-          <p className="text-xs text-muted-foreground">Curlingová hala</p>
+          <h1 className="font-bold text-lg leading-none">{BRAND.name}</h1>
+          <p className="text-xs text-muted-foreground">{BRAND.tagline}</p>
         </div>
       </div>
 

@@ -15,7 +15,7 @@ import { useToast } from '@/hooks/use-toast';
 import { passwordSchema, safeValidate, VALIDATION_LIMITS } from '@/lib/validation';
 import { supabase } from '@/integrations/supabase/client';
 import { ArrowLeft, KeyRound, CheckCircle, AlertCircle } from 'lucide-react';
-import logo from '@/assets/logo.png';
+import { BRAND } from '@/config/brand';
 import { z } from 'zod';
 
 const updatePasswordSchema = z.object({
@@ -124,7 +124,7 @@ const UpdatePassword = () => {
         <Card className="w-full max-w-md shadow-xl">
           <CardHeader className="text-center">
             <div className="mx-auto mb-4">
-              <img src={logo} alt="Mladé Kameny" className="h-20 w-auto mx-auto" />
+              <img src="/logo-placeholder.svg" alt={BRAND.name} className="h-20 w-auto mx-auto" />
             </div>
             <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-destructive/10">
               <AlertCircle className="h-8 w-8 text-destructive" />
@@ -162,7 +162,7 @@ const UpdatePassword = () => {
         <Card className="w-full max-w-md shadow-xl">
           <CardHeader className="text-center">
             <div className="mx-auto mb-4">
-              <img src={logo} alt="Mladé Kameny" className="h-20 w-auto mx-auto" />
+              <img src="/logo-placeholder.svg" alt={BRAND.name} className="h-20 w-auto mx-auto" />
             </div>
             <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
               <CheckCircle className="h-8 w-8 text-primary" />
@@ -189,7 +189,7 @@ const UpdatePassword = () => {
       <Card className="w-full max-w-md shadow-xl">
         <CardHeader className="text-center">
           <div className="mx-auto mb-4">
-            <img src={logo} alt="Mladé Kameny" className="h-20 w-auto mx-auto" />
+            <img src="/logo-placeholder.svg" alt={BRAND.name} className="h-20 w-auto mx-auto" />
           </div>
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
             <KeyRound className="h-8 w-8 text-primary" />

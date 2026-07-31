@@ -6,7 +6,7 @@ import type { Sheet, ReservationRow, CalendarSlot, ShiftFill } from '@/hooks/use
 
 const PX_PER_MIN = 1; // 1 minuta = 1 px
 
-// Barevný akcent podle pořadí plátna (index 0/1).
+// Barevný akcent podle pořadí dráhy (index 0/1).
 const SHEET_ACCENT = ['border-l-blue-500', 'border-l-emerald-500'];
 const SHEET_DOT = ['bg-blue-500', 'bg-emerald-500'];
 
@@ -45,7 +45,7 @@ export function ReservationCalendar({
     [openHour, closeHour],
   );
 
-  // Mapa plných rezervací podle plátna+začátku (kvůli spárování s maskovanou obsazeností).
+  // Mapa plných rezervací podle dráhy+začátku (kvůli spárování s maskovanou obsazeností).
   const fullByKey = useMemo(() => {
     const m = new Map<string, ReservationRow>();
     for (const r of reservations) m.set(`${r.sheet_id}|${new Date(r.start_at).getTime()}`, r);

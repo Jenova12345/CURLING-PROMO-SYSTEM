@@ -185,7 +185,7 @@ const Calendar = () => {
           {isLoading ? (
             <div className="py-12 text-center text-muted-foreground">Načítám…</div>
           ) : sheets.length === 0 ? (
-            <div className="py-12 text-center text-muted-foreground">Zatím nejsou nastavená žádná plátna.</div>
+            <div className="py-12 text-center text-muted-foreground">Zatím nejsou nastavené žádné dráhy.</div>
           ) : view === 'month' ? (
             <div>
               <div className="grid grid-cols-7 gap-1 mb-1">

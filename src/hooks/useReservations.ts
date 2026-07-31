@@ -77,7 +77,7 @@ interface DateRange {
 
 function mapReservationError(error: { code?: string; message: string }): Error {
   if (error.code === '23P01' || error.message.includes('reservations_no_overlap')) {
-    return new Error('Tento slot je na daném plátně už obsazený. Vyber jiný čas nebo plátno.');
+    return new Error('Tento slot je na dané dráze už obsazený. Vyber jiný čas nebo dráhu.');
   }
   if (error.message.includes('Sazba není nastavena')) {
     return new Error('Sazba není nastavena — správce musí nejdřív doplnit ceník.');

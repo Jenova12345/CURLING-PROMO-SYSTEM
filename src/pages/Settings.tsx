@@ -56,7 +56,7 @@ const Settings = () => {
     <div className="p-4 md:p-6 space-y-4 md:space-y-6">
       <div>
         <h1 className="text-2xl md:text-3xl font-bold flex items-center gap-2"><SettingsIcon className="h-6 w-6" /> Nastavení</h1>
-        <p className="text-muted-foreground mt-1 text-sm md:text-base">Ceník, otevírací doba a plátna.</p>
+        <p className="text-muted-foreground mt-1 text-sm md:text-base">Ceník, otevírací doba a dráhy.</p>
       </div>
 
       {isLoading ? <div className="text-muted-foreground">Načítám…</div> : (
@@ -91,12 +91,12 @@ const Settings = () => {
           </Card>
 
           <Card>
-            <CardHeader><CardTitle>Plátna</CardTitle><CardDescription>Ledové plochy k rezervaci.</CardDescription></CardHeader>
+            <CardHeader><CardTitle>Dráhy</CardTitle><CardDescription>Ledové plochy k rezervaci.</CardDescription></CardHeader>
             <CardContent className="space-y-3">
               {sheets.map((s) => (
                 <div key={s.id} className="flex items-center gap-3">
                   <Input className="max-w-xs" defaultValue={s.name}
-                    onBlur={(e) => { if (e.target.value.trim() && e.target.value !== s.name) updateSheet({ id: s.id, fields: { name: e.target.value.trim() } }).then(() => toast({ title: 'Plátno uloženo' })).catch(err); }} />
+                    onBlur={(e) => { if (e.target.value.trim() && e.target.value !== s.name) updateSheet({ id: s.id, fields: { name: e.target.value.trim() } }).then(() => toast({ title: 'Dráha uložena' })).catch(err); }} />
                   <div className="flex items-center gap-2">
                     <Switch checked={s.active} onCheckedChange={(v) => updateSheet({ id: s.id, fields: { active: v } }).catch(err)} />
                     <span className="text-sm text-muted-foreground">{s.active ? 'aktivní' : 'neaktivní'}</span>
@@ -104,9 +104,9 @@ const Settings = () => {
                 </div>
               ))}
               <div className="flex items-center gap-2 pt-2">
-                <Input className="max-w-xs" placeholder="Název nového plátna" value={newSheet} onChange={(e) => setNewSheet(e.target.value)} />
+                <Input className="max-w-xs" placeholder="Název nové dráhy" value={newSheet} onChange={(e) => setNewSheet(e.target.value)} />
                 <Button variant="outline" disabled={!newSheet.trim() || isSaving}
-                  onClick={async () => { try { await addSheet(newSheet.trim()); setNewSheet(''); toast({ title: 'Plátno přidáno' }); } catch (e) { err(e); } }}>Přidat</Button>
+                  onClick={async () => { try { await addSheet(newSheet.trim()); setNewSheet(''); toast({ title: 'Dráha přidána' }); } catch (e) { err(e); } }}>Přidat</Button>
               </div>
             </CardContent>
           </Card>

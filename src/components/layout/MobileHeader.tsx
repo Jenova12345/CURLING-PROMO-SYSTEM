@@ -6,8 +6,8 @@ import { Menu, LogOut, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { Separator } from '@/components/ui/separator';
-import logo from '@/assets/logo.png';
 import { NAV_ITEMS, ROLE_LABELS, filterNavItemsByRoles } from '@/config/navigation';
+import { BRAND } from '@/config/brand';
 
 const MobileHeader = () => {
   const { profile, roles, signOut } = useAuth();
@@ -29,8 +29,8 @@ const MobileHeader = () => {
     <header className="sticky top-0 z-50 flex h-14 items-center justify-between border-b bg-card px-4 md:hidden safe-area-top">
       {/* Logo */}
       <Link to="/" className="flex items-center gap-2">
-        <img src={logo} alt="Mladé Kameny" className="h-8 w-auto" />
-        <span className="font-bold">Mladé kameny</span>
+        <img src="/logo-placeholder.svg" alt={BRAND.name} className="h-8 w-auto" />
+        <span className="font-bold">{BRAND.name}</span>
       </Link>
 
       {/* Menu Button */}
@@ -43,10 +43,10 @@ const MobileHeader = () => {
         <SheetContent side="right" className="w-[280px] p-0">
           <SheetHeader className="p-4 border-b pt-[calc(1rem+env(safe-area-inset-top,0))]">
             <SheetTitle className="flex items-center gap-2 text-left">
-              <img src={logo} alt="Mladé Kameny" className="h-10 w-auto" />
+              <img src="/logo-placeholder.svg" alt={BRAND.name} className="h-10 w-auto" />
               <div>
-                <div className="font-bold">Mladé kameny</div>
-                <div className="text-xs text-muted-foreground font-normal">Curlingová hala</div>
+                <div className="font-bold">{BRAND.name}</div>
+                <div className="text-xs text-muted-foreground font-normal">{BRAND.tagline}</div>
               </div>
             </SheetTitle>
           </SheetHeader>

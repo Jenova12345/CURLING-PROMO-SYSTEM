@@ -17,7 +17,7 @@ import { emailSchema, safeValidate, VALIDATION_LIMITS } from '@/lib/validation';
 import { useRateLimit } from '@/hooks/useRateLimit';
 import { supabase } from '@/integrations/supabase/client';
 import { ArrowLeft, Mail, CheckCircle } from 'lucide-react';
-import logo from '@/assets/logo.png';
+import { BRAND } from '@/config/brand';
 
 const ForgotPassword = () => {
   const { user, loading } = useAuth();
@@ -95,7 +95,7 @@ const ForgotPassword = () => {
         <Card className="w-full max-w-md shadow-xl">
           <CardHeader className="text-center">
             <div className="mx-auto mb-4">
-              <img src={logo} alt="Mladé Kameny" className="h-20 w-auto mx-auto" />
+              <img src="/logo-placeholder.svg" alt={BRAND.name} className="h-20 w-auto mx-auto" />
             </div>
             <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
               <CheckCircle className="h-8 w-8 text-primary" />
@@ -126,7 +126,7 @@ const ForgotPassword = () => {
       <Card className="w-full max-w-md shadow-xl">
         <CardHeader className="text-center">
           <div className="mx-auto mb-4">
-            <img src={logo} alt="Mladé Kameny" className="h-20 w-auto mx-auto" />
+            <img src="/logo-placeholder.svg" alt={BRAND.name} className="h-20 w-auto mx-auto" />
           </div>
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
             <Mail className="h-8 w-8 text-primary" />

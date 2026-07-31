@@ -7,7 +7,7 @@ export type Settings = Database['public']['Tables']['settings']['Row'];
 export type Sheet = Database['public']['Tables']['sheets']['Row'];
 export type OpeningHours = Record<string, { open: string; close: string }>;
 
-// Nastavení haly (ceník + otevírací doba) a plátna. Zápis = jen admin (RLS).
+// Nastavení haly (ceník + otevírací doba) a dráhy. Zápis = jen admin (RLS).
 export const useSettings = () => {
   const { user } = useAuth();
   const qc = useQueryClient();
@@ -22,7 +22,7 @@ export const useSettings = () => {
     enabled: !!user,
   });
 
-  // pro admina i neaktivní plátna (kvůli správě)
+  // pro admina i neaktivní dráhy (kvůli správě)
   const { data: sheets = [] } = useQuery({
     queryKey: ['sheets-all'],
     queryFn: async () => {
@@ -50,7 +50,7 @@ export const useSettings = () => {
   const addSheet = useMutation({
     mutationFn: async (name: string) => {
       const { error } = await supabase.from('sheets').insert({ name });
-      if (error) throw new Error('Nepodařilo se přidat plátno.');
+      if (error) throw new Error('Nepodařilo se přidat dráhu.');
     },
     onSuccess: invalidate,
   });
@@ -58,7 +58,7 @@ export const useSettings = () => {
   const updateSheet = useMutation({
     mutationFn: async ({ id, fields }: { id: string; fields: { name?: string; active?: boolean } }) => {
       const { error } = await supabase.from('sheets').update(fields).eq('id', id);
-      if (error) throw new Error('Nepodařilo se upravit plátno.');
+      if (error) throw new Error('Nepodařilo se upravit dráhu.');
     },
     onSuccess: invalidate,
   });

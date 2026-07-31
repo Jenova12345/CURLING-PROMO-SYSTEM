@@ -24,7 +24,7 @@ import {
   VALIDATION_LIMITS 
 } from '@/lib/validation';
 import { useRateLimit } from '@/hooks/useRateLimit';
-import logo from '@/assets/logo.png';
+import { BRAND } from '@/config/brand';
 
 const Auth = () => {
   const { user, loading, signIn, signUp } = useAuth();
@@ -180,9 +180,9 @@ const Auth = () => {
       <Card className="w-full max-w-md shadow-xl">
         <CardHeader className="text-center">
           <div className="mx-auto mb-4">
-            <img src={logo} alt="Mladé Kameny" className="h-20 w-auto mx-auto" />
+            <img src="/logo-placeholder.svg" alt={BRAND.name} className="h-20 w-auto mx-auto" />
           </div>
-          <CardTitle className="text-2xl font-bold">Mladé kameny</CardTitle>
+          <CardTitle className="text-2xl font-bold">{BRAND.name}</CardTitle>
           <CardDescription>Systém pro správu curlingové haly</CardDescription>
         </CardHeader>
         <CardContent>
