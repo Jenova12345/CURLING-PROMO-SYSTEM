@@ -1147,9 +1147,14 @@ const Shifts = () => {
                           <p className="text-xs text-muted-foreground mt-1">
                             Sazba: {shift.hourly_rate} Kč/h
                           </p>
+                          {(shift as any).created_by_name && (
+                            <p className="text-xs text-muted-foreground">
+                              Akci zadal: {(shift as any).created_by_name}
+                            </p>
+                          )}
                         </div>
                       </div>
-                      <Button 
+                      <Button
                         size="sm"
                         onClick={() => openAssignDialog(shift)}
                       >
@@ -1193,6 +1198,11 @@ const Shifts = () => {
                           <p className="text-sm text-muted-foreground">
                             {eventItem.event && format(new Date(eventItem.event.start_time), 'd. MMMM yyyy, HH:mm', { locale: cs })}
                           </p>
+                          {(eventItem.shifts[0] as any)?.created_by_name && (
+                            <p className="text-xs text-muted-foreground">
+                              Akci zadal: {(eventItem.shifts[0] as any).created_by_name}
+                            </p>
+                          )}
                         </div>
                         <Badge variant="outline" className="border-blue-500 text-blue-600">
                           <CheckCircle className="h-3 w-3 mr-1" />

@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { NAV_ITEMS, ROLE_LABELS, filterNavItemsByRoles } from '@/config/navigation';
 import { BRAND } from '@/config/brand';
+import { NotificationBell } from '@/components/layout/NotificationBell';
 
 const Sidebar = () => {
   const { profile, roles, signOut } = useAuth();
@@ -21,12 +22,13 @@ const Sidebar = () => {
   return (
     <aside className="flex h-screen w-64 flex-col border-r bg-card">
       {/* Logo */}
-      <div className="flex h-16 items-center gap-3 px-6 border-b">
+      <div className="flex h-16 items-center gap-3 border-b px-4">
         <img src="/logo-placeholder.svg" alt={BRAND.name} className="h-10 w-auto" />
-        <div>
-          <h1 className="font-bold text-lg leading-none">{BRAND.name}</h1>
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate font-bold text-lg leading-none">{BRAND.name}</h1>
           <p className="text-xs text-muted-foreground">{BRAND.tagline}</p>
         </div>
+        <NotificationBell />
       </div>
 
       {/* Navigation */}

@@ -55,8 +55,14 @@ export const useShifts = () => {
 
       if (error) throw error;
       
-      // Get unique claimed_by user IDs
-      const userIds = [...new Set(shiftsData.filter(s => s.claimed_by).map(s => s.claimed_by!))];
+      // Potřebná jména: kdo směnu vzal, kdo akci založil a kdo ji případně zrušil (audit)
+      const userIds = [...new Set(
+        shiftsData.flatMap(s => [
+          s.claimed_by,
+          s.cancelled_by,
+          (s.event as { created_by?: string | null } | null)?.created_by,
+        ]).filter(Boolean) as string[],
+      )];
       
       // Fetch profiles for those users
       let profilesMap: Record<string, { full_name: string; bank_account: string | null }> = {};
@@ -81,10 +87,17 @@ export const useShifts = () => {
       // Merge profile names into shifts
       return shiftsData.map(shift => ({
         ...shift,
-        claimed_profile: shift.claimed_by ? { 
+        claimed_profile: shift.claimed_by ? {
           full_name: profilesMap[shift.claimed_by]?.full_name || 'Neznámý',
           bank_account: profilesMap[shift.claimed_by]?.bank_account || null
         } : null,
+        // audit: „kdo akci zadal" a „kdo směnu zrušil" (požadavek zákazníka)
+        created_by_name: (shift.event as { created_by?: string | null } | null)?.created_by
+          ? profilesMap[(shift.event as { created_by: string }).created_by]?.full_name || 'Neznámý'
+          : null,
+        cancelled_by_name: shift.cancelled_by
+          ? profilesMap[shift.cancelled_by]?.full_name || 'Neznámý'
+          : null,
       }));
     },
     enabled: !!user && (isAdmin || isStaff),

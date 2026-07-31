@@ -8,6 +8,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/co
 import { Separator } from '@/components/ui/separator';
 import { NAV_ITEMS, ROLE_LABELS, filterNavItemsByRoles } from '@/config/navigation';
 import { BRAND } from '@/config/brand';
+import { NotificationBell } from '@/components/layout/NotificationBell';
 
 const MobileHeader = () => {
   const { profile, roles, signOut } = useAuth();
@@ -33,7 +34,9 @@ const MobileHeader = () => {
         <span className="font-bold">{BRAND.name}</span>
       </Link>
 
-      {/* Menu Button */}
+      {/* Upozornění + menu */}
+      <div className="flex items-center gap-1">
+        <NotificationBell />
       <Sheet open={isOpen} onOpenChange={setIsOpen}>
         <SheetTrigger asChild>
           <Button variant="ghost" size="icon">
@@ -109,6 +112,7 @@ const MobileHeader = () => {
           </div>
         </SheetContent>
       </Sheet>
+      </div>
     </header>
   );
 };
