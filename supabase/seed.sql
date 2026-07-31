@@ -200,3 +200,87 @@ INSERT INTO public.shift_applications (shift_id, user_id, status) VALUES
    '22222222-2222-2222-2222-222222222222', 'approved'),
   ((SELECT id FROM public.shifts WHERE event_id='cccc3333-0000-0000-0000-000000000003' AND required_role='instructor' AND status='open' ORDER BY id LIMIT 1),
    '33333333-3333-3333-3333-333333333333', 'pending');
+
+-- =============================================================================
+-- DEMO 2. KOLO — nové funkce (dráhy, typy akcí, schvalování, přebití, série)
+-- =============================================================================
+-- Tahle část záměrně používá SERVEROVÉ API (public.create_booking a spol.) přesně
+-- tak, jak ho volá aplikace — každý `supabase db reset` tím rovnou proklepne i RPC
+-- vrstvu. Uživatele simulujeme nastavením JWT claimu (auth.uid()).
+
+-- Placeholder ceník podle typu akce (POZOR: jen demo, produkce si sazby nastaví sama)
+UPDATE public.settings
+   SET club_default_rate = 600, commercial_default_rate = 1500,
+       training_rate = 600, tournament_rate = 800;
+
+-- Starší seed rezervace ber jako potvrzené (vznikly „před" zavedením schvalování)
+-- a ukliď upozornění, která tím vznikla — demo si vyrobí vlastní, smysluplná.
+UPDATE public.reservations
+   SET approved_at = created_at, approved_by = created_by
+ WHERE approved_at IS NULL;
+DELETE FROM public.notifications;
+
+-- --- admin ------------------------------------------------------------------
+SELECT set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111111"}', false);
+
+-- Turnaj na OBOU drahách (jedna akce, dvě rezervace)
+SELECT public.create_booking(
+  ARRAY[(SELECT id FROM public.sheets WHERE name = 'Dráha 1'),
+        (SELECT id FROM public.sheets WHERE name = 'Dráha 2')],
+  'tournament', 'Podzimní turnaj CPO',
+  '2026-08-08 09:00+02', '2026-08-08 15:00+02',
+  'aaaa1111-0000-0000-0000-000000000001', 'Turnaj pro 8 týmů');
+
+-- Komerční teambuilding na obou drahách (2 instruktoři = podle počtu drah + bar)
+SELECT public.create_booking(
+  ARRAY[(SELECT id FROM public.sheets WHERE name = 'Dráha 1'),
+        (SELECT id FROM public.sheets WHERE name = 'Dráha 2')],
+  'commercial', 'Teambuilding Demo Firma s.r.o.',
+  '2026-08-05 17:00+02', '2026-08-05 20:00+02',
+  'bbbb2222-0000-0000-0000-000000000002', NULL,
+  '{"instructor": 2, "bar_staff": 1}'::jsonb);
+
+-- Údržba ledu (bez fakturace)
+SELECT public.create_booking(
+  ARRAY[(SELECT id FROM public.sheets WHERE name = 'Dráha 1')],
+  'maintenance', 'Frézování a kropení',
+  '2026-08-07 07:00+02', '2026-08-07 08:00+02');
+
+-- --- zástupce klubu (Curling Promo Ostrava) ---------------------------------
+SELECT set_config('request.jwt.claims', '{"sub":"44444444-4444-4444-4444-444444444444"}', false);
+
+-- Pravidelný trénink: každé Út a Čt 16–18 do konce srpna
+SELECT public.create_booking_series(
+  ARRAY[(SELECT id FROM public.sheets WHERE name = 'Dráha 2')],
+  'training', 'Pravidelný trénink A-tým',
+  '2026-08-04 16:00+02', '2026-08-04 18:00+02',
+  ARRAY[2, 4], '2026-08-31'::date,
+  'aaaa1111-0000-0000-0000-000000000001');
+
+-- --- člen klubu (rezervace čeká na potvrzení zástupcem) ---------------------
+SELECT set_config('request.jwt.claims', '{"sub":"55555555-5555-5555-5555-555555555555"}', false);
+
+SELECT public.create_booking(
+  ARRAY[(SELECT id FROM public.sheets WHERE name = 'Dráha 1')],
+  'training', 'Trénink juniorů',
+  '2026-08-06 18:00+02', '2026-08-06 19:00+02',
+  'aaaa1111-0000-0000-0000-000000000001', 'Zadal člen klubu — čeká na potvrzení');
+
+-- --- ukázka priority: komerční akce vědomě přebije klubový trénink ----------
+SELECT set_config('request.jwt.claims', '{"sub":"22222222-2222-2222-2222-222222222222"}', false);
+SELECT public.create_booking(
+  ARRAY[(SELECT id FROM public.sheets WHERE name = 'Dráha 1')],
+  'training', 'Trénink Curling Ostrava',
+  '2026-08-12 17:00+02', '2026-08-12 19:00+02',
+  'aaaa1111-0000-0000-0000-000000000002');
+
+SELECT set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111111"}', false);
+SELECT public.create_booking(
+  ARRAY[(SELECT id FROM public.sheets WHERE name = 'Dráha 1')],
+  'commercial', 'Firemní akce ČEZ',
+  '2026-08-12 17:00+02', '2026-08-12 19:00+02',
+  'bbbb2222-0000-0000-0000-000000000001', 'Přebilo klubový trénink — klub dostal upozornění',
+  '{"instructor": 1, "bar_staff": 1}'::jsonb, NULL, true);
+
+-- konec simulace přihlášeného uživatele
+SELECT set_config('request.jwt.claims', '', false);

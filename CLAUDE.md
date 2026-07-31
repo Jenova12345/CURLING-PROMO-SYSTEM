@@ -85,10 +85,23 @@ jdou jako další migrace nad baseline, ne přepisem historie.
 - Brigádníci už v systému nějak jsou — napojit, nepřepisovat.
 - Systém = jeden „portál", odkaz na něj vede z nového webu, starého webu i odjinud.
 
+## Rozhodnuto (feedback klienta, 31. 7. 2026 — detaily v docs/E2-ZMENY.md)
+
+- **Název systému: Curling Promo Ostrava** (dřív „Mladé kameny"). Logo zatím placeholder.
+- **Terminologie: „dráha"**, ne „plátno" (Dráha 1 / Dráha 2).
+- **Struktura ledu:** 2 dráhy, rezervace po **celých hodinách**, otevírací doba **7:00–22:00**
+  (nastavitelná adminem po dnech).
+- **Typy akcí:** trénink / turnaj / komerční akce / údržba ledu; každá má název.
+  Priorita při kolizi: údržba > komerční > turnaj > trénink; přebít smí jen admin a jen vědomě.
+- **Kdo co smí:** hobby hráč (jen kouká) → člen klubu (rezervuje, edituje svoje) →
+  zástupce klubu (celý klub, potvrzuje rezervace členů, může jich být víc) → admin.
+- **Cena:** obsazenost i název klubu/akce vidí všichni přihlášení, **částku jen admin a autor**.
+- **Ceník:** sazby podle typu akce vyplňuje admin v Nastavení (migrace je nechává prázdné).
+
 ## Otevřené otázky (řeší PM se zákazníkem)
 
 - Fakturace: vlastní generování vs Fakturoid/iDoklad?
-- Členská struktura: HOBBY / člen / „Mladé kameny" / brigádník — kdo co smí rezervovat?
-- Struktura ledu: kolik pláten, délka slotů, otevírací doba?
-- Ceník: sazby za hodinu podle typu / role?
+- E-maily k notifikacím: který poskytovatel (Resend / SMTP) a z jaké domény?
+  (v aplikaci notifikace fungují, e-mailová fronta je připravená a vypnutá)
 - Platby: jen faktura, nebo i online platby/zálohy?
+- Finální logo a barevnost.
