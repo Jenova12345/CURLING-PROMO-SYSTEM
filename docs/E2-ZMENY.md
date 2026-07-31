@@ -95,6 +95,12 @@ bez toho by Postgres odmítl použít typ `tournament` ve stejné transakci.
    vymyšlených čísel). Placeholder hodnoty jsou jen v demo seedu; admin je vyplní
    v Nastavení.
 3. **E-mailový poskytovatel** — viz výše, čeká na rozhodnutí a klíč.
+4. **Sazba za trénink vs turnaj u klubů** — klub si volbou typu akce (trénink / turnaj)
+   sám vybírá, kterou sazbou se bude účtovat. U komerčních zákazníků to neplatí
+   (ti jedou komerční sazbou vždy). Buď necháme obě klubové sazby stejné, nebo bude
+   turnaj potřebovat schválení správcem.
+5. **Nepotvrzená rezervace člena drží led bez omezení** — pokud ji zástupce nepotvrdí
+   ani nezruší, blokuje termín donekonečna. Zvážit expiraci (např. 48 hodin).
 4. **Produkční nasazení** — migrace `20260731*` nejsou na produkci. Před nasazením:
    čerstvá záloha + souhlas PM. Napřed ověřit `SELECT id, name FROM public.sheets;` —
    přejmenování hledá názvy začínající na „Plátno"; pokud je admin v produkci

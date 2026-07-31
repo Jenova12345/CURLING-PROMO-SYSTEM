@@ -511,6 +511,92 @@ BEGIN
   PERFORM pg_temp.tvrd(_prava = 0, format('role anon nemá práva na citlivé tabulky (nalezeno %s)', _prava));
 END $$;
 
+-- -----------------------------------------------------------------------------
+-- 15) Nálezy bezpečnostní brány — podvržení auditu a obejití přesunu
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _r jsonb; _res uuid; _puvodni timestamptz; _ser jsonb;
+BEGIN
+  -- zástupce klubu si založí vlastní rezervaci
+  PERFORM pg_temp.prihlas('44444444-4444-4444-4444-444444444444');
+  _r := public.create_booking(
+    ARRAY[pg_temp.draha(1)], 'training', 'Rezervace k pokusům',
+    pg_temp.cas('2026-12-01 17:00'), pg_temp.cas('2026-12-01 18:00'),
+    'aaaa1111-0000-0000-0000-000000000001');
+  _res := ((_r->'reservation_ids')->>0)::uuid;
+
+  -- (V1) potvrzení nelze podepsat cizím jménem
+  PERFORM pg_temp.ocekavej_chybu(
+    format('UPDATE public.reservations SET approved_by = %L::uuid WHERE id = %L::uuid',
+      '11111111-1111-1111-1111-111111111111', _res),
+    'podvrhnout', 'potvrzení nejde podepsat jménem admina');
+
+  -- (V1) ani zpětně datovat
+  UPDATE public.reservations SET approved_at = '2020-01-01T00:00:00Z' WHERE id = _res;
+  SELECT approved_at INTO _puvodni FROM public.reservations WHERE id = _res;
+  PERFORM pg_temp.tvrd(_puvodni > now() - interval '1 minute',
+    'potvrzení nejde zpětně datovat (razítko přepsáno na teď)');
+
+  -- (V1) totéž u storna
+  PERFORM pg_temp.ocekavej_chybu(
+    format('UPDATE public.reservations SET status=''cancelled'', cancelled_by = %L::uuid WHERE id = %L::uuid',
+      '11111111-1111-1111-1111-111111111111', _res),
+    'podvrhnout', 'storno nejde podepsat cizím jménem');
+  UPDATE public.reservations
+     SET status = 'cancelled', cancelled_at = '2020-01-01T00:00:00Z'
+   WHERE id = _res;
+  SELECT cancelled_at INTO _puvodni FROM public.reservations WHERE id = _res;
+  PERFORM pg_temp.tvrd(_puvodni > now() - interval '1 minute',
+    'storno nejde zpětně datovat');
+
+  -- (V2) čas a dráha jdou měnit jen přesunem, ne přímým zápisem
+  _r := public.create_booking(
+    ARRAY[pg_temp.draha(1)], 'training', 'Rezervace k přesunu',
+    pg_temp.cas('2026-12-02 17:00'), pg_temp.cas('2026-12-02 18:00'),
+    'aaaa1111-0000-0000-0000-000000000001');
+  _res := ((_r->'reservation_ids')->>0)::uuid;
+  PERFORM pg_temp.ocekavej_chybu(
+    format('UPDATE public.reservations SET start_at = %L::timestamptz, end_at = %L::timestamptz WHERE id = %L::uuid',
+      pg_temp.cas('2026-12-03 17:00'), pg_temp.cas('2026-12-03 18:00'), _res),
+    'přesunem', 'čas nejde změnit přímým zápisem');
+  PERFORM pg_temp.ocekavej_chybu(
+    format('UPDATE public.reservations SET sheet_id = %L::uuid WHERE id = %L::uuid', pg_temp.draha(2), _res),
+    'přesunem', 'dráha nejde změnit přímým zápisem');
+
+  -- a přesun přes RPC drží čas akce i rezervace pohromadě
+  PERFORM public.move_booking(_res, pg_temp.cas('2026-12-03 17:00'), pg_temp.cas('2026-12-03 18:00'));
+  PERFORM pg_temp.tvrd(
+    (SELECT r.start_at = e.start_time FROM public.reservations r
+       JOIN public.events e ON e.id = r.event_id WHERE r.id = _res),
+    'po přesunu sedí čas rezervace i navázané akce');
+
+  -- (D3) do cizí série se nikdo nepřipojí
+  _ser := public.create_booking_series(
+    ARRAY[pg_temp.draha(2)], 'training', 'Série klubu',
+    pg_temp.cas('2026-12-08 17:00'), pg_temp.cas('2026-12-08 18:00'),
+    ARRAY[2], '2026-12-22'::date, 'aaaa1111-0000-0000-0000-000000000001');
+  PERFORM pg_temp.prihlas('22222222-2222-2222-2222-222222222222');   -- jiný klub
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.create_booking(ARRAY[%L::uuid], %L, %L, %L::timestamptz, %L::timestamptz, %L::uuid, NULL, ''{}''::jsonb, NULL, false, %L::uuid)',
+      pg_temp.draha(1), 'training', 'Přilepeno k cizí sérii',
+      pg_temp.cas('2026-12-09 17:00'), pg_temp.cas('2026-12-09 18:00'),
+      'aaaa1111-0000-0000-0000-000000000002', (_ser->>'series_id')),
+    'jinému subjektu', 'nelze se přilepit k sérii cizího klubu');
+END $$;
+
+-- Views nesmí mít zbytková zápisová práva (dnes zapisovatelné nejsou, ale ať to platí i dál)
+DO $$
+DECLARE _zapis int;
+BEGIN
+  SELECT count(*) INTO _zapis
+    FROM information_schema.role_table_grants
+   WHERE table_schema = 'public'
+     AND table_name IN ('reservations_calendar', 'reservations_billing')
+     AND grantee IN ('anon', 'authenticated')
+     AND privilege_type <> 'SELECT';
+  PERFORM pg_temp.tvrd(_zapis = 0, format('kalendářní view mají jen právo číst (nalezeno %s zápisových)', _zapis));
+END $$;
+
 DO $$ BEGIN RAISE NOTICE '=== VŠECHNY TESTY PROŠLY ==='; END $$;
 
 ROLLBACK;

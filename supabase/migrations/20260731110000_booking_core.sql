@@ -44,9 +44,9 @@ CREATE OR REPLACE FUNCTION public.guard_reservation_rep_changes()
  LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public'
 AS $$
 BEGIN
-  -- Migrace / seed / servisní zásah: není přihlášený uživatel. Klient se sem nedostane —
-  -- role anon nemá na rezervace ani práva, ani politiky.
-  IF auth.uid() IS NULL THEN
+  -- Migrace, seed a servisní zásahy: bez přihlášeného uživatele a pod databázovou rolí.
+  -- Úzce: nepřihlášený klient (anon) sem NEspadne, i když také nemá auth.uid().
+  IF auth.uid() IS NULL AND current_user IN ('postgres', 'supabase_admin') THEN
     RETURN NEW;
   END IF;
 
@@ -100,21 +100,43 @@ BEGIN
      OR NEW.deleted_at    IS DISTINCT FROM OLD.deleted_at THEN
     RAISE EXCEPTION 'Sazbu, subjekt, autora a vazby smí měnit jen správce';
   END IF;
+
+  -- Čas a dráha jdou měnit VÝHRADNĚ přes public.move_booking. Přímý zápis by minul
+  -- kontrolu kolizí, pravidlo „akce na dvou drahách se posouvá celá" i srovnání času
+  -- navázané akce — a směny brigádníků by pak ukazovaly na jiný den.
+  IF NEW.sheet_id IS DISTINCT FROM OLD.sheet_id
+     OR NEW.start_at IS DISTINCT FROM OLD.start_at
+     OR NEW.end_at   IS DISTINCT FROM OLD.end_at THEN
+    RAISE EXCEPTION 'Čas a dráhu měňte přesunem rezervace, ne přímým zápisem';
+  END IF;
+
   IF (NEW.approved_at IS DISTINCT FROM OLD.approved_at
       OR NEW.approved_by IS DISTINCT FROM OLD.approved_by)
      AND NOT public.is_subject_rep(OLD.subject_id) THEN
     RAISE EXCEPTION 'Rezervaci může potvrdit jen zástupce klubu';
   END IF;
+  -- Potvrzení se nepodepisuje cizím jménem ani zpětně (stejné pravidlo jako u storna).
+  IF NEW.approved_by IS DISTINCT FROM OLD.approved_by
+     AND NEW.approved_by IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'Autora potvrzení nelze podvrhnout';
+  END IF;
+  IF NEW.approved_at IS DISTINCT FROM OLD.approved_at AND NEW.approved_at IS NOT NULL THEN
+    NEW.approved_at := now();
+  END IF;
+
   IF NEW.cancelled_by IS DISTINCT FROM OLD.cancelled_by
      AND NEW.cancelled_by IS DISTINCT FROM auth.uid() THEN
     RAISE EXCEPTION 'Autora storna nelze podvrhnout';
+  END IF;
+  IF NEW.cancelled_at IS DISTINCT FROM OLD.cancelled_at AND NEW.cancelled_at IS NOT NULL THEN
+    NEW.cancelled_at := now();   -- razítko storna nelze zpětně datovat
   END IF;
   -- Storno je jednosměrné: „od-stornovat" (a nechat u toho staré razítko, kdo rušil)
   -- smí jen správce. Ne-admin ať založí novou rezervaci.
   IF OLD.status = 'cancelled' AND NEW.status = 'confirmed' THEN
     RAISE EXCEPTION 'Stornovanou rezervaci může obnovit jen správce — založte novou.';
   END IF;
-  -- povoleno: sheet_id, start_at, end_at, note, status (storno confirmed -> cancelled)
+  -- povoleno: note, status (storno confirmed -> cancelled), potvrzení zástupcem
   RETURN NEW;
 END;
 $$;

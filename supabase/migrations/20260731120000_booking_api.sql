@@ -90,7 +90,10 @@ CREATE VIEW public.reservations_calendar
   LEFT JOIN public.profiles xp ON xp.user_id = r.cancelled_by
   WHERE r.deleted_at IS NULL;
 
-REVOKE ALL ON public.reservations_calendar FROM anon, public;
+-- Sebrat i výchozí zápisová práva, která Supabase roli authenticated přidělí:
+-- view dnes zapisovatelné není (JOINy), ale kdyby ho někdo zjednodušil, vznikla by
+-- tichá cesta zápisu, která obchází RLS na tabulce.
+REVOKE ALL ON public.reservations_calendar FROM anon, authenticated, public;
 GRANT SELECT ON public.reservations_calendar TO authenticated;
 
 COMMENT ON VIEW public.reservations_calendar IS
@@ -117,7 +120,7 @@ CREATE VIEW public.reservations_billing
     AND r.deleted_at IS NULL
     AND has_role(auth.uid(), 'admin');
 
-REVOKE ALL ON public.reservations_billing FROM anon, public;
+REVOKE ALL ON public.reservations_billing FROM anon, authenticated, public;
 GRANT SELECT ON public.reservations_billing TO authenticated;
 
 -- -----------------------------------------------------------------------------
@@ -274,6 +277,15 @@ BEGIN
 
   IF p_start IS NULL OR p_end IS NULL OR p_end <= p_start THEN
     RAISE EXCEPTION 'Konec rezervace musí být po jejím začátku.';
+  END IF;
+
+  -- Do cizí série se nikdo nepřipojí (kazilo by to přehled opakovaných tréninků).
+  IF p_series_id IS NOT NULL AND EXISTS (
+    SELECT 1 FROM public.reservations r
+     WHERE r.series_id = p_series_id
+       AND r.subject_id IS DISTINCT FROM p_subject_id
+  ) THEN
+    RAISE EXCEPTION 'Série patří jinému subjektu.';
   END IF;
 
   SELECT count(*) INTO _sheet_cnt FROM unnest(p_sheet_ids) AS x(id);
