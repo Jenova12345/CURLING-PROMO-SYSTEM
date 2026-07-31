@@ -109,6 +109,11 @@ BEGIN
      AND NEW.cancelled_by IS DISTINCT FROM auth.uid() THEN
     RAISE EXCEPTION 'Autora storna nelze podvrhnout';
   END IF;
+  -- Storno je jednosměrné: „od-stornovat" (a nechat u toho staré razítko, kdo rušil)
+  -- smí jen správce. Ne-admin ať založí novou rezervaci.
+  IF OLD.status = 'cancelled' AND NEW.status = 'confirmed' THEN
+    RAISE EXCEPTION 'Stornovanou rezervaci může obnovit jen správce — založte novou.';
+  END IF;
   -- povoleno: sheet_id, start_at, end_at, note, status (storno confirmed -> cancelled)
   RETURN NEW;
 END;
@@ -151,6 +156,8 @@ COMMENT ON COLUMN public.settings.email_notifications_enabled IS
 
 -- Otevírací doba: klient chce led 7:00–22:00. Měníme jen dny, které mají ještě
 -- původní výchozí 08:00 — ručně upravené hodnoty zůstanou.
+-- (Stejně jako u rezervací: bez vypnutého triggeru by migrace přepsala updated_by na NULL.)
+ALTER TABLE public.settings DISABLE TRIGGER trg_settings_updated;
 UPDATE public.settings
    SET opening_hours = (
      SELECT jsonb_object_agg(
@@ -161,6 +168,7 @@ UPDATE public.settings
        FROM jsonb_each(public.settings.opening_hours) AS d
    )
  WHERE opening_hours IS NOT NULL;
+ALTER TABLE public.settings ENABLE TRIGGER trg_settings_updated;
 
 -- -----------------------------------------------------------------------------
 -- 5) SUBJEKTY — jedno IČO = jeden subjekt (ARES nesmí zakládat duplicity)
@@ -318,17 +326,17 @@ BEGIN
       SELECT e.event_type INTO _event_type FROM public.events e WHERE e.id = NEW.event_id;
     END IF;
 
+    -- Komerční zákazník se účtuje komerční sazbou i u turnaje/tréninku — jinak by
+    -- firma jezdila za klubovou cenu jen proto, že se akce jmenuje „turnaj".
     _rate := COALESCE(
       _subject_rate,
-      CASE _event_type
-        WHEN 'commercial'  THEN _st.commercial_default_rate
-        WHEN 'recruitment' THEN _st.commercial_default_rate
-        WHEN 'tournament'  THEN COALESCE(_st.tournament_rate, _st.club_default_rate)
-        WHEN 'training'    THEN COALESCE(_st.training_rate, _st.club_default_rate)
-        ELSE CASE _subject_type
-               WHEN 'commercial' THEN _st.commercial_default_rate
-               ELSE _st.club_default_rate
-             END
+      CASE
+        WHEN _subject_type = 'commercial' THEN _st.commercial_default_rate
+        WHEN _event_type = 'commercial'   THEN _st.commercial_default_rate
+        WHEN _event_type = 'recruitment'  THEN _st.commercial_default_rate
+        WHEN _event_type = 'tournament'   THEN COALESCE(_st.tournament_rate, _st.club_default_rate)
+        WHEN _event_type = 'training'     THEN COALESCE(_st.training_rate, _st.club_default_rate)
+        ELSE _st.club_default_rate
       END,
       -- akce bez vlastní sazby (např. údržba s fakturačním subjektem) → podle typu subjektu
       CASE _subject_type WHEN 'commercial' THEN _st.commercial_default_rate
@@ -410,6 +418,8 @@ CREATE TABLE public.notifications (
 
 CREATE INDEX idx_notifications_user        ON public.notifications (user_id, created_at DESC);
 CREATE INDEX idx_notifications_user_unread ON public.notifications (user_id) WHERE read_at IS NULL;
+-- kvůli FK ON DELETE SET NULL (bez indexu by mazání rezervace skenovalo celou tabulku)
+CREATE INDEX idx_notifications_reservation ON public.notifications (reservation_id) WHERE reservation_id IS NOT NULL;
 
 -- Fronta e-mailů. Odesílá ji až edge funkce `send-emails` (servisním klíčem) — dokud
 -- není nastavený poskytovatel, zůstává vypnutá a fronta se ani neplní (viz settings).
@@ -432,6 +442,11 @@ CREATE INDEX idx_email_outbox_pending ON public.email_outbox (created_at) WHERE 
 
 ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.email_outbox  ENABLE ROW LEVEL SECURITY;
+
+-- Supabase dává nové tabulce práva i roli anon (nepřihlášený). RLS ji sice bez politik
+-- nikam nepustí, ale ta práva tam nemají co dělat — bereme je pryč (obrana do hloubky).
+REVOKE ALL ON public.notifications FROM anon;
+REVOKE ALL ON public.email_outbox  FROM anon;
 
 -- Notifikace: každý vidí jen své (admin i cizí kvůli podpoře); zapisuje jen SECURITY DEFINER funkce.
 CREATE POLICY "notifications_select_own" ON public.notifications
@@ -542,6 +557,17 @@ BEGIN
 
   -- (a) nová nepotvrzená rezervace člena → upozorni všechny zástupce klubu
   IF TG_OP = 'INSERT' AND NEW.approved_at IS NULL THEN
+    -- Jedna zpráva na akci, ne na každý slot: rezervace na obě dráhy ani série
+    -- opakovaných tréninků nesmí zástupci zaplavit schránku.
+    IF EXISTS (
+      SELECT 1 FROM public.reservations r
+       WHERE r.id <> NEW.id
+         AND ((NEW.event_id  IS NOT NULL AND r.event_id  = NEW.event_id)
+           OR (NEW.series_id IS NOT NULL AND r.series_id = NEW.series_id))
+    ) THEN
+      RETURN NULL;
+    END IF;
+
     SELECT p.full_name INTO _author FROM public.profiles p WHERE p.user_id = NEW.created_by;
     FOR _rep IN
       SELECT sr.user_id FROM public.subject_reps sr

@@ -38,7 +38,13 @@ CREATE VIEW public.reservations_calendar
            ELSE 'training'::public.event_type END
     ) AS event_type,
     -- poznámka je interní informace klubu → jen klub a admin
-    CASE WHEN has_role(auth.uid(), 'admin') OR public.is_subject_member(r.subject_id)
+    -- (Pozn. k výkonu: podmínky se schválně píšou jako poddotazy nezávislé na řádku —
+    -- Postgres je vyhodnotí jednou pro celý dotaz, ne pro každou rezervaci zvlášť.)
+    CASE WHEN (SELECT has_role(auth.uid(), 'admin'))
+              OR r.subject_id IN (SELECT sr.subject_id
+                                    FROM public.subject_reps sr
+                                    JOIN public.subjects s2 ON s2.id = sr.subject_id
+                                   WHERE sr.user_id = auth.uid() AND s2.deleted_at IS NULL)
          THEN r.note END AS note,
     r.approved_at,
     r.created_by,
@@ -49,23 +55,33 @@ CREATE VIEW public.reservations_calendar
     xp.full_name AS cancelled_by_name,
     r.cancel_reason,
     -- ČÁSTKY: jen admin a autor rezervace
-    CASE WHEN has_role(auth.uid(), 'admin') OR r.created_by = auth.uid() THEN r.hours END            AS hours,
-    CASE WHEN has_role(auth.uid(), 'admin') OR r.created_by = auth.uid() THEN r.rate_per_hour END    AS rate_per_hour,
-    CASE WHEN has_role(auth.uid(), 'admin') OR r.created_by = auth.uid() THEN r.amount END           AS amount,
-    CASE WHEN has_role(auth.uid(), 'admin') OR r.created_by = auth.uid() THEN r.corrected_hours END  AS corrected_hours,
-    CASE WHEN has_role(auth.uid(), 'admin') OR r.created_by = auth.uid() THEN r.corrected_amount END AS corrected_amount,
+    CASE WHEN (SELECT has_role(auth.uid(), 'admin')) OR r.created_by = auth.uid() THEN r.hours END            AS hours,
+    CASE WHEN (SELECT has_role(auth.uid(), 'admin')) OR r.created_by = auth.uid() THEN r.rate_per_hour END    AS rate_per_hour,
+    CASE WHEN (SELECT has_role(auth.uid(), 'admin')) OR r.created_by = auth.uid() THEN r.amount END           AS amount,
+    CASE WHEN (SELECT has_role(auth.uid(), 'admin')) OR r.created_by = auth.uid() THEN r.corrected_hours END  AS corrected_hours,
+    CASE WHEN (SELECT has_role(auth.uid(), 'admin')) OR r.created_by = auth.uid() THEN r.corrected_amount END AS corrected_amount,
     -- COALESCE: u starých rezervací bez autora by porovnání dalo NULL a klient by
     -- musel řešit tri-state; takhle je odpověď vždy true/false
-    COALESCE(has_role(auth.uid(), 'admin') OR r.created_by = auth.uid(), false) AS can_see_amount,
+    COALESCE((SELECT has_role(auth.uid(), 'admin')) OR r.created_by = auth.uid(), false) AS can_see_amount,
     -- co smí přihlášený s rezervací dělat (aby to FE nemusel dopočítávat z rolí)
     COALESCE(
-      has_role(auth.uid(), 'admin')
-      OR (r.subject_id IS NOT NULL AND public.is_subject_rep(r.subject_id))
-      OR (r.subject_id IS NOT NULL AND public.is_subject_member(r.subject_id) AND r.created_by = auth.uid()),
+      (SELECT has_role(auth.uid(), 'admin'))
+      OR r.subject_id IN (SELECT sr.subject_id
+                            FROM public.subject_reps sr
+                            JOIN public.subjects s2 ON s2.id = sr.subject_id
+                           WHERE sr.user_id = auth.uid() AND sr.level = 'rep' AND s2.deleted_at IS NULL)
+      OR (r.created_by = auth.uid()
+          AND r.subject_id IN (SELECT sr.subject_id
+                                 FROM public.subject_reps sr
+                                 JOIN public.subjects s2 ON s2.id = sr.subject_id
+                                WHERE sr.user_id = auth.uid() AND s2.deleted_at IS NULL)),
       false) AS can_manage,
     COALESCE(
-      has_role(auth.uid(), 'admin')
-      OR (r.subject_id IS NOT NULL AND public.is_subject_rep(r.subject_id)),
+      (SELECT has_role(auth.uid(), 'admin'))
+      OR r.subject_id IN (SELECT sr.subject_id
+                            FROM public.subject_reps sr
+                            JOIN public.subjects s2 ON s2.id = sr.subject_id
+                           WHERE sr.user_id = auth.uid() AND sr.level = 'rep' AND s2.deleted_at IS NULL),
       false) AS can_approve
   FROM public.reservations r
   LEFT JOIN public.subjects s  ON s.id  = r.subject_id
@@ -83,6 +99,7 @@ COMMENT ON VIEW public.reservations_calendar IS
 -- -----------------------------------------------------------------------------
 -- 2) PODKLADY PRO FAKTURACI („kdo kolik dluží") — jen admin
 -- -----------------------------------------------------------------------------
+DROP VIEW IF EXISTS public.reservations_billing;
 CREATE VIEW public.reservations_billing
   WITH (security_invoker = off) AS
   SELECT
@@ -108,6 +125,9 @@ GRANT SELECT ON public.reservations_billing TO authenticated;
 -- -----------------------------------------------------------------------------
 -- Sloupcová práva jsou rolová (ne řádková), takže tabulku uzavřeme úplně a čtení
 -- částek jde jen přes view výše, které maskuje podle uživatele.
+-- Nepřihlášený (anon) nemá na rezervacích co dělat vůbec — RLS ho sice bez politik
+-- nikam nepustí, ale výchozí granty od Supabase bereme pryč (obrana do hloubky).
+REVOKE ALL ON public.reservations FROM anon;
 REVOKE SELECT ON public.reservations FROM authenticated;
 GRANT SELECT (
   id, sheet_id, subject_id, event_id, series_id,
@@ -252,6 +272,10 @@ BEGIN
     RAISE EXCEPTION 'Vyplňte název akce.';
   END IF;
 
+  IF p_start IS NULL OR p_end IS NULL OR p_end <= p_start THEN
+    RAISE EXCEPTION 'Konec rezervace musí být po jejím začátku.';
+  END IF;
+
   SELECT count(*) INTO _sheet_cnt FROM unnest(p_sheet_ids) AS x(id);
   IF p_sheet_ids IS NULL OR _sheet_cnt = 0 THEN
     RAISE EXCEPTION 'Vyberte aspoň jednu dráhu.';
@@ -322,6 +346,12 @@ BEGIN
     FOR _conf IN
       SELECT c.* FROM public.check_booking_conflicts(p_sheet_ids, p_start, p_end, p_kind) c
     LOOP
+      -- Znovu i tady: mezi kontrolou a stornem mohla vzniknout akce vyšší priority.
+      IF NOT _conf.can_override THEN
+        RAISE EXCEPTION 'Akci „%" (%) nelze přebít — má stejnou nebo vyšší prioritu.',
+          COALESCE(_conf.event_title, _conf.subject_name, 'rezervace'), _conf.sheet_name;
+      END IF;
+
       UPDATE public.reservations
          SET status        = 'cancelled',
              cancelled_at  = now(),
@@ -488,7 +518,10 @@ BEGIN
   END LOOP;
 
   IF _created = 0 THEN
-    RAISE EXCEPTION 'Nepodařilo se založit ani jeden termín série (kolize nebo mimo otevírací dobu).';
+    -- Ať uživatel vidí skutečný důvod (typicky kolize, ale může jít i o chybějící
+    -- oprávnění nebo nevyplněný ceník) — jinak by hádal.
+    RAISE EXCEPTION 'Nepodařilo se založit ani jeden termín série. Důvod prvního termínu: %',
+      COALESCE(_skipped->0->>'reason', 'neznámý');
   END IF;
 
   RETURN jsonb_build_object('series_id', _series, 'created', _created, 'skipped', _skipped);
@@ -523,8 +556,10 @@ BEGIN
 
   PERFORM set_config('app.trusted_booking', 'on', true);
 
+  -- p_note = NULL znamená „neměň"; prázdný řetězec znamená „smaž poznámku".
+  -- (Bez tohohle rozlišení by úprava samotného názvu poznámku tiše vymazala.)
   UPDATE public.reservations
-     SET note = nullif(btrim(coalesce(p_note, '')), ''),
+     SET note = CASE WHEN p_note IS NULL THEN note ELSE nullif(btrim(p_note), '') END,
          rate_per_hour = CASE WHEN has_role(auth.uid(), 'admin') AND p_rate IS NOT NULL
                               THEN p_rate ELSE rate_per_hour END
    WHERE id = p_reservation_id;
@@ -730,14 +765,16 @@ GRANT EXECUTE ON FUNCTION public.approve_reservation(uuid) TO authenticated;
 -- 11) SUBJEKT PODLE IČO (ARES bez duplicit)
 -- -----------------------------------------------------------------------------
 -- Klub/firmu se stejným IČO nesmíme zakládat znovu. Běžný uživatel přes RLS cizí
--- subjekty nevidí, proto to musí odpovědět server.
+-- subjekty nevidí, proto to musí odpovědět server — ale jen správci, protože odpověď
+-- obsahuje fakturační údaje (adresa, DIČ) a firmy zakládá stejně jen on.
 CREATE OR REPLACE FUNCTION public.find_subject_by_ico(p_ico text)
  RETURNS TABLE (id uuid, name text, type public.subject_type, ico text, dic text, address text)
  LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public'
 AS $$
   SELECT s.id, s.name, s.type, s.ico, s.dic, s.address
     FROM public.subjects s
-   WHERE s.deleted_at IS NULL
+   WHERE has_role(auth.uid(), 'admin')
+     AND s.deleted_at IS NULL
      AND s.ico = btrim(p_ico)
    LIMIT 1;
 $$;

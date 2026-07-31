@@ -86,13 +86,19 @@ bez toho by Postgres odmítl použít typ `tournament` ve stejné transakci.
 
 ## Co zůstává otevřené
 
-1. **Logo** — teď je placeholder, čeká se na finální podklad od klienta.
+1. **Logo** — teď je placeholder (SVG). Až přijde finální podklad, je potřeba dodat
+   ještě **PNG 180×180** pro `apple-touch-icon` (iOS SVG u téhle ikony nepodporuje)
+   a v `og:image`/`twitter:image` použít **absolutní URL** — jinak náhledy odkazu
+   na Facebooku a X zůstanou bez obrázku. Starý soubor `favicon.ico` se starým
+   logem byl smazán, aby se nikde neservíroval.
 2. **Sazby** — migrace je záměrně nechává prázdné (v produkci se nesmí účtovat podle
    vymyšlených čísel). Placeholder hodnoty jsou jen v demo seedu; admin je vyplní
    v Nastavení.
 3. **E-mailový poskytovatel** — viz výše, čeká na rozhodnutí a klíč.
 4. **Produkční nasazení** — migrace `20260731*` nejsou na produkci. Před nasazením:
-   čerstvá záloha + souhlas PM. Pozor na dvě věci:
+   čerstvá záloha + souhlas PM. Napřed ověřit `SELECT id, name FROM public.sheets;` —
+   přejmenování hledá názvy začínající na „Plátno"; pokud je admin v produkci
+   přejmenoval jinak, je potřeba migraci upravit. Dál pozor na dvě věci:
    - unikátní index na IČO spadne, pokud jsou v produkci duplicity (migrace to řekne
      jasnou hláškou a data nezmění);
    - staré rezervace na půl hodiny zůstanou beze změny; validace celých hodin platí

@@ -384,7 +384,8 @@ export function ReservationDialog({
         await api.updateBooking({
           id: editing.id!,
           title: sanitizeText(title),
-          note: note ? sanitizeText(note) : null,
+          // prázdný řetězec = „smaž poznámku" (null by znamenalo „neměň")
+          note: note ? sanitizeText(note) : '',
           rate_per_hour: isAdmin && rateNum !== undefined && !isNaN(rateNum) ? rateNum : undefined,
         });
         toast({ title: 'Rezervace upravena' });

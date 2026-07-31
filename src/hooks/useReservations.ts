@@ -220,6 +220,7 @@ export const useReservations = (range: DateRange | null) => {
   });
 
   const updateBooking = useMutation({
+    // note: '' smaže poznámku, undefined/null ji nechá být (kontrakt serverové funkce)
     mutationFn: async (args: { id: string; title?: string; note?: string | null; rate_per_hour?: number | null }) => {
       const { error } = await supabase.rpc('update_booking', {
         p_reservation_id: args.id,

@@ -38,3 +38,7 @@ supabase/.env
 
 # Zálohy databáze — obsahují citlivá data (čísla účtů členů). NIKDY do gitu!
 backups/
+
+# generované/lokální artefakty dema (regeneruje scripts/build-demo-sql.sh)
+demo_setup.sql
+demo-web.zip

@@ -443,6 +443,74 @@ BEGIN
     'zástupce klubu', 'guard: člen si nepotvrdí rezervaci ani UPDATEm');
 END $$;
 
+-- -----------------------------------------------------------------------------
+-- 14) Nálezy z kontrolních bran — ať se nevrátí
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _r jsonb; _res uuid; _pozn text; _rate numeric; _notif int; _ser jsonb;
+BEGIN
+  PERFORM pg_temp.prihlas('11111111-1111-1111-1111-111111111111');
+
+  -- (B3) úprava samotného názvu nesmí smazat poznámku
+  _r := public.create_booking(
+    ARRAY[pg_temp.draha(1)], 'training', 'Původní název',
+    pg_temp.cas('2026-09-25 17:00'), pg_temp.cas('2026-09-25 18:00'),
+    'aaaa1111-0000-0000-0000-000000000001', 'Důležitá poznámka');
+  _res := ((_r->'reservation_ids')->>0)::uuid;
+  PERFORM public.update_booking(_res, 'Nový název');
+  SELECT note INTO _pozn FROM public.reservations WHERE id = _res;
+  PERFORM pg_temp.tvrd(_pozn = 'Důležitá poznámka', 'úprava názvu nechá poznámku být');
+  PERFORM public.update_booking(_res, NULL, '');
+  SELECT note INTO _pozn FROM public.reservations WHERE id = _res;
+  PERFORM pg_temp.tvrd(_pozn IS NULL, 'prázdná poznámka ji smaže');
+
+  -- (D6) komerční zákazník se účtuje komerční sazbou i u turnaje
+  _r := public.create_booking(
+    ARRAY[pg_temp.draha(2)], 'tournament', 'Firemní turnaj',
+    pg_temp.cas('2026-09-25 17:00'), pg_temp.cas('2026-09-25 19:00'),
+    'bbbb2222-0000-0000-0000-000000000001');
+  SELECT rate_per_hour INTO _rate FROM public.reservations WHERE id = ((_r->'reservation_ids')->>0)::uuid;
+  PERFORM pg_temp.tvrd(_rate = (SELECT commercial_default_rate FROM public.settings),
+    format('turnaj firmy se účtuje komerční sazbou (%s Kč/h)', _rate));
+
+  -- (D10) stornovanou rezervaci nesmí ne-admin oživit
+  PERFORM public.cancel_booking(_res, 'single', 'test');
+  PERFORM pg_temp.prihlas('44444444-4444-4444-4444-444444444444');
+  PERFORM pg_temp.ocekavej_chybu(
+    format('UPDATE public.reservations SET status = ''confirmed'' WHERE id = %L::uuid', _res),
+    'jen správce', 'storno nejde vzít zpět bez správce');
+
+  -- (D5) série ani obě dráhy nezahltí zástupce upozorněními
+  PERFORM pg_temp.prihlas('55555555-5555-5555-5555-555555555555');
+  DELETE FROM public.notifications WHERE type = 'reservation_needs_approval';
+  _ser := public.create_booking_series(
+    ARRAY[pg_temp.draha(1)], 'training', 'Série člena',
+    pg_temp.cas('2026-11-03 17:00'), pg_temp.cas('2026-11-03 18:00'),
+    ARRAY[2], '2026-11-30'::date, 'aaaa1111-0000-0000-0000-000000000001');
+  SELECT count(*) INTO _notif FROM public.notifications
+   WHERE type = 'reservation_needs_approval' AND user_id = '44444444-4444-4444-4444-444444444444';
+  PERFORM pg_temp.tvrd(_notif = 1,
+    format('série %s termínů = jedno upozornění zástupci (bylo %s)', _ser->>'created', _notif));
+
+  -- (D11) fakturační údaje subjektů dostane z ARES kontroly jen správce
+  PERFORM pg_temp.tvrd(NOT EXISTS (SELECT 1 FROM public.find_subject_by_ico('12345678')),
+    'ne-admin z find_subject_by_ico nic nedostane');
+  PERFORM pg_temp.prihlas('11111111-1111-1111-1111-111111111111');
+  PERFORM pg_temp.tvrd(EXISTS (SELECT 1 FROM public.find_subject_by_ico('12345678')),
+    'admin z find_subject_by_ico dostane firmu');
+END $$;
+
+-- (B1b) nepřihlášená role nemá na citlivé tabulky žádná práva
+DO $$
+DECLARE _prava int;
+BEGIN
+  SELECT count(*) INTO _prava
+    FROM information_schema.role_table_grants
+   WHERE table_schema = 'public' AND grantee = 'anon'
+     AND table_name IN ('reservations', 'notifications', 'email_outbox');
+  PERFORM pg_temp.tvrd(_prava = 0, format('role anon nemá práva na citlivé tabulky (nalezeno %s)', _prava));
+END $$;
+
 DO $$ BEGIN RAISE NOTICE '=== VŠECHNY TESTY PROŠLY ==='; END $$;
 
 ROLLBACK;
