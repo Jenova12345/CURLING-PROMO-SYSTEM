@@ -689,6 +689,33 @@ BEGIN
     'rezervaci nelze zpětně datovat');
 END $$;
 
+-- -----------------------------------------------------------------------------
+-- 18) Přesun na jiný DEN i na druhou DRÁHU (drag & drop v kalendáři)
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _r jsonb; _res uuid; _sheet uuid; _start timestamptz;
+BEGIN
+  PERFORM pg_temp.prihlas('44444444-4444-4444-4444-444444444444');
+  _r := public.create_booking(
+    ARRAY[pg_temp.draha(1)], 'training', 'Rezervace k přetažení',
+    pg_temp.cas('2027-02-02 17:00'), pg_temp.cas('2027-02-02 19:00'),
+    'aaaa1111-0000-0000-0000-000000000001');
+  _res := ((_r->'reservation_ids')->>0)::uuid;
+
+  -- jiný den + druhá dráha najednou (přesně to, co umí tažení myší)
+  PERFORM public.move_booking(
+    _res, pg_temp.cas('2027-02-05 09:00'), pg_temp.cas('2027-02-05 11:00'), pg_temp.draha(2));
+  SELECT sheet_id, start_at INTO _sheet, _start FROM public.reservations WHERE id = _res;
+  PERFORM pg_temp.tvrd(_sheet = pg_temp.draha(2) AND _start = pg_temp.cas('2027-02-05 09:00'),
+    'přesun na jiný den i na druhou dráhu proběhl');
+
+  -- mimo otevírací dobu to neprojde ani přes RPC (UI to hlásí dřív)
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.move_booking(%L::uuid, %L::timestamptz, %L::timestamptz)',
+      _res, pg_temp.cas('2027-02-06 05:00'), pg_temp.cas('2027-02-06 07:00')),
+    'otevírací dob', 'přesun mimo otevírací dobu odmítnut');
+END $$;
+
 DO $$ BEGIN RAISE NOTICE '=== VŠECHNY TESTY PROŠLY ==='; END $$;
 
 ROLLBACK;
