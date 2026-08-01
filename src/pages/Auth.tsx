@@ -179,9 +179,6 @@ const Auth = () => {
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-primary/5 via-background to-secondary/5 p-4">
       <Card className="w-full max-w-md shadow-xl">
         <CardHeader className="text-center">
-          <div className="mx-auto mb-4">
-            <img src="/logo-placeholder.svg" alt="" className="h-20 w-auto mx-auto" />
-          </div>
           <CardTitle className="text-2xl font-bold">{BRAND.name}</CardTitle>
           <CardDescription>Systém pro správu curlingové haly</CardDescription>
         </CardHeader>

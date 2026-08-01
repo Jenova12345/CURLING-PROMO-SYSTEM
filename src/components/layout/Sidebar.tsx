@@ -21,9 +21,8 @@ const Sidebar = () => {
 
   return (
     <aside className="flex h-screen w-64 flex-col border-r bg-card">
-      {/* Logo */}
+      {/* Hlavička (logo zatím žádné — doplní se, až ho klient dodá) */}
       <div className="flex h-16 items-center gap-3 border-b px-4">
-        <img src="/logo-placeholder.svg" alt="" className="h-10 w-auto" />
         <div className="min-w-0 flex-1">
           <h1 className="truncate font-bold text-lg leading-none">{BRAND.name}</h1>
           <p className="text-xs text-muted-foreground">{BRAND.tagline}</p>

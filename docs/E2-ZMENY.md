@@ -9,7 +9,7 @@ Stav ke dni **31. 7. 2026**, větev `dev`. Vše ověřeno na **lokálním** Supa
 
 | # | Požadavek | Jak je to udělané |
 |---|---|---|
-| 1 | Rebrand „Mladé kameny" → **Curling Promo Ostrava** | Název systému je na jednom místě (`src/config/brand.ts`) + `index.html`, `public/manifest.json`. Logo je zatím placeholder (`public/logo-placeholder.svg`) — čeká se na finální logo. |
+| 1 | Rebrand „Mladé kameny" → **Curling Promo Ostrava** | Název systému je na jednom místě (`src/config/brand.ts`) + `index.html`, `public/manifest.json`. Logo v aplikaci zatím **žádné není** (na přání klienta) — všude je jen textový název. |
 | 2 | „plátno" → **„dráha"** | Texty v aplikaci + migrace přejmenovala data (`Plátno 1/2` → `Dráha 1/2`). Tabulka se dál jmenuje `sheets` (přejmenování tabulky by nic nepřineslo a rozbilo vazby). |
 | 3 | Rezervace **obou drah najednou** | Ve formuláři jsou zaškrtávátka drah. Jedna akce může mít víc rezervací (po jedné na dráhu); anti-kolizní constraint dál hlídá každou dráhu zvlášť. Storno nabízí „jen tuhle dráhu" / „celou akci". |
 | 4 | **Skrytí ceny** | Název klubu/akce vidí každý přihlášený, **částku jen admin a autor rezervace**. Vynuceno v databázi: role `authenticated` nemá právo číst cenové sloupce tabulky `reservations`, čte se přes maskující view `reservations_calendar`. Nejde to obejít ani ručním voláním API. |
@@ -86,11 +86,11 @@ bez toho by Postgres odmítl použít typ `tournament` ve stejné transakci.
 
 ## Co zůstává otevřené
 
-1. **Logo** — teď je placeholder (SVG). Až přijde finální podklad, je potřeba dodat
-   ještě **PNG 180×180** pro `apple-touch-icon` (iOS SVG u téhle ikony nepodporuje)
-   a v `og:image`/`twitter:image` použít **absolutní URL** — jinak náhledy odkazu
-   na Facebooku a X zůstanou bez obrázku. Starý soubor `favicon.ico` se starým
-   logem byl smazán, aby se nikde neservíroval.
+1. **Logo** — v aplikaci žádné není, jen textový název (rozhodnutí klienta z 1. 8.).
+   Až finální podklad přijde, bude potřeba: obrázek do hlavičky a přihlašovací
+   obrazovky, **PNG 180×180** pro `apple-touch-icon` (iOS u téhle ikony SVG
+   nepodporuje), `icons` zpět do `public/manifest.json` a v `og:image`/`twitter:image`
+   **absolutní URL** — jinak náhledy odkazu na Facebooku a X zůstanou bez obrázku.
 2. **Sazby** — migrace je záměrně nechává prázdné (v produkci se nesmí účtovat podle
    vymyšlených čísel). Placeholder hodnoty jsou jen v demo seedu; admin je vyplní
    v Nastavení.
