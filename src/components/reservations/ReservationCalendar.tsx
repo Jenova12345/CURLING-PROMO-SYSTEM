@@ -124,8 +124,7 @@ export function ReservationCalendar({
     const origEnd = new Date(d.res.end_at!);
     const duration = origEnd.getTime() - origStart.getTime();
 
-    let start = new Date(origStart.getTime() + hourShift * 3_600_000);
-    let sheetId = d.res.sheet_id!;
+    const shifted = new Date(origStart.getTime() + hourShift * 3_600_000);  // hodina z tahu
 
     // Cílový sloupec (den + dráha) podle místa, kde uživatel pustil myš.
     // Tažený blok se drží pod kurzorem, takže by ho elementFromPoint našel místo
@@ -137,11 +136,13 @@ export function ReservationCalendar({
       ?.closest('[data-lane]') as HTMLElement | null;
     dragged.style.pointerEvents = prevPointerEvents;
 
-    if (target?.dataset.day && target.dataset.sheetId) {
-      const [y, m, dd] = target.dataset.day.split('-').map(Number);
-      start = new Date(y, m - 1, dd, start.getHours(), 0, 0, 0);
-      sheetId = target.dataset.sheetId;
-    }
+    // Puštěno mimo mřížku (vedle kalendáře, na legendu, mimo okno) → neděláme nic.
+    // Jinak by se z toho stal posun o hodiny podle svislého tahu, o který nikdo nestál.
+    if (!target?.dataset.day || !target.dataset.sheetId) return;
+
+    const [y, m, dd] = target.dataset.day.split('-').map(Number);
+    const start = new Date(y, m - 1, dd, shifted.getHours(), 0, 0, 0);   // den z cílového sloupce
+    const sheetId = target.dataset.sheetId;
     const end = new Date(start.getTime() + duration);
 
     if (start.getTime() === origStart.getTime() && sheetId === d.res.sheet_id) return;
