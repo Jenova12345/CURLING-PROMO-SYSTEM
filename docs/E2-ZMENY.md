@@ -84,6 +84,17 @@ bez toho by Postgres odmítl použít typ `tournament` ve stejné transakci.
 
 ---
 
+## Hala vs. klub (vyjasněno 1. 8.)
+
+**„Curling Promo Ostrava" je hala / provozovatel** — je to název systému, ne subjekt.
+Subjekty (`public.subjects`) jsou výhradně **zákazníci haly**: kluby a firmy. Hala se
+nikde nemodeluje jako fakturační subjekt a ani jedna migrace žádný subjekt nezakládá;
+interní akce (údržba) mají `subject_id` prázdné, takže se neúčtují.
+
+V demo datech se domácí klub jmenuje **„CK Ostravské kameny"** — je to vymyšlený
+název, aby nesplýval s provozovatelem. Až Jakub řekne skutečný název klubu, přepíše
+se na jednom místě v `supabase/seed.sql`.
+
 ## Co zůstává otevřené
 
 1. **Logo** — v aplikaci žádné není, jen textový název (rozhodnutí klienta z 1. 8.).

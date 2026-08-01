@@ -102,16 +102,19 @@ VALUES ('Test Klub', 'Fiktivní testovací klub (seed)', 'https://example.com/te
 UPDATE public.settings SET club_default_rate = 500, commercial_default_rate = 1000;
 
 -- Subjekty: 2 kluby + 1 komerční (IČO/DIČ fiktivní)
+-- POZOR na rozdíl: „Curling Promo Ostrava" je HALA (provozovatel) — název systému,
+-- ne subjekt. Subjekty jsou jen zákazníci haly: kluby a firmy. „CK Ostravské kameny"
+-- je vymyšlený domácí klub pro demo; až Jakub řekne skutečný název, přepsat tady.
 INSERT INTO public.subjects (id, type, name, ico, dic, address, default_rate) VALUES
-  ('aaaa1111-0000-0000-0000-000000000001', 'club', 'Curling Promo Ostrava', NULL, NULL, NULL, NULL),
+  ('aaaa1111-0000-0000-0000-000000000001', 'club', 'CK Ostravské kameny', NULL, NULL, NULL, NULL),
   ('aaaa1111-0000-0000-0000-000000000002', 'club', 'Curling Ostrava', NULL, NULL, NULL, 450),
   ('bbbb2222-0000-0000-0000-000000000001', 'commercial', 'Testovací Firma s.r.o.',
    '00000019', 'CZ00000019', 'Testovací 1, 700 30 Ostrava', NULL);
 
 -- Zástupci klubů (napojení na testovací uživatele z části výše)
---   clen@test.local (4444…)  → Curling Promo Ostrava
+--   clen@test.local (4444…)  → CK Ostravské kameny
 --   instruktor@test.local (2222…) → Curling Ostrava (pro test izolace mezi kluby)
---   clen  = ZÁSTUPCE (rep) CPO, instruktor = zástupce Curling Ostrava, clen2 = ČLEN (member) CPO
+--   clen  = ZÁSTUPCE (rep) CK Ostravské kameny, instruktor = zástupce Curling Ostrava, clen2 = ČLEN (member) CK Ostravské kameny
 INSERT INTO public.subject_reps (subject_id, user_id, level) VALUES
   ('aaaa1111-0000-0000-0000-000000000001', '44444444-4444-4444-4444-444444444444', 'rep'),
   ('aaaa1111-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222222', 'rep'),
@@ -121,7 +124,7 @@ INSERT INTO public.subject_reps (subject_id, user_id, level) VALUES
 -- Dráhy referencujeme podle jména (jejich UUID generuje migrace).
 INSERT INTO public.reservations (sheet_id, subject_id, start_at, end_at, status, note) VALUES
   ((SELECT id FROM public.sheets WHERE name = 'Dráha 1'),
-   'aaaa1111-0000-0000-0000-000000000001', '2026-07-20 10:00+02', '2026-07-20 11:00+02', 'confirmed', 'CPO trénink'),
+   'aaaa1111-0000-0000-0000-000000000001', '2026-07-20 10:00+02', '2026-07-20 11:00+02', 'confirmed', 'Trénink CK'),
   ((SELECT id FROM public.sheets WHERE name = 'Dráha 2'),
    'aaaa1111-0000-0000-0000-000000000002', '2026-07-20 10:00+02', '2026-07-20 11:00+02', 'confirmed', 'Curling Ostrava trénink'),
   ((SELECT id FROM public.sheets WHERE name = 'Dráha 1'),
@@ -132,7 +135,7 @@ INSERT INTO public.reservations (sheet_id, subject_id, start_at, end_at, status,
 -- Sjednocený kalendář: akce navázané na rezervaci ledu (test event_id vazby)
 --   interní trénink (bez fakturačního subjektu) + komerční akce (trigger vygeneruje směnu)
 INSERT INTO public.events (id, title, event_type, start_time, end_time, required_staff, role_reqs) VALUES
-  ('cccc3333-0000-0000-0000-000000000001', 'Trénink CPO', 'training',
+  ('cccc3333-0000-0000-0000-000000000001', 'Trénink CK Ostravské kameny', 'training',
    '2026-07-21 16:00+02', '2026-07-21 17:00+02', 0, '{}'::jsonb),
   ('cccc3333-0000-0000-0000-000000000002', 'Firemní teambuilding', 'commercial',
    '2026-07-21 09:00+02', '2026-07-21 11:00+02', 1, '{"instructor": 1}'::jsonb);
@@ -150,7 +153,7 @@ INSERT INTO public.reservations (sheet_id, subject_id, event_id, start_at, end_a
 -- Klubová rezervace vytvořená ČLENEM (clen2) — test „člen edituje jen svou"; created_by explicitně.
 INSERT INTO public.reservations (sheet_id, subject_id, created_by, start_at, end_at, note) VALUES
   ((SELECT id FROM public.sheets WHERE name = 'Dráha 1'), 'aaaa1111-0000-0000-0000-000000000001',
-   '55555555-5555-5555-5555-555555555555', '2026-07-23 09:00+02', '2026-07-23 10:00+02', 'rezervace člena CPO');
+   '55555555-5555-5555-5555-555555555555', '2026-07-23 09:00+02', '2026-07-23 10:00+02', 'Rezervace člena CK');
 ALTER TABLE public.reservations ENABLE TRIGGER trg_reservations_a_guard;
 
 -- =============================================================================
@@ -168,18 +171,18 @@ INSERT INTO public.subjects (id, type, name, ico, dic, address, default_rate) VA
 
 -- Týden klubových rezervací na obou dráhách (sazbu dopočítá trigger z ceníku/subjektu)
 INSERT INTO public.reservations (sheet_id, subject_id, start_at, end_at, note) VALUES
-  ((SELECT id FROM public.sheets WHERE name='Dráha 1'), 'aaaa1111-0000-0000-0000-000000000001', '2026-07-27 08:00+02','2026-07-27 09:00+02','Trénink CPO'),
+  ((SELECT id FROM public.sheets WHERE name='Dráha 1'), 'aaaa1111-0000-0000-0000-000000000001', '2026-07-27 08:00+02','2026-07-27 09:00+02','Trénink CK'),
   ((SELECT id FROM public.sheets WHERE name='Dráha 2'), 'aaaa1111-0000-0000-0000-000000000002', '2026-07-27 08:00+02','2026-07-27 10:00+02','Curling Ostrava'),
   ((SELECT id FROM public.sheets WHERE name='Dráha 1'), 'aaaa1111-0000-0000-0000-000000000003', '2026-07-27 10:00+02','2026-07-27 11:00+02','HC Ostrava'),
   ((SELECT id FROM public.sheets WHERE name='Dráha 2'), 'aaaa1111-0000-0000-0000-000000000004', '2026-07-27 10:00+02','2026-07-27 12:00+02','TJ Poruba'),
-  ((SELECT id FROM public.sheets WHERE name='Dráha 1'), 'aaaa1111-0000-0000-0000-000000000001', '2026-07-27 18:00+02','2026-07-27 19:00+02','CPO večer'),
+  ((SELECT id FROM public.sheets WHERE name='Dráha 1'), 'aaaa1111-0000-0000-0000-000000000001', '2026-07-27 18:00+02','2026-07-27 19:00+02','Večerní trénink CK'),
   ((SELECT id FROM public.sheets WHERE name='Dráha 1'), 'aaaa1111-0000-0000-0000-000000000002', '2026-07-28 09:00+02','2026-07-28 10:00+02',''),
   ((SELECT id FROM public.sheets WHERE name='Dráha 2'), 'aaaa1111-0000-0000-0000-000000000003', '2026-07-28 17:00+02','2026-07-28 18:00+02',''),
   ((SELECT id FROM public.sheets WHERE name='Dráha 2'), 'aaaa1111-0000-0000-0000-000000000004', '2026-07-29 08:00+02','2026-07-29 09:00+02',''),
   ((SELECT id FROM public.sheets WHERE name='Dráha 1'), 'aaaa1111-0000-0000-0000-000000000001', '2026-07-30 16:00+02','2026-07-30 17:00+02',''),
   ((SELECT id FROM public.sheets WHERE name='Dráha 2'), 'aaaa1111-0000-0000-0000-000000000002', '2026-07-30 18:00+02','2026-07-30 19:00+02',''),
   ((SELECT id FROM public.sheets WHERE name='Dráha 1'), 'aaaa1111-0000-0000-0000-000000000003', '2026-07-31 09:00+02','2026-07-31 10:00+02',''),
-  ((SELECT id FROM public.sheets WHERE name='Dráha 2'), 'aaaa1111-0000-0000-0000-000000000001', '2026-07-31 17:00+02','2026-07-31 18:00+02','CPO víkendová příprava');
+  ((SELECT id FROM public.sheets WHERE name='Dráha 2'), 'aaaa1111-0000-0000-0000-000000000001', '2026-07-31 17:00+02','2026-07-31 18:00+02','Víkendová příprava CK');
 
 -- Komerční akce s OBSAZENÍM (part filled) — event → trigger vytvoří 3 směny (2 instruktor, 1 bar)
 INSERT INTO public.events (id, title, event_type, start_time, end_time, required_staff, role_reqs) VALUES
@@ -227,7 +230,7 @@ SELECT set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-1111111
 SELECT public.create_booking(
   ARRAY[(SELECT id FROM public.sheets WHERE name = 'Dráha 1'),
         (SELECT id FROM public.sheets WHERE name = 'Dráha 2')],
-  'tournament', 'Podzimní turnaj CPO',
+  'tournament', 'Podzimní turnaj CK',
   '2026-08-08 09:00+02', '2026-08-08 15:00+02',
   'aaaa1111-0000-0000-0000-000000000001', 'Turnaj pro 8 týmů');
 
@@ -246,7 +249,7 @@ SELECT public.create_booking(
   'maintenance', 'Frézování a kropení',
   '2026-08-07 07:00+02', '2026-08-07 08:00+02');
 
--- --- zástupce klubu (Curling Promo Ostrava) ---------------------------------
+-- --- zástupce klubu (CK Ostravské kameny) ------------------------------------
 SELECT set_config('request.jwt.claims', '{"sub":"44444444-4444-4444-4444-444444444444"}', false);
 
 -- Pravidelný trénink: každé Út a Čt 16–18 do konce srpna
