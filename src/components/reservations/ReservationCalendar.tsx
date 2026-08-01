@@ -24,6 +24,10 @@ const TYPE_LEGEND: [string, string, string][] = [
   ['maintenance', 'Údržba ledu', 'bg-orange-500'],
 ];
 
+// Jemné odlišení drah — barva tady nesmí konkurovat barvám typů akcí,
+// proto jen decentní podklad druhé dráhy + popisek nad každým sloupcem.
+const LANE_TINT = ['', 'bg-muted/40'];
+
 interface Props {
   view: 'day' | 'week';
   currentDate: Date;
@@ -36,15 +40,20 @@ interface Props {
   canBook: boolean;
   onSlotClick: (sheetId: string, start: Date) => void;
   onReservationClick: (reservation: CalendarReservation) => void;
-  /** přesun tažením myší; bez něj se jen kliká */
+  /**
+   * Uživatel dotáhl rezervaci na nový termín. Stránka se nejdřív zeptá na potvrzení,
+   * teprve pak ukládá — do té doby blok zůstává na původním místě.
+   */
   onMove?: (reservation: CalendarReservation, start: Date, end: Date, sheetId: string) => void;
+  /** cílový termín je mimo otevírací dobu — hlásí stránka, neukládá se nic */
+  onOutsideHours?: (start: Date, end: Date) => void;
 }
 
 const fmtKc = (n: number) => `${n.toLocaleString('cs-CZ')} Kč`;
 
 export function ReservationCalendar({
   view, currentDate, sheets, reservations, shiftFill = {},
-  openHour, closeHour, canBook, onSlotClick, onReservationClick, onMove,
+  openHour, closeHour, canBook, onSlotClick, onReservationClick, onMove, onOutsideHours,
 }: Props) {
   const openMin = openHour * 60;
   const totalMin = (closeHour - openHour) * 60;
@@ -119,8 +128,15 @@ export function ReservationCalendar({
     let sheetId = d.res.sheet_id!;
 
     // Cílový sloupec (den + dráha) podle místa, kde uživatel pustil myš.
+    // Tažený blok se drží pod kurzorem, takže by ho elementFromPoint našel místo
+    // sloupce pod ním — na okamžik ho proto vyřadíme z hit-testu.
+    const dragged = e.currentTarget as HTMLElement;
+    const prevPointerEvents = dragged.style.pointerEvents;
+    dragged.style.pointerEvents = 'none';
     const target = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)
       ?.closest('[data-lane]') as HTMLElement | null;
+    dragged.style.pointerEvents = prevPointerEvents;
+
     if (target?.dataset.day && target.dataset.sheetId) {
       const [y, m, dd] = target.dataset.day.split('-').map(Number);
       start = new Date(y, m - 1, dd, start.getHours(), 0, 0, 0);
@@ -129,10 +145,19 @@ export function ReservationCalendar({
     const end = new Date(start.getTime() + duration);
 
     if (start.getTime() === origStart.getTime() && sheetId === d.res.sheet_id) return;
+
+    // Otevírací dobu ověříme hned — ať se uživatel neptá na termín, který server odmítne.
+    const endsNextDay = end.getDate() !== start.getDate();
+    if (start.getHours() < openHour || endsNextDay || end.getHours() > closeHour
+        || (end.getHours() === 0 && end.getMinutes() === 0)) {
+      onOutsideHours?.(start, end);
+      return;
+    }
+
     onMove(d.res, start, end, sheetId);
   };
 
-  const renderSheetColumn = (day: Date, sheet: Sheet) => {
+  const renderSheetColumn = (day: Date, sheet: Sheet, laneIndex: number) => {
     const dayReservations = reservations.filter(
       (r) => r.sheet_id === sheet.id && isSameDay(new Date(r.start_at!), day),
     );
@@ -142,7 +167,7 @@ export function ReservationCalendar({
         data-lane=""
         data-sheet-id={sheet.id}
         data-day={format(day, 'yyyy-MM-dd')}
-        className={cn('relative flex-1 border-l', canBook && 'cursor-pointer')}
+        className={cn('relative flex-1 border-l', LANE_TINT[laneIndex % LANE_TINT.length], canBook && 'cursor-pointer')}
         style={{ height: gridHeight }}
         onClick={(e) => handleColumnClick(e, sheet.id, day)}
         aria-label={`${sheet.name}, ${format(day, 'd. M.', { locale: cs })}${canBook ? ' — klikni na volný čas pro rezervaci' : ''}`}
@@ -217,8 +242,8 @@ export function ReservationCalendar({
   return (
     <div className="overflow-x-auto">
       <div className="flex min-w-fit">
-        {/* časová osa */}
-        <div className="w-12 flex-shrink-0 pt-8">
+        {/* časová osa — odsazení = hlavička dne (h-8) + popisky drah (h-6) */}
+        <div className="w-12 flex-shrink-0 pt-14">
           <div className="relative" style={{ height: gridHeight }}>
             {hours.map((h) => (
               <div
@@ -245,17 +270,24 @@ export function ReservationCalendar({
               )}>
                 {view === 'week' ? format(day, 'EEE d. M.', { locale: cs }) : format(day, 'EEEE d. MMMM', { locale: cs })}
               </div>
-              {view === 'day' && (
-                <div className="flex border-b">
-                  {sheets.map((s) => (
-                    <div key={s.id} className="flex-1 border-l py-1 text-center text-[11px] text-muted-foreground">
-                      {s.name}
-                    </div>
-                  ))}
-                </div>
-              )}
+              {/* popisek dráhy nad každým sloupcem — v týdnu i ve dni stejně */}
+              <div className="flex border-b">
+                {sheets.map((s, i) => (
+                  <div
+                    key={s.id}
+                    className={cn(
+                      'flex h-6 flex-1 items-center justify-center truncate border-l px-1',
+                      'text-[11px] font-medium text-muted-foreground',
+                      LANE_TINT[i % LANE_TINT.length],
+                    )}
+                    title={s.name}
+                  >
+                    {s.name}
+                  </div>
+                ))}
+              </div>
               <div className="flex flex-1">
-                {sheets.map((sheet) => renderSheetColumn(day, sheet))}
+                {sheets.map((sheet, i) => renderSheetColumn(day, sheet, i))}
               </div>
             </div>
           ))}

@@ -79,6 +79,9 @@ const Calendar = () => {
   const [editing, setEditing] = useState<CalendarReservation | null>(null);
   const [detail, setDetail] = useState<CalendarReservation | null>(null);
   const [cancelling, setCancelling] = useState<CalendarReservation | null>(null);
+  const [pendingMove, setPendingMove] = useState<
+    { reservation: CalendarReservation; start: Date; end: Date; sheetId: string } | null
+  >(null);
 
   const range = useMemo(() => {
     if (view === 'day') {
@@ -158,15 +161,35 @@ const Calendar = () => {
     }
   };
 
-  const handleMove = async (r: CalendarReservation, start: Date, end: Date, sheetId: string) => {
+  // Tažení jen navrhne nový termín — uloží se až po potvrzení. Do té doby rezervace
+  // zůstává na původním místě, takže „Zrušit" nemá co vracet.
+  const requestMove = (r: CalendarReservation, start: Date, end: Date, sheetId: string) =>
+    setPendingMove({ reservation: r, start, end, sheetId });
+
+  const confirmMove = async () => {
+    if (!pendingMove) return;
+    const { reservation, start, end, sheetId } = pendingMove;
     try {
       await api.moveBooking({
-        id: r.id!, start_at: start.toISOString(), end_at: end.toISOString(), sheet_id: sheetId,
+        id: reservation.id!, start_at: start.toISOString(), end_at: end.toISOString(), sheet_id: sheetId,
       });
-      toast({ title: 'Rezervace přesunuta', description: `${format(start, 'EEEE d. M. HH:mm', { locale: cs })}–${format(end, 'HH:mm')}` });
+      toast({
+        title: 'Rezervace přesunuta',
+        description: `${format(start, 'EEEE d. M. HH:mm', { locale: cs })}–${format(end, 'HH:mm')}`,
+      });
+      setPendingMove(null);
     } catch (error) {
       toast({ title: 'Přesun se nepovedl', description: error instanceof Error ? error.message : 'Zkuste to znovu.', variant: 'destructive' });
+      setPendingMove(null);
     }
+  };
+
+  const handleOutsideHours = (start: Date, end: Date) => {
+    toast({
+      title: 'Mimo otevírací dobu',
+      description: `${format(start, 'HH:mm')}–${format(end, 'HH:mm')} je mimo provozní dobu (${String(openHour).padStart(2, '0')}:00–${String(closeHour).padStart(2, '0')}:00). Rezervace zůstala na původním místě.`,
+      variant: 'destructive',
+    });
   };
 
   // Měsíční přehled: rezervace podle dne.
@@ -267,7 +290,8 @@ const Calendar = () => {
               canBook={canBook}
               onSlotClick={handleSlotClick}
               onReservationClick={setDetail}
-              onMove={handleMove}
+              onMove={requestMove}
+              onOutsideHours={handleOutsideHours}
             />
           )}
         </CardContent>
@@ -379,6 +403,45 @@ const Calendar = () => {
                 </Button>
               </>
             )}
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Potvrzení přesunu tažením */}
+      <AlertDialog open={!!pendingMove} onOpenChange={(o) => !o && setPendingMove(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Přesunout akci?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm">
+                {pendingMove && (
+                  <>
+                    <div className="font-medium text-foreground">{reservationLabel(pendingMove.reservation)}</div>
+                    <div>
+                      Z: {format(new Date(pendingMove.reservation.start_at!), 'EEEE d. M. HH:mm', { locale: cs })}
+                      –{format(new Date(pendingMove.reservation.end_at!), 'HH:mm')}
+                      {' · '}{sheetName(pendingMove.reservation.sheet_id)}
+                    </div>
+                    <div className="font-medium text-foreground">
+                      Na: {format(pendingMove.start, 'EEEE d. M. HH:mm', { locale: cs })}
+                      –{format(pendingMove.end, 'HH:mm')}
+                      {' · '}{sheetName(pendingMove.sheetId)}
+                    </div>
+                    {lanesOfEvent(pendingMove.reservation) > 1 && (
+                      <div className="text-muted-foreground">
+                        Akce běží na obou drahách — přesune se celá, dráhy zůstanou.
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Zrušit</AlertDialogCancel>
+            <Button onClick={confirmMove} disabled={api.isUpdating}>
+              {api.isUpdating ? 'Přesouvám…' : 'Přesunout'}
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
