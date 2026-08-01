@@ -26,6 +26,7 @@ const TYPE_LEGEND: [string, string, string][] = [
 
 // Jemné odlišení drah — barva tady nesmí konkurovat barvám typů akcí,
 // proto jen decentní podklad druhé dráhy + popisek nad každým sloupcem.
+// (Hala má dvě dráhy; při případné třetí by se odstíny opakovaly — přidat další.)
 const LANE_TINT = ['', 'bg-muted/40'];
 
 interface Props {
@@ -47,6 +48,8 @@ interface Props {
   onMove?: (reservation: CalendarReservation, start: Date, end: Date, sheetId: string) => void;
   /** cílový termín je mimo otevírací dobu — hlásí stránka, neukládá se nic */
   onOutsideHours?: (start: Date, end: Date) => void;
+  /** otevírací doba konkrétního dne (mřížka kreslí obálku týdne, validace jede po dnech) */
+  hoursForDay?: (day: Date) => { open: number; close: number };
 }
 
 const fmtKc = (n: number) => `${n.toLocaleString('cs-CZ')} Kč`;
@@ -54,6 +57,7 @@ const fmtKc = (n: number) => `${n.toLocaleString('cs-CZ')} Kč`;
 export function ReservationCalendar({
   view, currentDate, sheets, reservations, shiftFill = {},
   openHour, closeHour, canBook, onSlotClick, onReservationClick, onMove, onOutsideHours,
+  hoursForDay,
 }: Props) {
   const openMin = openHour * 60;
   const totalMin = (closeHour - openHour) * 60;
@@ -148,9 +152,12 @@ export function ReservationCalendar({
     if (start.getTime() === origStart.getTime() && sheetId === d.res.sheet_id) return;
 
     // Otevírací dobu ověříme hned — ať se uživatel neptá na termín, který server odmítne.
+    // Počítáme v minutách a podle CÍLOVÉHO dne (doba jde nastavit pro každý den zvlášť).
+    const { open, close } = hoursForDay?.(start) ?? { open: openHour, close: closeHour };
+    const startMin = start.getHours() * 60 + start.getMinutes();
+    const endMin = end.getHours() * 60 + end.getMinutes();
     const endsNextDay = end.getDate() !== start.getDate();
-    if (start.getHours() < openHour || endsNextDay || end.getHours() > closeHour
-        || (end.getHours() === 0 && end.getMinutes() === 0)) {
+    if (endsNextDay || startMin < open * 60 || endMin > close * 60) {
       onOutsideHours?.(start, end);
       return;
     }
@@ -204,6 +211,9 @@ export function ReservationCalendar({
               onPointerMove={onPointerMove}
               onPointerUp={(e) => { e.stopPropagation(); onPointerUp(e, r); }}
               onPointerCancel={() => { dragRef.current = null; setPreview(null); }}
+              // pojistka: když se myš pustí mimo okno a pointerup nedorazí,
+              // ať náhled nezůstane viset posunutý
+              onLostPointerCapture={() => { dragRef.current = null; setPreview(null); }}
               className={cn(
                 'absolute left-1 right-1 rounded-md border border-l-4 p-1.5 text-left shadow-sm',
                 'hover:ring-2 hover:ring-ring overflow-hidden',
@@ -277,13 +287,13 @@ export function ReservationCalendar({
                   <div
                     key={s.id}
                     className={cn(
-                      'flex h-6 flex-1 items-center justify-center truncate border-l px-1',
+                      'flex h-6 min-w-0 flex-1 items-center justify-center border-l px-1',
                       'text-[11px] font-medium text-muted-foreground',
                       LANE_TINT[i % LANE_TINT.length],
                     )}
                     title={s.name}
                   >
-                    {s.name}
+                    <span className="truncate">{s.name}</span>
                   </div>
                 ))}
               </div>

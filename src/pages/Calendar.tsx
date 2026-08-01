@@ -17,6 +17,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRateLimit } from '@/hooks/useRateLimit';
 import { useReservations, type CalendarReservation } from '@/hooks/useReservations';
+import { hoursForDay, openingHoursEnvelope } from '@/lib/openingHours';
 import { ReservationCalendar } from '@/components/reservations/ReservationCalendar';
 import { ReservationDialog } from '@/components/reservations/ReservationDialog';
 import { ObsazeniDetail } from '@/components/reservations/ObsazeniDetail';
@@ -51,20 +52,6 @@ function reservationLabel(r: CalendarReservation): string {
   return r.event_title ?? r.subject_name ?? 'Rezervace';
 }
 
-function parseOpeningHours(openingHours: unknown): { open: number; close: number } {
-  const fallback = { open: 7, close: 22 };
-  if (!openingHours || typeof openingHours !== 'object') return fallback;
-  let open = 24, close = 0, seen = false;
-  for (const v of Object.values(openingHours as Record<string, { open?: string; close?: string }>)) {
-    if (!v?.open || !v?.close) continue;
-    const o = Number(v.open.split(':')[0]);
-    const c = Number(v.close.split(':')[0]);
-    if (Number.isNaN(o) || Number.isNaN(c)) continue;
-    open = Math.min(open, o); close = Math.max(close, c); seen = true;
-  }
-  if (!seen || open >= close) return fallback;
-  return { open, close };
-}
 
 const Calendar = () => {
   const { toast } = useToast();
@@ -108,8 +95,14 @@ const Calendar = () => {
   const lanesOfEvent = (r: CalendarReservation | null) =>
     r?.event_id ? reservations.filter((x) => x.event_id === r.event_id).length : 1;
 
+  // Mřížka se kreslí přes obálku celého týdne, ale validuje se vždy podle
+  // konkrétního dne — otevírací doba se v Nastavení dá zadat pro každý den zvlášť.
   const { open: openHour, close: closeHour } = useMemo(
-    () => parseOpeningHours(settings?.opening_hours), [settings],
+    () => openingHoursEnvelope(settings?.opening_hours), [settings],
+  );
+  const hoursOfDay = useMemo(
+    () => (day: Date) => hoursForDay(settings?.opening_hours, day),
+    [settings],
   );
   const canBook = isAdmin || mySubjects.some((s) => myMemberships.some((m) => m.subject_id === s.id));
 
@@ -163,8 +156,15 @@ const Calendar = () => {
 
   // Tažení jen navrhne nový termín — uloží se až po potvrzení. Do té doby rezervace
   // zůstává na původním místě, takže „Zrušit" nemá co vracet.
+  // U akce na obou drahách se dráha nemění (server to ani nedovolí) — kdyby uživatel
+  // v úzkých týdenních sloupcích trefil tu druhou, posune se jen čas.
   const requestMove = (r: CalendarReservation, start: Date, end: Date, sheetId: string) =>
-    setPendingMove({ reservation: r, start, end, sheetId });
+    setPendingMove({
+      reservation: r,
+      start,
+      end,
+      sheetId: lanesOfEvent(r) > 1 ? r.sheet_id! : sheetId,
+    });
 
   const confirmMove = async () => {
     if (!pendingMove) return;
@@ -185,9 +185,10 @@ const Calendar = () => {
   };
 
   const handleOutsideHours = (start: Date, end: Date) => {
+    const { open, close } = hoursOfDay(start);
     toast({
       title: 'Mimo otevírací dobu',
-      description: `${format(start, 'HH:mm')}–${format(end, 'HH:mm')} je mimo provozní dobu (${String(openHour).padStart(2, '0')}:00–${String(closeHour).padStart(2, '0')}:00). Rezervace zůstala na původním místě.`,
+      description: `${format(start, 'EEEE', { locale: cs })} se hraje ${String(open).padStart(2, '0')}:00–${String(close).padStart(2, '0')}:00, termín ${format(start, 'HH:mm')}–${format(end, 'HH:mm')} je mimo. Rezervace zůstala na původním místě.`,
       variant: 'destructive',
     });
   };
@@ -292,6 +293,7 @@ const Calendar = () => {
               onReservationClick={setDetail}
               onMove={requestMove}
               onOutsideHours={handleOutsideHours}
+              hoursForDay={hoursOfDay}
             />
           )}
         </CardContent>

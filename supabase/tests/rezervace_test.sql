@@ -17,7 +17,7 @@
 BEGIN;
 
 -- Uživatelé ze seedu
---   1111… admin | 2222… instruktor (zástupce Curling Ostrava) | 4444… zástupce CPO | 5555… člen CPO
+--   1111… admin | 2222… instruktor (zástupce Curling Ostrava) | 4444… zástupce klubu | 5555… člen klubu
 CREATE OR REPLACE FUNCTION pg_temp.prihlas(_user uuid) RETURNS void
  LANGUAGE sql AS $$
   SELECT set_config('request.jwt.claims', json_build_object('sub', _user)::text, true);
@@ -129,7 +129,7 @@ END $$;
 DO $$
 DECLARE _r jsonb; _res uuid; _appr timestamptz; _notif int;
 BEGIN
-  PERFORM pg_temp.prihlas('55555555-5555-5555-5555-555555555555');  -- člen CPO
+  PERFORM pg_temp.prihlas('55555555-5555-5555-5555-555555555555');  -- člen klubu
   _r := public.create_booking(
     ARRAY[pg_temp.draha(2)], 'training', 'Trénink člena',
     pg_temp.cas('2026-09-16 17:00'), pg_temp.cas('2026-09-16 18:00'),
@@ -141,7 +141,7 @@ BEGIN
 
   SELECT count(*) INTO _notif FROM public.notifications
    WHERE type = 'reservation_needs_approval'
-     AND user_id = '44444444-4444-4444-4444-444444444444'   -- zástupce CPO
+     AND user_id = '44444444-4444-4444-4444-444444444444'   -- zástupce klubu
      AND reservation_id = _res;
   PERFORM pg_temp.tvrd(_notif = 1, 'zástupce dostal upozornění k potvrzení');
 
@@ -225,7 +225,7 @@ END $$;
 DO $$
 DECLARE _r jsonb; _pocet int;
 BEGIN
-  PERFORM pg_temp.prihlas('44444444-4444-4444-4444-444444444444');   -- zástupce CPO
+  PERFORM pg_temp.prihlas('44444444-4444-4444-4444-444444444444');   -- zástupce klubu
   _r := public.create_booking_series(
     ARRAY[pg_temp.draha(2)], 'training', 'Pravidelný trénink',
     pg_temp.cas('2026-10-06 16:00'), pg_temp.cas('2026-10-06 18:00'),
@@ -302,7 +302,7 @@ END $$;
 DO $$
 DECLARE _cizi uuid; _jmeno text; _castka numeric;
 BEGIN
-  -- rezervace, kterou založil admin za CPO (autor = admin)
+  -- rezervace, kterou založil admin za domácí klub (autor = admin)
   PERFORM pg_temp.prihlas('11111111-1111-1111-1111-111111111111');
   SELECT id INTO _cizi FROM public.reservations
    WHERE created_by = '11111111-1111-1111-1111-111111111111'
@@ -355,7 +355,7 @@ END $$;
 DO $$
 DECLARE _cizi uuid; _moje uuid; _r jsonb; _rate numeric;
 BEGIN
-  PERFORM pg_temp.prihlas('55555555-5555-5555-5555-555555555555');  -- člen CPO
+  PERFORM pg_temp.prihlas('55555555-5555-5555-5555-555555555555');  -- člen klubu
 
   -- rezervace za cizí klub
   PERFORM pg_temp.ocekavej_chybu(

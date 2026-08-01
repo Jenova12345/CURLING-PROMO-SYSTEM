@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/select';
 import { useToast } from '@/components/ui/use-toast';
 import { sanitizeText, VALIDATION_LIMITS } from '@/lib/validation';
+import { hoursForDay } from '@/lib/openingHours';
 import type {
   Sheet, Subject, Settings, CalendarReservation, BookingKind, Conflict,
   BookingInput, SeriesInput, Membership,
@@ -68,23 +69,6 @@ interface Props {
   /** kolik drah drží editovaná akce (u dvou nejde měnit dráha) */
   editingLanes?: number;
   api: ReservationApi;
-}
-
-type OpeningHours = Record<string, { open?: string; close?: string }>;
-
-// Otevírací doba pro konkrétní den (1 = pondělí … 7 = neděle); fallback 7–22.
-function hoursForDate(settings: Settings | null, date: string): { open: number; close: number } {
-  const fallback = { open: 7, close: 22 };
-  const oh = settings?.opening_hours as OpeningHours | null;
-  if (!oh || !date) return fallback;
-  const d = new Date(`${date}T00:00`);
-  if (isNaN(d.getTime())) return fallback;
-  const iso = d.getDay() === 0 ? 7 : d.getDay();
-  const day = oh[String(iso)];
-  const open = Number(day?.open?.split(':')[0]);
-  const close = Number(day?.close?.split(':')[0]);
-  if (isNaN(open) || isNaN(close) || open >= close) return fallback;
-  return { open, close };
 }
 
 const hh = (h: number) => `${String(h).padStart(2, '0')}:00`;
@@ -146,7 +130,7 @@ export function ReservationDialog({
   // potvrzení vědomého přebití
   const [conflicts, setConflicts] = useState<Conflict[] | null>(null);
 
-  const { open: openHour, close: closeHour } = hoursForDate(settings, date);
+  const { open: openHour, close: closeHour } = hoursForDay(settings?.opening_hours, date);
 
   const defaultRateFor = (k: BookingKind, sid: string): string => {
     if (k === 'maintenance') return '';
