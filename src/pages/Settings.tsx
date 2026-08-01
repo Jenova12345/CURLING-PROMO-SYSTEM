@@ -53,6 +53,14 @@ const Settings = () => {
   };
 
   const saveHours = async () => {
+    // Napůl vyplněný den (jen „od" nebo jen „do") je horší než nevyplněný:
+    // databáze na prázdný čas spadne technickou hláškou a kalendář by den
+    // vykreslil od půlnoci. Pustíme tedy jen obě pole, nebo žádné.
+    const half = DAYS.find(([d]) => { const h = hours[d]; return !!h?.open !== !!h?.close; });
+    if (half) {
+      toast({ title: 'Neúplná otevírací doba', description: `${half[1]}: vyplňte začátek i konec, nebo nechte obě pole prázdná.`, variant: 'destructive' });
+      return;
+    }
     const bad = DAYS.find(([d]) => { const h = hours[d]; return h?.open && h?.close && h.open >= h.close; });
     if (bad) { toast({ title: 'Neplatná otevírací doba', description: `${bad[1]}: konec musí být po začátku.`, variant: 'destructive' }); return; }
     try { await updateSettings({ opening_hours: hours }); toast({ title: 'Otevírací doba uložena' }); }

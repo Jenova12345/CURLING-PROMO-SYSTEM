@@ -158,13 +158,13 @@ const Calendar = () => {
   // zůstává na původním místě, takže „Zrušit" nemá co vracet.
   // U akce na obou drahách se dráha nemění (server to ani nedovolí) — kdyby uživatel
   // v úzkých týdenních sloupcích trefil tu druhou, posune se jen čas.
-  const requestMove = (r: CalendarReservation, start: Date, end: Date, sheetId: string) =>
-    setPendingMove({
-      reservation: r,
-      start,
-      end,
-      sheetId: lanesOfEvent(r) > 1 ? r.sheet_id! : sheetId,
-    });
+  const requestMove = (r: CalendarReservation, start: Date, end: Date, sheetId: string) => {
+    const targetSheet = lanesOfEvent(r) > 1 ? r.sheet_id! : sheetId;
+    // Po přepsání dráhy může cíl vyjít stejně jako originál (např. tažení
+    // víc-dráhové akce do vedlejšího sloupce beze změny času) — pak není co řešit.
+    if (targetSheet === r.sheet_id && start.getTime() === new Date(r.start_at!).getTime()) return;
+    setPendingMove({ reservation: r, start, end, sheetId: targetSheet });
+  };
 
   const confirmMove = async () => {
     if (!pendingMove) return;

@@ -8,7 +8,10 @@ export type DayHours = { open: number; close: number };
 export const DEFAULT_HOURS: DayHours = { open: 7, close: 22 };
 
 function hourOf(value: string | undefined): number {
-  return Number(String(value ?? '').split(':')[0]);
+  // Pozor na prázdný řetězec: Number('') je 0, takže napůl vyplněný den
+  // („od" smazané, „do" vyplněné) by jinak znamenal otevřeno od půlnoci.
+  if (!value) return NaN;
+  return Number(value.split(':')[0]);
 }
 
 /** Otevírací doba konkrétního dne (1 = pondělí … 7 = neděle, jako v databázi). */
