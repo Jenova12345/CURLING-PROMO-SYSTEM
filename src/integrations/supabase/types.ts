@@ -951,6 +951,8 @@ export type Database = {
           corrected_amount: number | null
           corrected_hours: number | null
           correction_reason: string | null
+          created_by: string | null
+          created_by_name: string | null
           end_at: string | null
           event_title: string | null
           event_type: Database["public"]["Enums"]["event_type"] | null
@@ -966,6 +968,20 @@ export type Database = {
           subject_type: Database["public"]["Enums"]["subject_type"] | null
         }
         Relationships: [
+          {
+            foreignKeyName: "reservations_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "reservations_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
           {
             foreignKeyName: "reservations_sheet_id_fkey"
             columns: ["sheet_id"]
@@ -1068,10 +1084,7 @@ export type Database = {
       }
     }
     Functions: {
-      approve_reservation: {
-        Args: { p_reservation_id: string }
-        Returns: undefined
-      }
+      approve_reservation: { Args: { p_reservation_id: string }; Returns: Json }
       booking_priority: {
         Args: { _type: Database["public"]["Enums"]["event_type"] }
         Returns: number

@@ -133,11 +133,18 @@ const Calendar = () => {
     if (!checkLimit()) throw new Error('Příliš mnoho pokusů. Zkuste to za chvíli.');
   };
 
-  const handleCancel = async (scope: 'single' | 'event' | 'series') => {
+  // Rezervace na obě dráhy je jedna akce — storno i potvrzení jedou nad celou akcí.
+  // Samostatná volba „jen tuhle dráhu" tím odpadá; zůstává jen storno celé série.
+  const handleCancel = async (scope: 'event' | 'series') => {
     if (!cancelling) return;
+    const lanes = lanesOfEvent(cancelling);
     try {
-      await cancelBooking({ id: cancelling.id!, scope });
-      toast({ title: scope === 'single' ? 'Rezervace stornována' : scope === 'event' ? 'Akce stornována' : 'Série stornována' });
+      await cancelBooking({ id: cancelling.id!, scope: scope === 'event' && !cancelling.event_id ? 'single' : scope });
+      toast({
+        title: scope === 'series' ? 'Série stornována'
+          : lanes > 1 ? 'Akce stornována na obou drahách'
+          : 'Rezervace stornována',
+      });
       setCancelling(null); setDetail(null);
     } catch (error) {
       toast({ title: 'Chyba', description: error instanceof Error ? error.message : 'Nepodařilo se stornovat.', variant: 'destructive' });
@@ -146,8 +153,10 @@ const Calendar = () => {
 
   const handleApprove = async (r: CalendarReservation) => {
     try {
-      await approveReservation(r.id!);
-      toast({ title: 'Rezervace potvrzena' });
+      const result = await approveReservation(r.id!) as { approved?: number } | null;
+      toast({
+        title: (result?.approved ?? 1) > 1 ? 'Akce potvrzena na obou drahách' : 'Rezervace potvrzena',
+      });
       setDetail(null);
     } catch (error) {
       toast({ title: 'Chyba', description: error instanceof Error ? error.message : 'Nepodařilo se potvrdit.', variant: 'destructive' });
@@ -391,7 +400,7 @@ const Calendar = () => {
             <AlertDialogCancel>Zavřít</AlertDialogCancel>
             {detail?.can_approve && !detail.approved_at && (
               <Button variant="outline" onClick={() => handleApprove(detail)} disabled={isApproving}>
-                {isApproving ? 'Potvrzuji…' : 'Potvrdit rezervaci'}
+                {isApproving ? 'Potvrzuji…' : detailLanes > 1 ? 'Potvrdit akci (obě dráhy)' : 'Potvrdit rezervaci'}
               </Button>
             )}
             {detail?.can_manage && detail.status === 'confirmed' && (
@@ -448,16 +457,18 @@ const Calendar = () => {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Storno — u akce na obou drahách a u série se doptáme na rozsah */}
+      {/* Storno — akce na obou drahách se ruší celá; u série se doptáme na rozsah */}
       <AlertDialog open={!!cancelling} onOpenChange={(o) => !o && setCancelling(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Stornovat rezervaci?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {cancelLanes > 1 ? 'Stornovat akci na obou drahách?' : 'Stornovat rezervaci?'}
+            </AlertDialogTitle>
             <AlertDialogDescription>
               {cancelling && (
                 <>
                   {reservationLabel(cancelling)} — {format(new Date(cancelling.start_at!), 'EEEE d. M. HH:mm', { locale: cs })}
-                  {cancelLanes > 1 && '. Akce běží na obou drahách.'}
+                  {cancelLanes > 1 && ' Zruší se obě dráhy najednou, akce je jedna.'}
                   {cancelling.series_id && ' Rezervace je součástí opakované série.'}
                 </>
               )}
@@ -465,14 +476,9 @@ const Calendar = () => {
           </AlertDialogHeader>
           <AlertDialogFooter className="flex-col gap-2 sm:flex-row">
             <AlertDialogCancel>Zpět</AlertDialogCancel>
-            <Button variant="destructive" onClick={() => handleCancel('single')} disabled={isCancelling}>
-              {cancelLanes > 1 ? 'Jen tuhle dráhu' : 'Stornovat'}
+            <Button variant="destructive" onClick={() => handleCancel('event')} disabled={isCancelling}>
+              {cancelLanes > 1 ? 'Stornovat celou akci' : 'Stornovat'}
             </Button>
-            {cancelLanes > 1 && (
-              <Button variant="destructive" onClick={() => handleCancel('event')} disabled={isCancelling}>
-                Celou akci (obě dráhy)
-              </Button>
-            )}
             {cancelling?.series_id && (
               <Button variant="destructive" onClick={() => handleCancel('series')} disabled={isCancelling}>
                 Celou sérii (budoucí termíny)

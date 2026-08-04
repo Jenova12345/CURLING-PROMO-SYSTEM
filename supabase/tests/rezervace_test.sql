@@ -716,6 +716,55 @@ BEGIN
     'otevírací dob', 'přesun mimo otevírací dobu odmítnut');
 END $$;
 
+-- -----------------------------------------------------------------------------
+-- 19) Obě dráhy = jedna akce: potvrzení i storno jedním úkonem
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _r jsonb; _ev uuid; _res uuid[]; _v jsonb; _notif int; _open int;
+BEGIN
+  -- člen klubu zadá rezervaci na obě dráhy → čekají obě
+  PERFORM pg_temp.prihlas('55555555-5555-5555-5555-555555555555');
+  _r := public.create_booking(
+    ARRAY[pg_temp.draha(1), pg_temp.draha(2)], 'training', 'Akce na obou drahách',
+    pg_temp.cas('2027-03-02 17:00'), pg_temp.cas('2027-03-02 19:00'),
+    'aaaa1111-0000-0000-0000-000000000001');
+  _ev := (_r->>'event_id')::uuid;
+  SELECT array_agg(id ORDER BY id) INTO _res FROM public.reservations WHERE event_id = _ev;
+  PERFORM pg_temp.tvrd(array_length(_res, 1) = 2, 'akce drží dvě rezervace (po jedné na dráhu)');
+
+  SELECT count(*) INTO _notif FROM public.notifications
+   WHERE type = 'reservation_needs_approval' AND reservation_id = ANY (_res);
+  PERFORM pg_temp.tvrd(_notif = 1, 'zástupci přišlo jedno upozornění, ne dvě');
+
+  -- zástupce potvrdí JEDNU → potvrdí se OBĚ, se stejným razítkem i autorem
+  PERFORM pg_temp.prihlas('44444444-4444-4444-4444-444444444444');
+  _v := public.approve_reservation(_res[1]);
+  PERFORM pg_temp.tvrd((_v->>'approved')::int = 2, 'jedno potvrzení pokrylo obě dráhy');
+  PERFORM pg_temp.tvrd(
+    (SELECT count(*) = 2 AND count(DISTINCT approved_by) = 1 AND bool_and(approved_at IS NOT NULL)
+       FROM public.reservations WHERE id = ANY (_res)),
+    'audit potvrzení sedí u obou rezervací');
+
+  SELECT count(*) INTO _notif FROM public.notifications
+   WHERE type = 'reservation_approved' AND reservation_id = ANY (_res);
+  PERFORM pg_temp.tvrd(_notif = 1, 'autor dostal o potvrzení jednu zprávu, ne dvě');
+
+  -- opakované potvrzení nic nerozbije
+  _v := public.approve_reservation(_res[2]);
+  PERFORM pg_temp.tvrd((_v->>'approved')::int = 0, 'druhé potvrzení už nemá co potvrzovat');
+
+  -- storno celé akce jedním voláním
+  PERFORM public.cancel_booking(_res[1], 'event', 'ruším celou akci');
+  PERFORM pg_temp.tvrd(
+    (SELECT count(*) = 2 FROM public.reservations
+      WHERE id = ANY (_res) AND status = 'cancelled'
+        AND cancelled_by = '44444444-4444-4444-4444-444444444444' AND cancelled_at IS NOT NULL),
+    'storno zrušilo obě dráhy a u obou je vidět kdo a kdy');
+
+  SELECT count(*) INTO _open FROM public.shifts WHERE event_id = _ev AND status = 'open';
+  PERFORM pg_temp.tvrd(_open = 0, 'se zrušením poslední dráhy se uvolnily i volné směny');
+END $$;
+
 DO $$ BEGIN RAISE NOTICE '=== VŠECHNY TESTY PROŠLY ==='; END $$;
 
 ROLLBACK;
