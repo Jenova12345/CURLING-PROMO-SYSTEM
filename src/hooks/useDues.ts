@@ -18,6 +18,17 @@ export type DueReservation = {
   subject_type: SubjectType | null;
   sheet_name: string | null;
   event_title: string | null;
+  created_by_name: string | null;
+};
+
+// Fakturační údaje odběratele — na faktuře je potřeba adresa a IČO/DIČ,
+// které v podkladech k úhradě nejsou.
+export type BillingSubject = {
+  id: string;
+  name: string;
+  address: string | null;
+  ico: string | null;
+  dic: string | null;
 };
 
 export type DueRow = { subjectId: string; name: string; type: SubjectType; hours: number; amount: number; count: number };
@@ -33,7 +44,7 @@ export const useDues = (range: { from: string; to: string } | null) => {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('reservations_billing')
-        .select('id, start_at, end_at, hours, amount, corrected_hours, corrected_amount, subject_id, subject_name, subject_type, sheet_name, event_title')
+        .select('id, start_at, end_at, hours, amount, corrected_hours, corrected_amount, subject_id, subject_name, subject_type, sheet_name, event_title, created_by_name')
         .gte('start_at', range!.from)
         .lt('start_at', range!.to)
         .order('start_at', { ascending: true });
@@ -41,6 +52,20 @@ export const useDues = (range: { from: string; to: string } | null) => {
       return (data ?? []) as DueReservation[];
     },
     enabled: !!user && isAdmin && !!range,
+  });
+
+  // Fakturační údaje subjektů (adresa, IČO, DIČ) — RLS je pouští jen adminovi.
+  const { data: subjects = [] } = useQuery({
+    queryKey: ['billing-subjects'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('subjects')
+        .select('id, name, address, ico, dic')
+        .is('deleted_at', null);
+      if (error) throw error;
+      return (data ?? []) as BillingSubject[];
+    },
+    enabled: !!user && isAdmin,
   });
 
   const bySubject = new Map<string, DueRow>();
@@ -56,5 +81,5 @@ export const useDues = (range: { from: string; to: string } | null) => {
   const totalAmount = summary.reduce((s, r) => s + r.amount, 0);
   const totalHours = summary.reduce((s, r) => s + r.hours, 0);
 
-  return { reservations: rows, summary, totalAmount, totalHours, isLoading };
+  return { reservations: rows, summary, subjects, totalAmount, totalHours, isLoading };
 };

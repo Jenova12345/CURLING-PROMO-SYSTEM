@@ -4,13 +4,15 @@ import {
   startOfMonth, endOfMonth, addMonths, subMonths,
 } from 'date-fns';
 import { cs } from 'date-fns/locale';
-import { ChevronLeft, ChevronRight, Wallet } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Wallet, FileText } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useAuth } from '@/contexts/AuthContext';
 import { useDues } from '@/hooks/useDues';
+import { useToast } from '@/components/ui/use-toast';
+import { openInvoiceDraft } from '@/lib/invoiceDraft';
 
 type View = 'day' | 'week' | 'month';
 const fmtKc = (n: number) => `${Math.round(n).toLocaleString('cs-CZ')} Kč`;
@@ -18,6 +20,7 @@ const fmtH = (n: number) => `${n.toLocaleString('cs-CZ', { maximumFractionDigits
 
 const Dues = () => {
   const { isAdmin } = useAuth();
+  const { toast } = useToast();
   const [view, setView] = useState<View>('month');
   const [currentDate, setCurrentDate] = useState(() => startOfDay(new Date()));
 
@@ -27,7 +30,47 @@ const Dues = () => {
     return { from: startOfMonth(currentDate).toISOString(), to: addDays(endOfMonth(currentDate), 1).toISOString() };
   }, [view, currentDate]);
 
-  const { reservations, summary, totalAmount, totalHours, isLoading } = useDues(isAdmin ? range : null);
+  const { reservations, summary, subjects, totalAmount, totalHours, isLoading } = useDues(isAdmin ? range : null);
+
+  // Podklad k fakturaci pro jeden subjekt za zobrazené období — otevře se
+  // v novém okně jako tisknutelná stránka („Uložit jako PDF"). Nic se neukládá.
+  const vystavFakturu = (subjectId: string, subjectName: string) => {
+    const radky = reservations.filter((r) => r.subject_id === subjectId);
+    if (!radky.length) {
+      toast({ title: 'Není co fakturovat', description: `${subjectName} nemá v tomto období žádnou rezervaci.`, variant: 'destructive' });
+      return;
+    }
+    const subjekt = subjects.find((s) => s.id === subjectId);
+    const otevreno = openInvoiceDraft({
+      subject: {
+        name: subjekt?.name ?? subjectName,
+        address: subjekt?.address,
+        ico: subjekt?.ico,
+        dic: subjekt?.dic,
+      },
+      rows: radky.map((r) => ({
+        start_at: r.start_at,
+        end_at: r.end_at,
+        ordered_by: r.created_by_name,
+        event_title: r.event_title,
+        sheet_name: r.sheet_name,
+        hours: Number(r.corrected_hours ?? r.hours ?? 0),
+        rate: r.amount != null && Number(r.corrected_hours ?? r.hours ?? 0) > 0
+          ? Number(r.corrected_amount ?? r.amount) / Number(r.corrected_hours ?? r.hours)
+          : null,
+        amount: Number(r.corrected_amount ?? r.amount ?? 0),
+      })),
+      periodFrom: new Date(range.from),
+      periodTo: addDays(new Date(range.to), -1),
+    });
+    if (!otevreno) {
+      toast({
+        title: 'Okno se neotevřelo',
+        description: 'Prohlížeč zablokoval vyskakovací okno — povolte ho pro tuto stránku a zkuste znovu.',
+        variant: 'destructive',
+      });
+    }
+  };
 
   const goPrev = () => setCurrentDate((d) => view === 'day' ? subDays(d, 1) : view === 'week' ? subWeeks(d, 1) : subMonths(d, 1));
   const goNext = () => setCurrentDate((d) => view === 'day' ? addDays(d, 1) : view === 'week' ? addWeeks(d, 1) : addMonths(d, 1));
@@ -75,7 +118,7 @@ const Dues = () => {
             <div className="text-muted-foreground text-sm">V tomto období nejsou žádné účtovatelné rezervace.</div>
           ) : (
             <Table>
-              <TableHeader><TableRow><TableHead>Subjekt</TableHead><TableHead>Typ</TableHead><TableHead className="text-right">Hodiny</TableHead><TableHead className="text-right">Částka</TableHead></TableRow></TableHeader>
+              <TableHeader><TableRow><TableHead>Subjekt</TableHead><TableHead>Typ</TableHead><TableHead className="text-right">Hodiny</TableHead><TableHead className="text-right">Částka</TableHead><TableHead className="text-right">Podklad</TableHead></TableRow></TableHeader>
               <TableBody>
                 {summary.map((r) => (
                   <TableRow key={r.subjectId}>
@@ -83,9 +126,14 @@ const Dues = () => {
                     <TableCell><Badge variant="secondary">{r.type === 'club' ? 'Klub' : 'Komerční'}</Badge></TableCell>
                     <TableCell className="text-right">{fmtH(r.hours)}</TableCell>
                     <TableCell className="text-right font-semibold">{fmtKc(r.amount)}</TableCell>
+                    <TableCell className="text-right">
+                      <Button variant="outline" size="sm" onClick={() => vystavFakturu(r.subjectId, r.name)}>
+                        <FileText className="mr-1 h-3.5 w-3.5" /> Faktura (PDF)
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))}
-                <TableRow><TableCell colSpan={2} className="font-bold">Celkem</TableCell><TableCell className="text-right font-bold">{fmtH(totalHours)}</TableCell><TableCell className="text-right font-bold">{fmtKc(totalAmount)}</TableCell></TableRow>
+                <TableRow><TableCell colSpan={2} className="font-bold">Celkem</TableCell><TableCell className="text-right font-bold">{fmtH(totalHours)}</TableCell><TableCell className="text-right font-bold">{fmtKc(totalAmount)}</TableCell><TableCell /></TableRow>
               </TableBody>
             </Table>
           )}
