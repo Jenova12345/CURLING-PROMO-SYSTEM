@@ -50,14 +50,27 @@ function esc(value: unknown): string {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function buildHtml({ subject, rows, periodFrom, periodTo }: InvoiceDraft): string {
-  const total = rows.reduce((sum, r) => sum + r.amount, 0);
+  // Sčítáme zaokrouhlené řádky, ne surové částky — jinak by tištěný sloupec
+  // nedal tištěný součet a účetní to najde jako první.
+  const total = rows.reduce((sum, r) => sum + Math.round(r.amount), 0);
   const totalHours = rows.reduce((sum, r) => sum + r.hours, 0);
   const vystaveno = format(new Date(), 'd. M. yyyy', { locale: cs });
   const obdobi = `${format(periodFrom, 'd. M. yyyy', { locale: cs })} – ${format(periodTo, 'd. M. yyyy', { locale: cs })}`;
+
+  // Dokud klient nedodá své údaje, radši je netiskneme, než aby na ukázce svítilo
+  // „IČO — doplnit".
+  const vyplneno = (v: string) => (v && !/doplnit/i.test(v) ? v : null);
+  const dodavatelRadky = [
+    vyplneno(BRAND.billing.address),
+    vyplneno(BRAND.billing.ico) ? `IČO: ${vyplneno(BRAND.billing.ico)}` : null,
+    vyplneno(BRAND.billing.dic) ? `DIČ: ${vyplneno(BRAND.billing.dic)}` : null,
+  ].filter(Boolean).map((r) => `<div>${esc(r)}</div>`).join('')
+    || '<div class="chybi">Fakturační údaje provozovatele zatím nejsou vyplněné.</div>';
 
   const radky = rows.map((r) => {
     const zacatek = new Date(r.start_at);
@@ -109,6 +122,7 @@ function buildHtml({ subject, rows, periodFrom, periodTo }: InvoiceDraft): strin
   th { background: #f8fafc; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #475569; }
   td.cislo, th.cislo { text-align: right; white-space: nowrap; }
   tfoot td { font-weight: 700; border-top: 2px solid #0f172a; border-bottom: none; font-size: 13px; }
+  .chybi { color: #94a3b8; font-style: italic; }
   .patka { margin-top: 24px; color: #64748b; font-size: 11px; }
   .tisk { margin-bottom: 20px; }
   .tisk button {
@@ -119,7 +133,7 @@ function buildHtml({ subject, rows, periodFrom, periodTo }: InvoiceDraft): strin
 </style>
 </head>
 <body>
-  <div class="navrh">NÁVRH – UKÁZKA</div>
+  <div class="navrh" aria-hidden="true">NÁVRH – UKÁZKA</div>
   <div class="obsah">
     <div class="tisk"><button onclick="window.print()">Uložit jako PDF / vytisknout</button></div>
     <div class="stitek">NÁVRH – UKÁZKA (není daňový doklad)</div>
@@ -131,9 +145,7 @@ function buildHtml({ subject, rows, periodFrom, periodTo }: InvoiceDraft): strin
       <div class="strana">
         <h2>Dodavatel</h2>
         <div class="jmeno">${esc(BRAND.billing.name)}</div>
-        <div>${esc(BRAND.billing.address)}</div>
-        <div>${esc(BRAND.billing.ico)}</div>
-        <div>${esc(BRAND.billing.dic)}</div>
+        ${dodavatelRadky}
       </div>
       <div class="strana">
         <h2>Odběratel</h2>
@@ -178,12 +190,26 @@ function buildHtml({ subject, rows, periodFrom, periodTo }: InvoiceDraft): strin
  * Vrací false, když okno zablokoval blokovač vyskakovacích oken.
  */
 export function openInvoiceDraft(draft: InvoiceDraft): boolean {
-  const okno = window.open('', '_blank', 'noopener,noreferrer,width=900,height=1000');
+  // HTML sestavujeme PŘED otevřením okna: kdyby na rozbitém datu spadl format(),
+  // zůstalo by uživateli viset prázdné okno.
+  const html = buildHtml(draft);
+
+  // Pozor na windowFeatures: s „noopener" vrací window.open podle specifikace null,
+  // takže by se podklad nikdy nevykreslil. Obsah je náš a ve stejném originu.
+  const okno = window.open('', '_blank', 'width=900,height=1000');
   if (!okno) return false;
-  okno.document.write(buildHtml(draft));
+
+  okno.document.write(html);
   okno.document.close();
   okno.focus();
-  // Tisk až po vykreslení, ať v PDF nechybí styly.
-  setTimeout(() => okno.print(), 250);
+
+  // Tisk až po vykreslení, ať v PDF nechybí styly. Uživatel mohl okno mezitím zavřít.
+  setTimeout(() => {
+    try {
+      if (!okno.closed) okno.print();
+    } catch {
+      /* zavřené okno nebo blokovaný tisk — podklad je vykreslený, vytiskne se ručně */
+    }
+  }, 250);
   return true;
 }

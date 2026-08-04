@@ -80,7 +80,7 @@ const Calendar = () => {
       return { from: from.toISOString(), to: addDays(from, 7).toISOString() };
     }
     const from = startOfMonth(currentDate);
-    return { from: from.toISOString(), to: addDays(endOfMonth(currentDate), 1).toISOString() };
+    return { from: from.toISOString(), to: startOfMonth(addMonths(currentDate, 1)).toISOString() };
   }, [view, currentDate]);
 
   const api = useReservations(range);
@@ -153,9 +153,11 @@ const Calendar = () => {
 
   const handleApprove = async (r: CalendarReservation) => {
     try {
-      const result = await approveReservation(r.id!) as { approved?: number } | null;
+      const { approved } = await approveReservation(r.id!);
       toast({
-        title: (result?.approved ?? 1) > 1 ? 'Akce potvrzena na obou drahách' : 'Rezervace potvrzena',
+        title: approved > 1 ? 'Akce potvrzena na obou drahách'
+          : approved === 1 ? 'Rezervace potvrzena'
+          : 'Rezervace už byla potvrzená',
       });
       setDetail(null);
     } catch (error) {

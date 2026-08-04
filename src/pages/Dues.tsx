@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   format, startOfDay, addDays, subDays, startOfWeek, addWeeks, subWeeks,
-  startOfMonth, endOfMonth, addMonths, subMonths,
+  startOfMonth, addMonths, subMonths,
 } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { ChevronLeft, ChevronRight, Wallet, FileText } from 'lucide-react';
@@ -27,7 +27,7 @@ const Dues = () => {
   const range = useMemo(() => {
     if (view === 'day') { const f = startOfDay(currentDate); return { from: f.toISOString(), to: addDays(f, 1).toISOString() }; }
     if (view === 'week') { const f = startOfWeek(currentDate, { weekStartsOn: 1 }); return { from: f.toISOString(), to: addDays(f, 7).toISOString() }; }
-    return { from: startOfMonth(currentDate).toISOString(), to: addDays(endOfMonth(currentDate), 1).toISOString() };
+    return { from: startOfMonth(currentDate).toISOString(), to: startOfMonth(addMonths(currentDate, 1)).toISOString() };
   }, [view, currentDate]);
 
   const { reservations, summary, subjects, totalAmount, totalHours, isLoading } = useDues(isAdmin ? range : null);
@@ -37,7 +37,7 @@ const Dues = () => {
   const vystavFakturu = (subjectId: string, subjectName: string) => {
     const radky = reservations.filter((r) => r.subject_id === subjectId);
     if (!radky.length) {
-      toast({ title: 'Není co fakturovat', description: `${subjectName} nemá v tomto období žádnou rezervaci.`, variant: 'destructive' });
+      toast({ title: 'Není co fakturovat', description: `${subjectName} nemá v tomto období žádnou rezervaci.` });
       return;
     }
     const subjekt = subjects.find((s) => s.id === subjectId);
@@ -48,18 +48,23 @@ const Dues = () => {
         ico: subjekt?.ico,
         dic: subjekt?.dic,
       },
-      rows: radky.map((r) => ({
-        start_at: r.start_at,
-        end_at: r.end_at,
-        ordered_by: r.created_by_name,
-        event_title: r.event_title,
-        sheet_name: r.sheet_name,
-        hours: Number(r.corrected_hours ?? r.hours ?? 0),
-        rate: r.amount != null && Number(r.corrected_hours ?? r.hours ?? 0) > 0
-          ? Number(r.corrected_amount ?? r.amount) / Number(r.corrected_hours ?? r.hours)
-          : null,
-        amount: Number(r.corrected_amount ?? r.amount ?? 0),
-      })),
+      rows: radky.map((r) => {
+        // Stejný výpočet jako v souhrnu, ať faktura sedí na to, co je na stránce.
+        // Sazbu odvozujeme z částky a hodin — po ruční korekci by rate_per_hour
+        // na zobrazenou cenu neseděl.
+        const hodiny = Number(r.corrected_hours ?? r.hours ?? 0);
+        const castka = Number(r.corrected_amount ?? r.amount ?? 0);
+        return {
+          start_at: r.start_at,
+          end_at: r.end_at,
+          ordered_by: r.created_by_name,
+          event_title: r.event_title,
+          sheet_name: r.sheet_name,
+          hours: hodiny,
+          rate: hodiny > 0 ? castka / hodiny : null,
+          amount: castka,
+        };
+      }),
       periodFrom: new Date(range.from),
       periodTo: addDays(new Date(range.to), -1),
     });
@@ -127,8 +132,12 @@ const Dues = () => {
                     <TableCell className="text-right">{fmtH(r.hours)}</TableCell>
                     <TableCell className="text-right font-semibold">{fmtKc(r.amount)}</TableCell>
                     <TableCell className="text-right">
-                      <Button variant="outline" size="sm" onClick={() => vystavFakturu(r.subjectId, r.name)}>
-                        <FileText className="mr-1 h-3.5 w-3.5" /> Faktura (PDF)
+                      <Button
+                        variant="outline" size="sm"
+                        aria-label={`Podklad k fakturaci — ${r.name}`}
+                        onClick={() => vystavFakturu(r.subjectId, r.name)}
+                      >
+                        <FileText className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Faktura (PDF)
                       </Button>
                     </TableCell>
                   </TableRow>

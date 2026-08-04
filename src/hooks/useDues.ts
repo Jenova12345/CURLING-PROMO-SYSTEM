@@ -58,10 +58,11 @@ export const useDues = (range: { from: string; to: string } | null) => {
   const { data: subjects = [] } = useQuery({
     queryKey: ['billing-subjects'],
     queryFn: async () => {
+      // Bez filtru na deleted_at schválně: faktura za starší období musí mít
+      // adresu a IČO i pro subjekt, který byl mezitím skryt.
       const { data, error } = await supabase
         .from('subjects')
-        .select('id, name, address, ico, dic')
-        .is('deleted_at', null);
+        .select('id, name, address, ico, dic');
       if (error) throw error;
       return (data ?? []) as BillingSubject[];
     },

@@ -259,10 +259,12 @@ export const useReservations = (range: DateRange | null) => {
     onSuccess: invalidate,
   });
 
+  // Vrací počet potvrzených rezervací — u akce na obou drahách jsou to dvě.
   const approveReservation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.rpc('approve_reservation', { p_reservation_id: id });
+      const { data, error } = await supabase.rpc('approve_reservation', { p_reservation_id: id });
       if (error) throw rpcError(error, 'Rezervaci se nepodařilo potvrdit.');
+      return (data ?? { approved: 0 }) as { approved: number };
     },
     onSuccess: invalidate,
   });
