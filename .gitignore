@@ -42,3 +42,6 @@ backups/
 # generované/lokální artefakty dema (regeneruje scripts/build-demo-sql.sh)
 demo_setup.sql
 demo-web.zip
+
+# jednorázový doplněk k nasazení dema (generovaný)
+demo_update_*.sql
