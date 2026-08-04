@@ -84,6 +84,28 @@ bez toho by Postgres odmítl použít typ `tournament` ve stejné transakci.
 
 ---
 
+## Doplňky ze 4. 8. (před rozesláním dema kolegům z klubů)
+
+**Rezervace na obě dráhy je jedna akce.** Vzniká sice jako dva záznamy (každá dráha
+se obsazuje zvlášť, jinak by anti-kolizní pojistka nefungovala), ale potvrzení
+i storno jedou nad celou akcí v jedné transakci — půl potvrzené akce už nevznikne.
+Skupinou je **akce**, ne série: opakované tréninky v jiných dnech se dál potvrzují
+každý zvlášť. Volba „stornovat jen tuhle dráhu" tím zmizela; kdyby ji hala
+potřebovala, je to malá úprava zpátky.
+
+**Podklad k fakturaci (PDF).** Na stránce „Kdo kolik dluží" má každý subjekt tlačítko
+**Faktura (PDF)** — otevře tisknutelnou stránku za zobrazené období a prohlížeč z ní
+udělá PDF („Uložit jako PDF"). Obsahuje hlavičku dodavatel/odběratel, řádek na každou
+rezervaci (datum, čas, akce a dráha, kdo objednal, hodiny, sazba, cena), součet
+a datum vystavení. Přes stránku je vodoznak **„NÁVRH – UKÁZKA"**.
+
+Vědomá omezení téhle fáze:
+- **není to daňový doklad** — chybí číslo faktury, DPH, QR platba a zákonné náležitosti,
+- **nic se neukládá** (žádné archivované PDF ani číselná řada),
+- **údaje dodavatele jsou placeholder** v `src/config/brand.ts` — skutečné doplní klient,
+- tisk místo generátoru PDF schválně: knihovna by kvůli české diakritice potřebovala
+  vlastní font a přibyla by závislost.
+
 ## Hala vs. klub (vyjasněno 1. 8.)
 
 **„Curling Promo Ostrava" je hala / provozovatel** — je to název systému, ne subjekt.
