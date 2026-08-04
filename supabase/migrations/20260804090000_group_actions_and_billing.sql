@@ -38,11 +38,14 @@ BEGIN
 
   -- Celá akce = všechny živé rezervace se stejným event_id (typicky obě dráhy).
   -- Klubová rezervace bez akce zůstává sama za sebe.
+  -- Skupina se drží JEDNOHO subjektu: kdyby někdo ručně pověsil na akci rezervaci
+  -- jiného klubu, nesmí ji zástupce potvrdit jedním kliknutím s tou svou.
   SELECT array_agg(r.id) INTO _ids
     FROM public.reservations r
    WHERE r.status = 'confirmed'
      AND r.deleted_at IS NULL
      AND r.approved_at IS NULL
+     AND r.subject_id IS NOT DISTINCT FROM _res.subject_id
      AND (
        (_res.event_id IS NOT NULL AND r.event_id = _res.event_id)
        OR (_res.event_id IS NULL AND r.id = _res.id)

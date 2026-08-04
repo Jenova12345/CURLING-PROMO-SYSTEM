@@ -765,6 +765,41 @@ BEGIN
   PERFORM pg_temp.tvrd(_open = 0, 'se zrušením poslední dráhy se uvolnily i volné směny');
 END $$;
 
+-- -----------------------------------------------------------------------------
+-- 20) Skupinové potvrzení se drží jednoho klubu
+-- -----------------------------------------------------------------------------
+-- Rezervace cizího klubu pověšená na stejnou akci (ručním zásahem) nesmí projít
+-- s potvrzením zástupce toho druhého.
+DO $$
+DECLARE _r jsonb; _ev uuid; _v jsonb;
+BEGIN
+  -- rezervaci zadá ČLEN klubu, takže čeká na potvrzení zástupce
+  PERFORM pg_temp.prihlas('55555555-5555-5555-5555-555555555555');
+  _r := public.create_booking(
+    ARRAY[pg_temp.draha(1)], 'training', 'Smíšená akce',
+    pg_temp.cas('2027-04-06 17:00'), pg_temp.cas('2027-04-06 19:00'),
+    'aaaa1111-0000-0000-0000-000000000001');
+  _ev := (_r->>'event_id')::uuid;
+
+  -- admin ručně přilepí k téže akci nepotvrzenou rezervaci jiného klubu
+  PERFORM pg_temp.prihlas('11111111-1111-1111-1111-111111111111');
+  INSERT INTO public.reservations (sheet_id, subject_id, event_id, start_at, end_at, approved_at)
+  VALUES (pg_temp.draha(2), 'aaaa1111-0000-0000-0000-000000000002', _ev,
+          pg_temp.cas('2027-04-06 17:00'), pg_temp.cas('2027-04-06 19:00'), NULL);
+
+  -- zástupce prvního klubu potvrdí svou rezervaci
+  PERFORM pg_temp.prihlas('44444444-4444-4444-4444-444444444444');
+  _v := public.approve_reservation(
+    (SELECT id FROM public.reservations
+      WHERE event_id = _ev AND subject_id = 'aaaa1111-0000-0000-0000-000000000001'));
+
+  PERFORM pg_temp.tvrd((_v->>'approved')::int = 1, 'potvrdila se jen rezervace vlastního klubu');
+  PERFORM pg_temp.tvrd(
+    (SELECT approved_at IS NULL FROM public.reservations
+      WHERE event_id = _ev AND subject_id = 'aaaa1111-0000-0000-0000-000000000002'),
+    'rezervace cizího klubu zůstala nepotvrzená');
+END $$;
+
 DO $$ BEGIN RAISE NOTICE '=== VŠECHNY TESTY PROŠLY ==='; END $$;
 
 ROLLBACK;
