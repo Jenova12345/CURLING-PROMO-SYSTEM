@@ -800,6 +800,33 @@ BEGIN
     'rezervace cizího klubu zůstala nepotvrzená');
 END $$;
 
+-- -----------------------------------------------------------------------------
+-- 21) Upozornění o potvrzení nesmí spolknout stornovaná dráha
+-- -----------------------------------------------------------------------------
+-- Člen zadá obě dráhy, zástupce jednu stornuje a druhou potvrdí — autor se to
+-- musí dozvědět (dřív zprávu umlčel sourozenec s nižším id, i když byl zrušený).
+DO $$
+DECLARE _r jsonb; _ids uuid[]; _notif int;
+BEGIN
+  PERFORM pg_temp.prihlas('55555555-5555-5555-5555-555555555555');
+  _r := public.create_booking(
+    ARRAY[pg_temp.draha(1), pg_temp.draha(2)], 'training', 'Obě dráhy, jedna zrušená',
+    pg_temp.cas('2027-05-04 17:00'), pg_temp.cas('2027-05-04 19:00'),
+    'aaaa1111-0000-0000-0000-000000000001');
+  SELECT array_agg(id ORDER BY id) INTO _ids
+    FROM public.reservations WHERE event_id = (_r->>'event_id')::uuid;
+
+  PERFORM pg_temp.prihlas('44444444-4444-4444-4444-444444444444');
+  PERFORM public.cancel_booking(_ids[1], 'single', 'jednu dráhu nakonec nepotřebujeme');
+  PERFORM public.approve_reservation(_ids[2]);
+
+  SELECT count(*) INTO _notif FROM public.notifications
+   WHERE type = 'reservation_approved'
+     AND user_id = '55555555-5555-5555-5555-555555555555'
+     AND reservation_id = _ids[2];
+  PERFORM pg_temp.tvrd(_notif = 1, 'autor dostal zprávu i když byla dřívější dráha stornovaná');
+END $$;
+
 DO $$ BEGIN RAISE NOTICE '=== VŠECHNY TESTY PROŠLY ==='; END $$;
 
 ROLLBACK;

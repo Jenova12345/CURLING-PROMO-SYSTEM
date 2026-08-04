@@ -132,11 +132,15 @@ BEGIN
   -- (b) zástupce potvrdil → dej vědět autorovi (u akce na obou drahách jen jednou)
   IF TG_OP = 'UPDATE' AND OLD.approved_at IS NULL AND NEW.approved_at IS NOT NULL
      AND NEW.created_by IS NOT NULL AND NEW.created_by <> COALESCE(NEW.approved_by, NEW.created_by) THEN
+    -- Umlčet smí jen sourozenec potvrzený TOUŽ operací (stejné razítko — now() je
+    -- v rámci příkazu konstantní). Jinak by zprávu spolkla dráha, která byla
+    -- mezitím stornovaná nebo potvrzená dřív, a autor by se nedozvěděl nic.
     IF NEW.event_id IS NOT NULL AND EXISTS (
       SELECT 1 FROM public.reservations r
        WHERE r.event_id = NEW.event_id AND r.id < NEW.id AND r.deleted_at IS NULL
+         AND r.approved_at = NEW.approved_at
     ) THEN
-      RETURN NULL;   -- zprávu pošle první rezervace akce
+      RETURN NULL;   -- zprávu pošle první rezervace ze stejného potvrzení
     END IF;
 
     PERFORM public.notify_user(
