@@ -86,6 +86,32 @@ CREATE TRIGGER on_auth_user_created
 
 ---
 
+## 7. Výplatní modul: peníze ve float součtech a `numeric` bez precision
+
+**Zaevidováno 11. 8. 2026** při Etapě 2 (code review PR A1). **Záměrně NEOPRAVUJEME teď.**
+
+Fakturace dostala jednotnou peněžní politiku (`src/lib/money.ts`: sčítání v haléřích,
+zaokrouhlení jednou na konci, půlka nahoru v absolutní hodnotě jako Postgres).
+**Výplatní modul ji nemá** a trpí toutéž vadou, kterou to opravovalo:
+
+- `baseline_production.sql:311` — `payouts.amount numeric` **bez precision**;
+  `:325-326` — `shifts.hours_worked`, `shifts.hourly_rate` taktéž. Žádná záruka `(x,2)`,
+  na rozdíl od `reservations`.
+- `src/pages/Payouts.tsx:223` a `:585` — součty peněz přes `reduce((s, p) => s + Number(p.amount), 0)`,
+  tedy v pohyblivé řádové čárce.
+- Vlastní formátovače `toLocaleString('cs-CZ')` bez options v `Payouts.tsx`, `Shifts.tsx`,
+  `Profile.tsx`, `Dashboard.tsx` — formátují jinak než `money.ts` (`3 751,5` vs. `3 751,50`).
+
+**Proč to zatím nehoří:** ověřeno, že `calculateStaffAmount` / `calculateTotalAmount`
+(`Shifts.tsx:448-463`) krmí jen zobrazení (`:1368`, `:1441`), **ne zápis do DB**. Celá
+výplatní doména je display-only — rozpad nikam neprolézá. U fakturace byl problém právě
+v tom, že prolezl až do dokladu, který jde zákazníkovi.
+
+**Kdy to řešit:** jakmile se výplaty dotknou tisku, exportu nebo účetního výstupu.
+Pak je to první věc na řadě a `money.ts` už bude připravené.
+
+---
+
 ## Doporučené pořadí oprav (návrh do dalších fází, nezávazné)
 
 1. Doplnit řazení `instructor/bar_staff/manager` do `get_user_role` a highest-role logiky.

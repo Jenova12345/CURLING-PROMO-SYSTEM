@@ -3,6 +3,7 @@ import { format, addDays, isSameDay, startOfWeek } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { fmtKc } from '@/lib/money';
 import type { Sheet, CalendarReservation, ShiftFill } from '@/hooks/useReservations';
 
 const PX_PER_MIN = 1;      // 1 minuta = 1 px
@@ -51,8 +52,6 @@ interface Props {
   /** otevírací doba konkrétního dne (mřížka kreslí obálku týdne, validace jede po dnech) */
   hoursForDay?: (day: Date) => { open: number; close: number };
 }
-
-const fmtKc = (n: number) => `${n.toLocaleString('cs-CZ')} Kč`;
 
 export function ReservationCalendar({
   view, currentDate, sheets, reservations, shiftFill = {},

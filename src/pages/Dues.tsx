@@ -13,10 +13,9 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useDues } from '@/hooks/useDues';
 import { useToast } from '@/components/ui/use-toast';
 import { openInvoiceDraft } from '@/lib/invoiceDraft';
+import { fmtHodin as fmtH, fmtKc } from '@/lib/money';
 
 type View = 'day' | 'week' | 'month';
-const fmtKc = (n: number) => `${Math.round(n).toLocaleString('cs-CZ')} Kč`;
-const fmtH = (n: number) => `${n.toLocaleString('cs-CZ', { maximumFractionDigits: 2 })} h`;
 
 const Dues = () => {
   const { isAdmin } = useAuth();
@@ -49,9 +48,11 @@ const Dues = () => {
         dic: subjekt?.dic,
       },
       rows: radky.map((r) => {
-        // Stejný výpočet jako v souhrnu, ať faktura sedí na to, co je na stránce.
-        // Sazbu odvozujeme z částky a hodin — po ruční korekci by rate_per_hour
-        // na zobrazenou cenu neseděl.
+        // Stejný výpočet jako v souhrnu, ať doklad sedí na to, co je na stránce.
+        // Sazba se BERE, nedopočítává: corrected_amount je vždy
+        // round(corrected_hours × rate_per_hour, 2), takže rate_per_hour sedí
+        // i po ruční korekci. Dřívější dopočet částka/hodiny tiskl sazby jako
+        // „1 251 Kč", které po vynásobení hodinami nedaly cenu na témže řádku.
         const hodiny = Number(r.corrected_hours ?? r.hours ?? 0);
         const castka = Number(r.corrected_amount ?? r.amount ?? 0);
         return {
@@ -61,7 +62,7 @@ const Dues = () => {
           event_title: r.event_title,
           sheet_name: r.sheet_name,
           hours: hodiny,
-          rate: hodiny > 0 ? castka / hodiny : null,
+          rate: r.rate_per_hour != null ? Number(r.rate_per_hour) : null,
           amount: castka,
         };
       }),
@@ -111,7 +112,10 @@ const Dues = () => {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <Card><CardContent className="pt-4"><div className="text-xs text-muted-foreground">Celkem k úhradě</div><div className="text-2xl font-bold">{fmtKc(totalAmount)}</div></CardContent></Card>
+        {/* Schválně NE „k úhradě": tohle je přesný součet za období, kdežto k úhradě
+            je až zaokrouhlená částka na konkrétním dokladu. Kdyby se to jmenovalo
+            stejně, obrazovka a faktura by ukazovaly o korunu jiné číslo pod týmž popiskem. */}
+        <Card><CardContent className="pt-4"><div className="text-xs text-muted-foreground">Celkem za období</div><div className="text-2xl font-bold">{fmtKc(totalAmount)}</div></CardContent></Card>
         <Card><CardContent className="pt-4"><div className="text-xs text-muted-foreground">Hodin celkem</div><div className="text-2xl font-bold">{fmtH(totalHours)}</div></CardContent></Card>
         <Card><CardContent className="pt-4"><div className="text-xs text-muted-foreground">Subjektů</div><div className="text-2xl font-bold">{summary.length}</div></CardContent></Card>
       </div>

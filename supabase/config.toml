@@ -2,7 +2,13 @@
 # https://supabase.com/docs/guides/local-development/cli/config
 # A string used to distinguish different Supabase projects on the same host. Defaults to the
 # working directory name when running `supabase init`.
-project_id = "fareavttiwkamrukpfqk"
+#
+# ⚠️ POZOR, ČASTÉ NEDOROZUMĚNÍ: tohle je jen LOKÁLNÍ jméno (názvy Docker kontejnerů).
+# Cíl `supabase db push` se odsud NEBERE — bere se z nalinkovaného projektu
+# (`supabase/.temp/linked-project.json`, dnes `ltrazktulfxvzlvkxdsb` = curling-demo).
+# Hodnotu držíme shodnou s nalinkovaným projektem, aby se to nepletlo; dřív tu stál
+# ref staré Lovable databáze (`fareavttiwkamrukpfqk`), kde rezervační systém vůbec není.
+project_id = "ltrazktulfxvzlvkxdsb"
 
 [api]
 enabled = true

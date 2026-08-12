@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Database } from '@/integrations/supabase/types';
+import { fromHal, sumHodin, sumKc, toHal } from '@/lib/money';
 
 type SubjectType = Database['public']['Enums']['subject_type'];
 
@@ -10,6 +11,8 @@ export type DueReservation = {
   start_at: string;
   end_at: string;
   hours: number | null;
+  /** Snapshot sazby z doby vzniku rezervace. Na doklad patří tohle, ne dopočet z částky. */
+  rate_per_hour: number | null;
   amount: number | null;
   corrected_hours: number | null;
   corrected_amount: number | null;
@@ -44,7 +47,7 @@ export const useDues = (range: { from: string; to: string } | null) => {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('reservations_billing')
-        .select('id, start_at, end_at, hours, amount, corrected_hours, corrected_amount, subject_id, subject_name, subject_type, sheet_name, event_title, created_by_name')
+        .select('id, start_at, end_at, hours, rate_per_hour, amount, corrected_hours, corrected_amount, subject_id, subject_name, subject_type, sheet_name, event_title, created_by_name')
         .gte('start_at', range!.from)
         .lt('start_at', range!.to)
         .order('start_at', { ascending: true });
@@ -69,18 +72,35 @@ export const useDues = (range: { from: string; to: string } | null) => {
     enabled: !!user && isAdmin,
   });
 
-  const bySubject = new Map<string, DueRow>();
+  // Sčítá se v haléřích (resp. setinách hodiny) a NIC se průběžně nezaokrouhluje —
+  // zaokrouhlení patří až na doklad, k částce k úhradě. Viz src/lib/money.ts.
+  const bySubject = new Map<string, { subjectId: string; name: string; type: SubjectType; hal: number; hodinySetiny: number; count: number }>();
   for (const r of rows) {
     const hours = Number(r.corrected_hours ?? r.hours ?? 0);
     const amount = Number(r.corrected_amount ?? r.amount ?? 0);
     const key = r.subject_id;
-    const cur = bySubject.get(key) ?? { subjectId: key, name: r.subject_name ?? 'Neznámý', type: r.subject_type ?? 'club', hours: 0, amount: 0, count: 0 };
-    cur.hours += hours; cur.amount += amount; cur.count += 1;
+    const cur = bySubject.get(key) ?? {
+      subjectId: key,
+      name: r.subject_name ?? 'Neznámý',
+      type: r.subject_type ?? 'club',
+      hal: 0, hodinySetiny: 0, count: 0,
+    };
+    cur.hal += toHal(amount);
+    cur.hodinySetiny += toHal(hours);
+    cur.count += 1;
     bySubject.set(key, cur);
   }
-  const summary = Array.from(bySubject.values()).sort((a, b) => b.amount - a.amount);
-  const totalAmount = summary.reduce((s, r) => s + r.amount, 0);
-  const totalHours = summary.reduce((s, r) => s + r.hours, 0);
+
+  const summary: DueRow[] = Array.from(bySubject.values())
+    .map((s) => ({
+      subjectId: s.subjectId, name: s.name, type: s.type, count: s.count,
+      hours: fromHal(s.hodinySetiny),
+      amount: fromHal(s.hal),
+    }))
+    .sort((a, b) => b.amount - a.amount);
+
+  const totalAmount = sumKc(summary.map((r) => r.amount));
+  const totalHours = sumHodin(summary.map((r) => r.hours));
 
   return { reservations: rows, summary, subjects, totalAmount, totalHours, isLoading };
 };

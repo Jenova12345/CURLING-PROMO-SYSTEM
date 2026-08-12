@@ -60,9 +60,22 @@ jdou jako další migrace nad baseline, ne přepisem historie.
 1. Plánuj první. U každého netriviálního úkolu nejdřív připrav plán a nech si ho schválit, než začneš měnit kód nebo databázi.
 2. Agenti jako kontrolní brány. Před dokončením každé změny ji nech zkontrolovat příslušnými specializovanými agenty. Povinné brány: (a) Bezpečnost/RLS u čehokoli kolem přístupů, auth, RLS a klíčů; (b) Databáze/migrace u každé migrace (bezpečná, vratná, bez ztráty dat); (c) Code review u implementace před commitem.
 3. Záloha před zásahem do produkce. Nikdy neaplikuj změnu na produkční DB bez čerstvé zálohy a odsouhlasení PM.
-   - **Supabase CLI proti produkci = zakázáno bez výslovného souhlasu PM a čerstvé zálohy.** NIKDY nespouštěj `supabase db push` ani `supabase link` proti produkci sám od sebe. Pozor: `supabase/config.toml` má `project_id` mířící na **produkci** (`fareavttiwkamrukpfqk`), takže `supabase db push` by schéma nahrál rovnou na ostrou DB. Lokální vývoj (`supabase start`, `supabase db reset`) je bezpečný a míří jen na lokální Docker.
+   - **Supabase CLI proti živé databázi = zakázáno bez výslovného souhlasu PM a čerstvé zálohy.** NIKDY nespouštěj `supabase db push` ani `supabase link` sám od sebe. Lokální vývoj (`supabase start`, `supabase db reset`) je bezpečný a míří jen na lokální Docker.
+   - **Kam `db push` doopravdy míří:** na **nalinkovaný** projekt, ne na to, co je v `config.toml`. `project_id` v `supabase/config.toml` je jen lokální jméno Docker kontejnerů a cíl pushe neurčuje (dřívější znění téhle poznámky tvrdilo opak). Link žije v `supabase/.temp/`, což je v `.gitignore` — po čerstvém klonu tam nic není, takže **stav linku si vždycky ověř a nikdy ho nehádej**. Ověřuj **jen pro čtení**: `supabase projects list` (má sloupec `LINKED`) nebo `cat supabase/.temp/project-ref`. **Nikdy ne `supabase db push --dry-run`** — je to zakázaný příkaz jeden flag od ostrého běhu, na ověřování se nehodí.
+   - **Dva projekty, ať se nepletou:** `fareavttiwkamrukpfqk` = stará Lovable DB (jen směny a brigádníci, **rezervační tabulky tam vůbec nejsou**). `ltrazktulfxvzlvkxdsb` = curling-demo, kde běží rezervační systém i Etapa 2.
 4. Nic nemazat natvrdo, vše auditovat.
 5. Změna je hotová, teprve až projde svými bránami.
+
+## Pravidlo pro Etapu 2 (fakturace) — povinné
+
+**Po každé smysluplné změně, PŘED commitem/mergem, pusť review agenty jako bránu:**
+code review + bezpečnost/RLS + kontrola migrací. **Nic se nemerguje bez projití těchto
+tří gatů.** Platí i pro drobné úpravy — u peněz není „malá změna".
+
+**Navíc u fakturace vždy ověř kontrolní součet:**
+> suma vystavených faktur za období **==** „Kdo kolik dluží" za totéž období
+
+Když se součty rozejdou, změna neprochází — bez ohledu na to, jak dobře vypadá kód.
 
 ## Roadmapa (fáze)
 

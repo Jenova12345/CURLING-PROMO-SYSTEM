@@ -1,6 +1,7 @@
 import { format } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { BRAND } from '@/config/brand';
+import { fmtHodin, fmtKc, fmtSazba, roundCzk, roundingDiff, sumHodin, sumKc } from '@/lib/money';
 
 // Podklad k fakturaci ve formě tisknutelné stránky.
 //
@@ -39,11 +40,6 @@ export interface InvoiceDraft {
   periodTo: Date;
 }
 
-const kc = (n: number) =>
-  `${Math.round(n).toLocaleString('cs-CZ')} Kč`;
-const hodin = (n: number) =>
-  `${n.toLocaleString('cs-CZ', { maximumFractionDigits: 2 })} h`;
-
 /** Ochrana proti rozbití stránky uživatelským textem (názvy akcí, adresy). */
 function esc(value: unknown): string {
   return String(value ?? '')
@@ -55,10 +51,13 @@ function esc(value: unknown): string {
 }
 
 function buildHtml({ subject, rows, periodFrom, periodTo }: InvoiceDraft): string {
-  // Sčítáme zaokrouhlené řádky, ne surové částky — jinak by tištěný sloupec
-  // nedal tištěný součet a účetní to najde jako první.
-  const total = rows.reduce((sum, r) => sum + Math.round(r.amount), 0);
-  const totalHours = rows.reduce((sum, r) => sum + r.hours, 0);
+  // Součet je PŘESNÝ součet tištěných řádků (viz src/lib/money.ts). Zaokrouhlení
+  // se dělá jednou, až u částky k úhradě, a je vidět vlastním řádkem — takže
+  // „součet sloupce == mezisoučet" platí triviálně, ne shodou okolností.
+  const mezisoucet = sumKc(rows.map((r) => r.amount));
+  const zaokrouhleni = roundingDiff(mezisoucet);
+  const kUhrade = roundCzk(mezisoucet);
+  const totalHours = sumHodin(rows.map((r) => r.hours));
   const vystaveno = format(new Date(), 'd. M. yyyy', { locale: cs });
   const obdobi = `${format(periodFrom, 'd. M. yyyy', { locale: cs })} – ${format(periodTo, 'd. M. yyyy', { locale: cs })}`;
 
@@ -82,9 +81,9 @@ function buildHtml({ subject, rows, periodFrom, periodTo }: InvoiceDraft): strin
         <td>${esc(format(zacatek, 'HH:mm'))}–${esc(format(konec, 'HH:mm'))}</td>
         <td>${popis || '—'}</td>
         <td>${esc(r.ordered_by ?? '—')}</td>
-        <td class="cislo">${esc(hodin(r.hours))}</td>
-        <td class="cislo">${r.rate != null ? esc(kc(r.rate)) : '—'}</td>
-        <td class="cislo">${esc(kc(r.amount))}</td>
+        <td class="cislo">${esc(fmtHodin(r.hours))}</td>
+        <td class="cislo">${r.rate != null ? esc(fmtSazba(r.rate)) : '—'}</td>
+        <td class="cislo">${esc(fmtKc(r.amount))}</td>
       </tr>`;
   }).join('');
 
@@ -121,7 +120,11 @@ function buildHtml({ subject, rows, periodFrom, periodTo }: InvoiceDraft): strin
   th, td { padding: 6px 8px; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: top; }
   th { background: #f8fafc; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #475569; }
   td.cislo, th.cislo { text-align: right; white-space: nowrap; }
-  tfoot td { font-weight: 700; border-top: 2px solid #0f172a; border-bottom: none; font-size: 13px; }
+  /* Silná linka jen nad prvním řádkem patky; mezisoučet a zaokrouhlení jsou tišší
+     než konečná částka k úhradě, ať je na dokladu vidět, co se má zaplatit. */
+  tfoot td { font-weight: 700; border-bottom: none; font-size: 13px; }
+  tfoot tr:first-child td { border-top: 2px solid #0f172a; }
+  tfoot tr.mezisoucet td { font-weight: 400; font-size: 12px; color: #475569; }
   .chybi { color: #94a3b8; font-style: italic; }
   .patka { margin-top: 24px; color: #64748b; font-size: 11px; }
   .tisk { margin-bottom: 20px; }
@@ -167,11 +170,20 @@ function buildHtml({ subject, rows, periodFrom, periodTo }: InvoiceDraft): strin
         ${radky || '<tr><td colspan="7">V tomto období nejsou žádné účtovatelné rezervace.</td></tr>'}
       </tbody>
       <tfoot>
-        <tr>
-          <td colspan="4">Celkem</td>
-          <td class="cislo">${esc(hodin(totalHours))}</td>
+        <tr class="mezisoucet">
+          <td colspan="4">Mezisoučet</td>
+          <td class="cislo">${esc(fmtHodin(totalHours))}</td>
           <td class="cislo"></td>
-          <td class="cislo">${esc(kc(total))}</td>
+          <td class="cislo">${esc(fmtKc(mezisoucet))}</td>
+        </tr>
+        ${zaokrouhleni !== 0 ? `
+        <tr class="mezisoucet">
+          <td colspan="6">Zaokrouhlení na celé koruny</td>
+          <td class="cislo">${zaokrouhleni > 0 ? '+' : ''}${esc(fmtKc(zaokrouhleni))}</td>
+        </tr>` : ''}
+        <tr>
+          <td colspan="6">Celkem k úhradě</td>
+          <td class="cislo">${esc(fmtKc(kUhrade))}</td>
         </tr>
       </tfoot>
     </table>

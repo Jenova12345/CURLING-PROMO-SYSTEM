@@ -18,6 +18,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useRateLimit } from '@/hooks/useRateLimit';
 import { useReservations, type CalendarReservation } from '@/hooks/useReservations';
 import { hoursForDay, openingHoursEnvelope } from '@/lib/openingHours';
+import { fmtHodin, fmtKc, fmtSazba } from '@/lib/money';
 import { ReservationCalendar } from '@/components/reservations/ReservationCalendar';
 import { ReservationDialog } from '@/components/reservations/ReservationDialog';
 import { ObsazeniDetail } from '@/components/reservations/ObsazeniDetail';
@@ -25,7 +26,6 @@ import { ObsazeniDetail } from '@/components/reservations/ObsazeniDetail';
 type View = 'day' | 'week' | 'month';
 
 const DAY_NAMES = ['Po', 'Út', 'St', 'Čt', 'Pá', 'So', 'Ne'];
-const fmtKc = (n: number) => `${n.toLocaleString('cs-CZ')} Kč`;
 
 const EVENT_TYPE_LABELS: Record<string, string> = {
   commercial: 'Komerční akce',
@@ -362,7 +362,7 @@ const Calendar = () => {
                     </div>
                     {detail.can_see_amount && (detail.corrected_amount ?? detail.amount) != null && (
                       <div className="pt-1">Částka: {fmtKc(Number(detail.corrected_amount ?? detail.amount))}
-                        {' '}({Number(detail.corrected_hours ?? detail.hours)} h × {fmtKc(Number(detail.rate_per_hour))}/h)</div>
+                        {' '}({fmtHodin(Number(detail.corrected_hours ?? detail.hours))} × {fmtSazba(Number(detail.rate_per_hour))})</div>
                     )}
                     {detail.event_id && shiftFill[detail.event_id] && (
                       <div>Obsazení štábu: {shiftFill[detail.event_id].filled}/{shiftFill[detail.event_id].total}</div>
