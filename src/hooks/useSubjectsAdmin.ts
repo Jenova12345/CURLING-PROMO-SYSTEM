@@ -17,9 +17,20 @@ export const useSubjectsAdmin = () => {
   const { data: subjects = [], isLoading } = useQuery({
     queryKey: ['subjects-admin'],
     queryFn: async () => {
-      const { data, error } = await supabase.from('subjects').select('*').is('deleted_at', null).order('type').order('name');
+      // `select('*')` tu být nesmí: `default_rate` je po A2b pro `authenticated`
+      // nečitelný a hvězdička by skončila na 42501. Sazby se dotahují zvlášť
+      // z `subjects_rates`, který je vydá jen adminovi.
+      const { data, error } = await supabase.from('subjects')
+        .select('id, type, name, ico, dic, address, created_by, created_at, updated_by, updated_at, deleted_at')
+        .is('deleted_at', null).order('type').order('name');
       if (error) throw error;
-      return (data ?? []) as Subject[];
+
+      const { data: sazby, error: chybaSazeb } = await supabase
+        .from('subjects_rates').select('id, default_rate');
+      if (chybaSazeb) throw chybaSazeb;
+      const podleId = new Map((sazby ?? []).map((s) => [s.id, s.default_rate]));
+
+      return (data ?? []).map((s) => ({ ...s, default_rate: podleId.get(s.id) ?? null })) as Subject[];
     },
     enabled: !!user && isAdmin,
   });

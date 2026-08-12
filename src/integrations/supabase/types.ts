@@ -296,6 +296,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "notifications_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects_rates"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "notifications_user_id_fkey"
             columns: ["user_id"]
             isOneToOne: false
@@ -544,6 +551,13 @@ export type Database = {
             columns: ["subject_id"]
             isOneToOne: false
             referencedRelation: "subjects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reservations_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects_rates"
             referencedColumns: ["id"]
           },
           {
@@ -803,6 +817,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "subject_reps_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects_rates"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "subject_reps_user_id_fkey"
             columns: ["user_id"]
             isOneToOne: false
@@ -996,6 +1017,13 @@ export type Database = {
             referencedRelation: "subjects"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "reservations_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects_rates"
+            referencedColumns: ["id"]
+          },
         ]
       }
       reservations_calendar: {
@@ -1080,7 +1108,86 @@ export type Database = {
             referencedRelation: "subjects"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "reservations_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects_rates"
+            referencedColumns: ["id"]
+          },
         ]
+      }
+      settings_public: {
+        Row: {
+          can_see_rates: boolean | null
+          club_default_rate: number | null
+          commercial_default_rate: number | null
+          email_notifications_enabled: boolean | null
+          id: string | null
+          opening_hours: Json | null
+          singleton: boolean | null
+          tournament_rate: number | null
+          training_rate: number | null
+          updated_at: string | null
+          updated_by: string | null
+        }
+        Insert: {
+          can_see_rates?: never
+          club_default_rate?: never
+          commercial_default_rate?: never
+          email_notifications_enabled?: boolean | null
+          id?: string | null
+          opening_hours?: Json | null
+          singleton?: boolean | null
+          tournament_rate?: never
+          training_rate?: never
+          updated_at?: string | null
+          updated_by?: string | null
+        }
+        Update: {
+          can_see_rates?: never
+          club_default_rate?: never
+          commercial_default_rate?: never
+          email_notifications_enabled?: boolean | null
+          id?: string | null
+          opening_hours?: Json | null
+          singleton?: boolean | null
+          tournament_rate?: never
+          training_rate?: never
+          updated_at?: string | null
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "settings_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "settings_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
+      subjects_rates: {
+        Row: {
+          default_rate: number | null
+          id: string | null
+        }
+        Insert: {
+          default_rate?: number | null
+          id?: string | null
+        }
+        Update: {
+          default_rate?: number | null
+          id?: string | null
+        }
+        Relationships: []
       }
     }
     Functions: {

@@ -118,7 +118,7 @@ Pak je to první věc na řadě a `money.ts` už bude připravené.
 věci **starší než A2** — jen se ukázaly, když se prosvítila peněžní plocha.
 Ověřeno útokem přes PostgREST, ne čtením kódu.
 
-### 8a) Ceník vidí každý přihlášený — v rozporu s rozhodnutím klienta
+### 8a) ~~Ceník vidí každý přihlášený~~ — VYŘEŠENO v PR A2b (12. 8. 2026)
 
 `GET /rest/v1/settings` jako obyčejný člen vrátí **kompletní ceník** (club 600,
 commercial 1500, training 600, tournament 800). Politika je `settings_select
@@ -130,10 +130,12 @@ a `subjects.default_rate` svého klubu, takže si částku klubové rezervace
 **dopočítá z ceníku**. Rozhodnutí klienta přitom zní „částku vidí jen admin a autor"
 (CLAUDE.md, feedback z 31. 7. 2026).
 
-**Návrh:** SELECT na `settings` omezit na admina a pro ostatní vystavit view jen
-s `opening_hours` a `email_notifications_enabled` — to je jediné, co kalendář
-(`hoursForDay`) doopravdy potřebuje. **Je to produktové rozhodnutí pro PM**, ne
-technická oprava: mění se, co uživatel vidí.
+**Opraveno** migrací `20260812140000_cenik_jen_adminovi.sql` po rozhodnutí PM:
+tabulkový SELECT odebrán, neprice sloupce vráceny sloupcovým grantem, sazby vydává
+pohled `settings_public` jen adminovi. Spolu s tím zavřena i táž díra u
+`subjects.default_rate` (pohled `subjects_rates`) — bez ní by oprava byla k ničemu,
+protože `defaultRateFor` sahá po sazbě subjektu dřív než po ceníku. Hlídá to
+`supabase/tests/cenik_viditelnost_test.sql`.
 
 Souvisí s rozhodnutím R9 v `etapa2-fakturace-plan.md`, které právě kvůli
 `USING (true)` zakazuje dávat fakturační údaje do `public.settings`.

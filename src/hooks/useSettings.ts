@@ -3,7 +3,11 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Database } from '@/integrations/supabase/types';
 
-export type Settings = Database['public']['Tables']['settings']['Row'];
+// Nastavení tak, jak ho vidí frontend: čte se z pohledu `settings_public`,
+// protože sazby jsou v tabulce po A2b nedostupné a pohled je vydá jen adminovi.
+// Pro ostatní role přijdou sazby jako null — `can_see_rates` říká, jestli je to
+// „nemáš na to právo" nebo „ceník není vyplněný".
+export type Settings = Database['public']['Views']['settings_public']['Row'];
 export type Sheet = Database['public']['Tables']['sheets']['Row'];
 export type OpeningHours = Record<string, { open: string; close: string }>;
 
@@ -15,7 +19,10 @@ export const useSettings = () => {
   const { data: settings = null, isLoading } = useQuery({
     queryKey: ['reservation-settings'],
     queryFn: async () => {
-      const { data, error } = await supabase.from('settings').select('*').maybeSingle();
+      // Čte se z pohledu, ne z tabulky: sazby jsou v `settings` sloupcovým
+      // REVOKE nedostupné (A2b) a pohled je vydá jen adminovi. Zápis níž
+      // míří dál na tabulku, kde ho hlídá politika settings_update_admin.
+      const { data, error } = await supabase.from('settings_public').select('*').maybeSingle();
       if (error) throw error;
       return (data ?? null) as Settings | null;
     },
@@ -47,6 +54,9 @@ export const useSettings = () => {
       tournament_rate?: number | null;
       opening_hours?: OpeningHours;
     }) => {
+      // POZOR: nepřidávej sem `.select()`. Vynutilo by `return=representation`,
+      // což potřebuje SELECT na měněné sloupce — a ten je na sazbách po A2b
+      // odebraný, takže by adminovi přestalo jít ukládat ceníku (403 / 42501).
       const { error } = await supabase.from('settings').update(fields).eq('singleton', true);
       if (error) throw new Error('Nepodařilo se uložit nastavení.');
     },

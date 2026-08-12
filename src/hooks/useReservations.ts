@@ -9,7 +9,11 @@ export type EventType = Database['public']['Enums']['event_type'];
 
 export type Sheet = Database['public']['Tables']['sheets']['Row'];
 export type Subject = Database['public']['Tables']['subjects']['Row'];
-export type Settings = Database['public']['Tables']['settings']['Row'];
+// Nastavení tak, jak ho vidí frontend: čte se z pohledu `settings_public`,
+// protože sazby jsou v tabulce po A2b nedostupné a pohled je vydá jen adminovi.
+// Pro ostatní role přijdou sazby jako null — `can_see_rates` říká, jestli je to
+// „nemáš na to právo" nebo „ceník není vyplněný".
+export type Settings = Database['public']['Views']['settings_public']['Row'];
 
 // Jediný zdroj pravdy pro kalendář: maskované view.
 // Obsazenost a název klubu/akce vidí každý přihlášený, částku jen admin a autor
@@ -119,10 +123,22 @@ export const useReservations = (range: DateRange | null) => {
   const { data: mySubjects = [] } = useQuery({
     queryKey: ['my-subjects'],
     queryFn: async () => {
+      // `select('*')` tu být nesmí: `default_rate` je po A2b pro `authenticated`
+      // nečitelný a hvězdička by skončila na 42501. Sazby se dotahují zvlášť
+      // z `subjects_rates`, který je vydá jen adminovi.
       const { data, error } = await supabase
-        .from('subjects').select('*').is('deleted_at', null).order('name', { ascending: true });
+        .from('subjects').select('id, type, name, ico, dic, address, created_by, created_at, updated_by, updated_at, deleted_at')
+        .is('deleted_at', null).order('name', { ascending: true });
       if (error) throw error;
-      return (data ?? []) as Subject[];
+
+      // Ne-admin dostane z pohledu prázdno, takže mu sazby zůstanou null —
+      // a to je správně: pole se sazbou má jen pro čtení a nacení ho trigger.
+      const { data: sazby, error: chybaSazeb } = await supabase
+        .from('subjects_rates').select('id, default_rate');
+      if (chybaSazeb) throw chybaSazeb;
+      const podleId = new Map((sazby ?? []).map((s) => [s.id, s.default_rate]));
+
+      return (data ?? []).map((s) => ({ ...s, default_rate: podleId.get(s.id) ?? null })) as Subject[];
     },
     enabled: !!user,
   });
@@ -140,7 +156,10 @@ export const useReservations = (range: DateRange | null) => {
   const { data: settings = null } = useQuery({
     queryKey: ['reservation-settings'],
     queryFn: async () => {
-      const { data, error } = await supabase.from('settings').select('*').maybeSingle();
+      // Pohled místo tabulky: sazby v `settings` jsou po A2b čitelné jen
+      // adminovi. Kalendář z toho potřebuje jen otevírací dobu, ta zůstává
+      // dostupná všem; dialog rezervace sazbu předvyplní jen adminovi.
+      const { data, error } = await supabase.from('settings_public').select('*').maybeSingle();
       if (error) throw error;
       return (data ?? null) as Settings | null;
     },

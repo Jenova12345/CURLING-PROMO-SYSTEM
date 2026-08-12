@@ -38,6 +38,24 @@ const Settings = () => {
   if (!isAdmin) return <div className="p-6 text-muted-foreground">Nastavení může spravovat jen správce.</div>;
 
   const saveRates = async () => {
+    // POJISTKA PROTI TICHÉMU SMAZÁNÍ CENÍKU. Prázdné pole je pro `parseSazba`
+    // platný vstup („vezmi z ceníku"), takže prázdný formulář by uložil samé NULL.
+    // Formulář přitom může být prázdný, aniž by to admin způsobil:
+    //   • dotaz selhal → `settings` je null, ale `isLoading` už false, takže se
+    //     místo „Načítám…" vykreslí prázdná pole;
+    //   • po přepnutí účtu (SPA, bez reloadu) drží react-query pod klíčem
+    //     ['reservation-settings'] ještě řádek předchozího uživatele, kde jsou
+    //     sazby maskované na NULL — a refetch nemusí doběhnout.
+    // `can_see_rates` obě situace odliší od poctivě prázdného ceníku.
+    if (!settings || settings.can_see_rates !== true) {
+      toast({
+        title: 'Ceník se nenačetl',
+        description: 'Než ho půjde uložit, musí se načíst současné hodnoty — jinak by se přepsaly prázdnými. Zkus stránku znovu načíst.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     // Pole se ověřují jmenovitě, ať hláška řekne, které z nich je špatně —
     // ceník má čtyři sazby a „Neplatná sazba" bez upřesnění je hádanka.
     // Klíčované, ne poziční: kdyby se pole někdy přeházela, poziční mapování
