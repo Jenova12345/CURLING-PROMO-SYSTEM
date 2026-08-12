@@ -8,6 +8,7 @@ import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSettings, type OpeningHours } from '@/hooks/useSettings';
+import { parseSazba } from '@/lib/money';
 
 const DAYS = [['1', 'Pondělí'], ['2', 'Úterý'], ['3', 'Středa'], ['4', 'Čtvrtek'], ['5', 'Pátek'], ['6', 'Sobota'], ['7', 'Neděle']];
 
@@ -36,17 +37,33 @@ const Settings = () => {
 
   if (!isAdmin) return <div className="p-6 text-muted-foreground">Nastavení může spravovat jen správce.</div>;
 
-  const parseRate = (v: string): number | null => (v.trim() ? Number(v.replace(',', '.')) : null);
-
   const saveRates = async () => {
-    const values = {
-      club_default_rate: parseRate(club),
-      commercial_default_rate: parseRate(commercial),
-      training_rate: parseRate(training),
-      tournament_rate: parseRate(tournament),
+    // Pole se ověřují jmenovitě, ať hláška řekne, které z nich je špatně —
+    // ceník má čtyři sazby a „Neplatná sazba" bez upřesnění je hádanka.
+    // Klíčované, ne poziční: kdyby se pole někdy přeházela, poziční mapování
+    // by tiše uložilo sazbu tréninku jako sazbu klubu. Typ `Cenik` je tu proto,
+    // aby překlep v názvu sloupce neprošel — `Record<string, …>` by ho pustil.
+    type Cenik = {
+      club_default_rate?: number | null;
+      commercial_default_rate?: number | null;
+      training_rate?: number | null;
+      tournament_rate?: number | null;
     };
-    if (Object.values(values).some((v) => v != null && (isNaN(v) || v <= 0))) {
-      toast({ title: 'Neplatná sazba', description: 'Zadej kladná čísla.', variant: 'destructive' }); return;
+    const pole: Array<{ sloupec: keyof Cenik; popis: string; vstup: string }> = [
+      { sloupec: 'club_default_rate', popis: 'Klub — výchozí', vstup: club },
+      { sloupec: 'commercial_default_rate', popis: 'Komerční akce', vstup: commercial },
+      { sloupec: 'training_rate', popis: 'Trénink', vstup: training },
+      { sloupec: 'tournament_rate', popis: 'Turnaj', vstup: tournament },
+    ];
+
+    const values: Cenik = {};
+    for (const { sloupec, popis, vstup } of pole) {
+      const v = parseSazba(vstup);
+      if (v.chyba) {
+        toast({ title: `Neplatná sazba: ${popis}`, description: v.chyba, variant: 'destructive' });
+        return;
+      }
+      values[sloupec] = v.hodnota;
     }
     try { await updateSettings(values); toast({ title: 'Ceník uložen' }); }
     catch (e) { toast({ title: 'Chyba', description: e instanceof Error ? e.message : '', variant: 'destructive' }); }

@@ -16,6 +16,7 @@ import {
 import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSubjectsAdmin, type Subject, type RepLevel } from '@/hooks/useSubjectsAdmin';
+import { parseSazba } from '@/lib/money';
 
 const LEVELS: [RepLevel, string][] = [['rep', 'Zástupce'], ['member', 'Člen']];
 
@@ -83,9 +84,9 @@ function SubjectCard({ subject, admin, onDelete, onErr }: {
 
   const saveMeta = async () => {
     try {
-      const r = rate.trim() ? Number(rate.replace(',', '.')) : null;
-      if (r != null && (isNaN(r) || r <= 0)) { onErr(new Error('Neplatná sazba.')); return; }
-      await admin.updateSubject({ id: subject.id, fields: { name: name.trim() || subject.name, default_rate: r } });
+      const sazba = parseSazba(rate);
+      if (sazba.chyba) { onErr(new Error(sazba.chyba)); return; }
+      await admin.updateSubject({ id: subject.id, fields: { name: name.trim() || subject.name, default_rate: sazba.hodnota } });
       toast({ title: 'Uloženo' });
     } catch (e) { onErr(e); }
   };
@@ -185,10 +186,10 @@ function CreateSubjectDialog({ open, onOpenChange, admin, onErr }: {
 
   const submit = async () => {
     if (!name.trim()) { onErr(new Error('Vyplň název.')); return; }
-    const r = rate.trim() ? Number(rate.replace(',', '.')) : null;
-    if (r != null && (isNaN(r) || r <= 0)) { onErr(new Error('Neplatná sazba.')); return; }
+    const sazba = parseSazba(rate);
+    if (sazba.chyba) { onErr(new Error(sazba.chyba)); return; }
     try {
-      await admin.createSubject({ type, name: name.trim(), ico: ico.trim() || undefined, dic: dic || undefined, address: address || undefined, default_rate: r });
+      await admin.createSubject({ type, name: name.trim(), ico: ico.trim() || undefined, dic: dic || undefined, address: address || undefined, default_rate: sazba.hodnota });
       toast({ title: 'Subjekt založen' }); reset(); onOpenChange(false);
     } catch (e) { onErr(e); }
   };

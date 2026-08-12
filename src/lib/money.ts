@@ -155,3 +155,65 @@ export const fmtHodin = (value: number): string =>
 /** Hodiny se sčítají po setinách ze stejného důvodu jako částky. */
 export const sumHodin = (values: number[]): number =>
   zeSetin(values.reduce((sum, v) => sum + toSetiny(v), 0));
+
+/**
+ * Výsledek čtení sazby. Schválně NE diskriminované sjednocení přes `ok: true|false`:
+ * projekt má `strict: false`, kde se takové sjednocení spolehlivě nezužuje a TypeScript
+ * na `if (!v.ok) v.chyba` hlásí, že vlastnost neexistuje. Prostý nepovinný `chyba`
+ * funguje v obou režimech stejně.
+ */
+export type VysledekSazby = { hodnota: number | null; chyba?: string };
+
+/**
+ * Přečte sazbu z formulářového pole. Prázdné pole je platný vstup a znamená
+ * „nemá vlastní sazbu, vezmi z ceníku" — proto `hodnota: null`, ne chyba.
+ *
+ * PROČ SPOLEČNĚ: tohle se dřív psalo zvlášť na čtyřech místech (ceník
+ * v Nastavení, sazba subjektu při založení, táž při úpravě, adminská sazba
+ * v dialogu rezervace) a všechna čtyři kontrolovala jen `isNaN || <= 0`.
+ * Rozhodnutí R3 „sazby v celých korunách" by tak zůstalo jen v databázi
+ * a uživatel by se o něm dozvěděl až syrovou chybou CHECK constraintu.
+ *
+ * Celé koruny jsou tu proto, aby zaokrouhlení skoro nikdy nemuselo nic řešit:
+ * při celokorunové sazbě a čtvrthodinách je `hodiny × sazba` přesný součin.
+ *
+ * Funkce je smlouva: **když nevrátí `chyba`, je `hodnota` celé kladné číslo
+ * v rozsahu, který databáze uloží beze změny.** Volající se na to smí spolehnout.
+ */
+
+/** Horní mez sazby. Sloupce jsou `numeric(10,2)`, tedy |x| < 10^8. */
+export const SAZBA_MAX = 99_999_999;
+
+// Vlastní tvar místo holého `Number()`. To je totiž mnohem velkorysejší, než
+// se u sazby hodí: `Number('0x10')` je 16 a `Number('1e3')` je 1000, což by
+// prošlo jako „platná sazba" a nikdo by to nečekal.
+const SAZBA_TVAR = /^-?\d+([.,]\d+)?$/;
+
+export function parseSazba(vstup: string): VysledekSazby {
+  const text = vstup.trim();
+  if (!text) return { hodnota: null };
+
+  if (!SAZBA_TVAR.test(text)) {
+    // Sem spadne i „1 250" zkopírované z appky: `fmtKc` tiskne úzkou nezlomitelnou
+    // mezeru jako oddělovač tisíců, takže je to snadný omyl. Hláška to říká rovnou.
+    return { hodnota: null, chyba: 'Sazba musí být číslo, bez mezer a oddělovače tisíců.' };
+  }
+
+  // Čárka i tečka — na české klávesnici padne na desetinnou čárku každý.
+  const cislo = Number(text.replace(',', '.'));
+
+  if (!Number.isFinite(cislo)) return { hodnota: null, chyba: 'Sazba musí být číslo.' };
+  if (cislo <= 0) return { hodnota: null, chyba: 'Sazba musí být kladná.' };
+  // Schválně `Number.isInteger`, ne `toSetiny(x) % 100`: to druhé nejdřív zaokrouhlí,
+  // takže by kolem každé koruny nechalo toleranční okno ±0,005 a „600,001" by prošlo
+  // jako celokorunová sazba — a vrátilo by se nezaokrouhlené dál do výpočtů.
+  if (!Number.isInteger(cislo)) {
+    return { hodnota: null, chyba: 'Sazba se zadává v celých korunách, bez haléřů.' };
+  }
+  if (cislo > SAZBA_MAX) {
+    // Bez téhle meze by uživatel dostal syrové „numeric field overflow" z Postgresu,
+    // což je přesně ta chyba, které má tahle funkce předcházet.
+    return { hodnota: null, chyba: `Sazba je mimo rozsah (nejvýš ${SAZBA_MAX} Kč).` };
+  }
+  return { hodnota: cislo };
+}

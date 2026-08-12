@@ -112,6 +112,78 @@ Pak je to první věc na řadě a `money.ts` už bude připravené.
 
 ---
 
+## 8. Nálezy bezpečnostní brány u PR A2, které leží mimo jeho rozsah
+
+**Zaevidováno 12. 8. 2026** při Etapě 2 (bezpečnostní brána PR A2). Všechno jsou
+věci **starší než A2** — jen se ukázaly, když se prosvítila peněžní plocha.
+Ověřeno útokem přes PostgREST, ne čtením kódu.
+
+### 8a) Ceník vidí každý přihlášený — v rozporu s rozhodnutím klienta
+
+`GET /rest/v1/settings` jako obyčejný člen vrátí **kompletní ceník** (club 600,
+commercial 1500, training 600, tournament 800). Politika je `settings_select
+USING (true)` (`etapa1_rls.sql:85`) s plným tabulkovým grantem.
+
+Přitom `reservations.rate_per_hour` a `amount` jsou před `authenticated` pečlivě
+schované sloupcovým REVOKE (vrací `403`). Jenže člen vidí `start_at`/`end_at`
+a `subjects.default_rate` svého klubu, takže si částku klubové rezervace
+**dopočítá z ceníku**. Rozhodnutí klienta přitom zní „částku vidí jen admin a autor"
+(CLAUDE.md, feedback z 31. 7. 2026).
+
+**Návrh:** SELECT na `settings` omezit na admina a pro ostatní vystavit view jen
+s `opening_hours` a `email_notifications_enabled` — to je jediné, co kalendář
+(`hoursForDay`) doopravdy potřebuje. **Je to produktové rozhodnutí pro PM**, ne
+technická oprava: mění se, co uživatel vidí.
+
+Souvisí s rozhodnutím R9 v `etapa2-fakturace-plan.md`, které právě kvůli
+`USING (true)` zakazuje dávat fakturační údaje do `public.settings`.
+
+### 8b) `SECURITY DEFINER` RPC prozradí obsah řádku při porušení CHECKu
+
+Uvnitř `SECURITY DEFINER` funkce vlastněné `postgres` není RLS aktivní, takže
+Postgres do chyby doplní `DETAIL: Failing row contains (…)` — a PostgREST ho pošle
+klientovi. U přímého zápisu do tabulky se to nestane (Postgres to při aktivní RLS
+sám potlačí), u RPC ano.
+
+A2 to pro své vlastní constrainty **uzavřela** triggerem `trg_reservations_z_money`,
+který vyhodí srozumitelnou chybu dřív, než CHECK vůbec dostane slovo (ověřeno:
+`details: null`). Ale zbylé constrainty na `reservations` tím chráněné nejsou.
+
+**Návrh:** do `create_booking`, `create_booking_series`, `update_booking`,
+`move_booking` a `cancel_booking` doplnit `EXCEPTION WHEN check_violation` s vlastní
+hláškou, vedle už existujícího handleru na `exclusion_violation`.
+
+### 8c) `reservations_update` nemá v `USING` filtr `deleted_at IS NULL`
+
+Na rozdíl od `reservations_select`. Dnes to nevadí — Postgres na `UPDATE` s podmínkou
+nad sloupci uplatní i SELECT politiku, takže soft-smazané řádky zapisovatelné nejsou
+(ověřeno útokem). Je to ale **ochrana náhodou, ne návrhem**: stačí, aby někdo
+`authenticated` přidal tabulkový `SELECT`, a soft-smazané rezervace se stanou
+zapisovatelnými.
+
+### 8d) `anon` a `authenticated` mají `TRUNCATE` na peněžních tabulkách
+
+`GRANT ALL` zahrnuje `TRUNCATE`, na který se **RLS nevztahuje**. Ověřeno:
+`SET ROLE anon; TRUNCATE public.settings;` projde (v odrolované transakci).
+Přes PostgREST to dosažitelné není (neumí `TRUNCATE` vygenerovat), takže jde
+o obranu do hloubky — ale `audit_log` truncatable rolí `anon` sedí špatně proti
+požadavku „auditovatelnost" a „garance, že se data nesmažou".
+
+**Návrh:** `REVOKE TRUNCATE, DELETE ON settings, subjects, audit_log, reservations
+FROM anon, authenticated;` a `REVOKE ALL ON settings, subjects FROM anon;`
+
+### 8e) Korekce hodin nemá horní mez ani povinný důvod
+
+`corrected_hours = 9999.75` na jednohodinové rezervaci projde — to je faktura
+na šest milionů. `correction_reason` není vynucený žádným constraintem, takže
+korekce může být bez zdůvodnění.
+
+**Kdy to řešit:** jakmile vznikne UI pro korekce (dnes se `corrected_hours`
+z frontendu jen čte). Tehdy tam patří i `parseKorekce` v `money.ts` a
+`CHECK (corrected_hours IS NULL OR correction_reason IS NOT NULL)`.
+
+---
+
 ## Doporučené pořadí oprav (návrh do dalších fází, nezávazné)
 
 1. Doplnit řazení `instructor/bar_staff/manager` do `get_user_role` a highest-role logiky.

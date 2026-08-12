@@ -71,6 +71,24 @@ BEGIN
   RAISE NOTICE 'OK  % (%)', _popis, _a;
 END $$;
 
+-- Očekávaná chyba: tělo musí spadnout a hláška musí obsahovat úryvek.
+-- Stejný pomocník jako v rezervace_test.sql; EXCEPTION blok si udělá savepoint,
+-- takže se vnější transakce po zachycené chybě nerozbije.
+CREATE OR REPLACE FUNCTION pg_temp.ocekavej_chybu(_sql text, _obsahuje text, _popis text) RETURNS void
+ LANGUAGE plpgsql AS $$
+BEGIN
+  BEGIN
+    EXECUTE _sql;
+  EXCEPTION WHEN OTHERS THEN
+    IF position(lower(_obsahuje) in lower(SQLERRM)) = 0 THEN
+      RAISE EXCEPTION 'TEST SELHAL (%): čekal jsem chybu obsahující „%", přišlo: %', _popis, _obsahuje, SQLERRM;
+    END IF;
+    RAISE NOTICE 'OK  %', _popis;
+    RETURN;
+  END;
+  RAISE EXCEPTION 'TEST SELHAL (%): operace měla skončit chybou, ale prošla', _popis;
+END $$;
+
 CREATE OR REPLACE FUNCTION pg_temp.cas(_text text) RETURNS timestamptz
  LANGUAGE sql IMMUTABLE AS $$ SELECT (_text::timestamp) AT TIME ZONE 'Europe/Prague'; $$;
 
@@ -163,8 +181,12 @@ DECLARE
 BEGIN
   PERFORM pg_temp.prihlas('11111111-1111-1111-1111-111111111111');  -- admin
 
+  -- POZOR na vývoj fixtury: dřív tu stála sazba 1 250,50 Kč/h. Od migrace
+  -- 20260812120000 (A2) je celokorunová sazba vynucená CHECKem, takže by takový
+  -- subjekt vůbec nešel založit. Haléře se do součtu dostávají čtvrthodinovou
+  -- korekcí, což je jediná cesta, která po A2 zbyla — a je to zároveň realističtější.
   INSERT INTO public.subjects (type, name, ico, default_rate)
-    VALUES ('club', 'Zaokrouhlovací klub', '00000199', 1250.50)
+    VALUES ('club', 'Zaokrouhlovací klub', '00000199', 1251)
     RETURNING id INTO _subjekt;
 
   -- Tři hodinové rezervace na tři různé dny, ať se nepobijí na dráze.
@@ -175,16 +197,21 @@ BEGIN
          'confirmed'
     FROM generate_series(1, 3) AS d;
 
-  SELECT count(*), sum(amount), sum(round(amount, 0))
+  -- Korekce na čtvrthodinu: 0,25 h × 1 251 Kč = 312,75 Kč na řádek.
+  UPDATE public.reservations
+     SET corrected_hours = 0.25, correction_reason = 'test zaokrouhlení'
+   WHERE subject_id = _subjekt;
+
+  SELECT count(*), sum(corrected_amount), sum(round(corrected_amount, 0))
     INTO _radku, _presny, _po_radcich
     FROM public.reservations WHERE subject_id = _subjekt;
 
   PERFORM pg_temp.rovno(_radku, 3, 'vznikly tři rezervace');
-  PERFORM pg_temp.rovno(_presny, 3751.50, 'přesný součet je 3 751,50 Kč');
-  PERFORM pg_temp.rovno(round(round(_presny, 2), 0), 3752, 'stupňovité zaokrouhlení až u částky k úhradě dá 3 752 Kč');
+  PERFORM pg_temp.rovno(_presny, 938.25, 'přesný součet je 938,25 Kč');
+  PERFORM pg_temp.rovno(round(round(_presny, 2), 0), 938, 'stupňovité zaokrouhlení až u částky k úhradě dá 938 Kč');
 
   -- A takhle vypadala chyba: zaokrouhlit každý řádek zvlášť a pak teprve sečíst.
-  PERFORM pg_temp.rovno(_po_radcich, 3753, 'sečtené zaokrouhlené řádky dají 3 753 Kč — nález N2');
+  PERFORM pg_temp.rovno(_po_radcich, 939, 'sečtené zaokrouhlené řádky dají 939 Kč — nález N2');
   PERFORM pg_temp.tvrd(round(round(_presny, 2), 0) <> _po_radcich,
     'obě politiky se opravdu liší (jinak by test nic nehlídal)');
 END $$;
@@ -193,6 +220,11 @@ END $$;
 -- 4) Nález N3: sazba se BERE, nedopočítává
 --    Dopočet `částka / hodiny` a jeho tisk na celé koruny dal řádek
 --    „Sazba 1 251 Kč × 2 h = 2 501 Kč", který si neodpovídá sám se sebou.
+--
+--    Po migraci A2 (celokorunové sazby) je tenhle nález z REÁLNÝCH DAT
+--    nedosažitelný — proto se dělí na dvě části: aritmetika na literálech drží
+--    důvod, proč pravidlo existuje, a část (b) ověřuje, že constraint tu třídu
+--    chyby opravdu odřízl.
 -- -----------------------------------------------------------------------------
 DO $$
 DECLARE
@@ -202,10 +234,17 @@ DECLARE
   _hodiny    numeric;
   _castka    numeric;
 BEGIN
+  -- (a) Proč pravidlo vzniklo — na literálech, ne na datech.
+  --     Sazba 1 250,50 Kč/h × 2 h = 2 501 Kč. Dopočtená a zaokrouhlená sazba
+  --     (2 501 / 2 = 1 250,50 → tisklo se 1 251) po vynásobení dvěma dá 2 502.
+  PERFORM pg_temp.rovno(round(2501.00 / 2, 0) * 2, 2502,
+    'dopočtená a zaokrouhlená sazba by dala 2 502 Kč místo 2 501 — nález N3');
+
   PERFORM pg_temp.prihlas('11111111-1111-1111-1111-111111111111');
 
+  -- (b) Táž situace z reálných dat po A2. Sazba musí být celokorunová.
   INSERT INTO public.subjects (type, name, ico, default_rate)
-    VALUES ('club', 'Klub s haléři', '00000198', 1250.50)
+    VALUES ('club', 'Klub s haléři', '00000198', 1251)
     RETURNING id INTO _subjekt;
 
   INSERT INTO public.reservations (sheet_id, subject_id, start_at, end_at, status)
@@ -216,28 +255,148 @@ BEGIN
   SELECT rate_per_hour, hours, amount INTO _sazba, _hodiny, _castka
     FROM public.reservations WHERE id = _rezervace;
 
-  PERFORM pg_temp.rovno(_sazba, 1250.50, 'snapshot sazby je 1 250,50 Kč/h');
+  PERFORM pg_temp.rovno(_sazba, 1251, 'snapshot sazby je 1 251 Kč/h');
   PERFORM pg_temp.rovno(_hodiny, 2, 'rezervace má 2 hodiny');
-  PERFORM pg_temp.rovno(_castka, 2501.00, 'částka je 2 501 Kč');
+  PERFORM pg_temp.rovno(_castka, 2502.00, 'částka je 2 502 Kč');
 
   -- Tisknutá sazba × tisknuté hodiny musí dát tisknutou částku.
   PERFORM pg_temp.rovno(round(_sazba * _hodiny, 2), _castka,
     'sazba × hodiny === částka (tištěný řádek sedí sám se sebou)');
 
-  -- Kdežto dopočtená a zaokrouhlená sazba dá o korunu jinak — to je N3.
-  PERFORM pg_temp.rovno(round(_castka / _hodiny, 0) * _hodiny, 2502,
-    'dopočtená sazba by dala 2 502 Kč — nález N3');
-
-  -- Po ruční korekci hodin musí sazba pořád sedět (proto ji smí Dues.tsx brát).
+  -- Po ruční korekci na čtvrthodinu musí sazba pořád sedět.
   UPDATE public.reservations
-     SET corrected_hours = 1.5, correction_reason = 'test zaokrouhlení'
+     SET corrected_hours = 1.25, correction_reason = 'test zaokrouhlení'
    WHERE id = _rezervace;
 
   SELECT corrected_amount, rate_per_hour INTO _castka, _sazba
     FROM public.reservations WHERE id = _rezervace;
-  PERFORM pg_temp.rovno(_castka, 1875.75, 'po korekci na 1,5 h je částka 1 875,75 Kč');
-  PERFORM pg_temp.rovno(round(1.5 * _sazba, 2), _castka,
+  PERFORM pg_temp.rovno(_castka, 1563.75, 'po korekci na 1,25 h je částka 1 563,75 Kč');
+  PERFORM pg_temp.rovno(round(1.25 * _sazba, 2), _castka,
     'sazba sedí i po korekci — dopočet z částky není potřeba');
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 4b) A2 odřízla celou třídu chyby N3
+--     Při celokorunové sazbě a čtvrthodinách je `hodiny × sazba` PŘESNÝ součin,
+--     takže dopočet `částka / hodiny` vrátí přesně `rate_per_hour`. Není to už
+--     jen opravené v zobrazovacím kódu — z dat to nejde vyrobit.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _rozpory int; _zkoumanych int;
+BEGIN
+  SELECT count(*) FILTER (WHERE round(COALESCE(r.corrected_amount, r.amount) / COALESCE(r.corrected_hours, r.hours), 2)
+                                IS DISTINCT FROM r.rate_per_hour),
+         count(*)
+    INTO _rozpory, _zkoumanych
+    FROM public.reservations r
+   WHERE r.rate_per_hour IS NOT NULL
+     AND r.deleted_at IS NULL
+     AND COALESCE(r.corrected_hours, r.hours) > 0;
+
+  -- Bez tohohle tvrzení by test prošel i tehdy, kdyby se nepodíval na jediný
+  -- řádek — a „nic jsem nenašel" by vypadalo jako „všechno je v pořádku".
+  PERFORM pg_temp.tvrd(_zkoumanych > 0,
+    format('je co zkoumat: %s rezervací se sazbou', _zkoumanych));
+  PERFORM pg_temp.tvrd(_rozpory = 0,
+    format('dopočet částka/hodiny vrací přesně rate_per_hour u všech rezervací (rozporů: %s)', _rozpory));
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 4c) CHECKy z migrace A2 opravdu drží
+-- -----------------------------------------------------------------------------
+DO $$
+BEGIN
+  PERFORM pg_temp.prihlas('11111111-1111-1111-1111-111111111111');
+
+  PERFORM pg_temp.ocekavej_chybu(
+    $q$INSERT INTO public.subjects (type, name, ico, default_rate)
+       VALUES ('club', 'Sazba s haléři', '00000197', 1250.50)$q$,
+    'subjects_default_rate_cele_koruny', 'sazba subjektu s haléři je odmítnuta');
+
+  PERFORM pg_temp.ocekavej_chybu(
+    $q$UPDATE public.settings SET club_default_rate = 600.50$q$,
+    'settings_club_rate_cele_koruny', 'ceník s haléři je odmítnut (hláška ukáže na konkrétní sloupec)');
+
+  -- U rezervací mluví dřív trigger (viz 4d), takže se tady ověřuje ZÁRUKA:
+  -- že constrainty existují a že drží i bez triggeru. Trigger je jen hlas,
+  -- constraint je zámek — a test musí umět rozeznat, který z nich zabral.
+  PERFORM pg_temp.tvrd(
+    (SELECT count(*) FROM pg_constraint WHERE conname IN (
+       'reservations_corrected_hours_nezaporne', 'reservations_corrected_hours_ctvrthodiny',
+       'reservations_rate_per_hour_cele_koruny', 'subjects_default_rate_cele_koruny',
+       'settings_club_rate_cele_koruny', 'settings_commercial_rate_cele_koruny',
+       'settings_tournament_rate_cele_koruny', 'settings_training_rate_cele_koruny')) = 8,
+    'všech 8 CHECK constraintů z A2 je na místě');
+
+  -- Vypneme hlas a ověříme, že zámek drží sám o sobě.
+  ALTER TABLE public.reservations DISABLE TRIGGER trg_reservations_z_money;
+
+  PERFORM pg_temp.ocekavej_chybu(
+    $q$UPDATE public.reservations SET corrected_hours = -1, correction_reason = 'x'
+        WHERE id = (SELECT id FROM public.reservations WHERE deleted_at IS NULL ORDER BY id LIMIT 1)$q$,
+    'reservations_corrected_hours_nezaporne', 'bez triggeru drží CHECK: záporná korekce');
+
+  PERFORM pg_temp.ocekavej_chybu(
+    $q$UPDATE public.reservations SET corrected_hours = 1.1, correction_reason = 'x'
+        WHERE id = (SELECT id FROM public.reservations WHERE deleted_at IS NULL ORDER BY id LIMIT 1)$q$,
+    'reservations_corrected_hours_ctvrthodiny', 'bez triggeru drží CHECK: korekce mimo čtvrthodiny');
+
+  PERFORM pg_temp.ocekavej_chybu(
+    $q$UPDATE public.reservations SET rate_per_hour = 1250.50
+        WHERE id = (SELECT id FROM public.reservations WHERE deleted_at IS NULL ORDER BY id LIMIT 1)$q$,
+    'reservations_rate_per_hour_cele_koruny', 'bez triggeru drží CHECK: sazba s haléři');
+
+  ALTER TABLE public.reservations ENABLE TRIGGER trg_reservations_z_money;
+
+  -- Nula constraintem projde (viz komentář v migraci — není to promyšlená funkce
+  -- „zdarma", jen tvar podmínky; formuláře ji nepouštějí).
+  --
+  -- Schválně se to NEOVĚŘUJE na `settings`. Ta je singleton a UPDATE nad ní by
+  -- ve scénáři, před kterým varuje hlavička souboru (někdo zkopíruje DO blok do
+  -- Studia a dostane autocommit), tiše přepsal ceník — všechna tvrzení by hlásila
+  -- OK a cena ledu by byla jiná. Odhoditelný subjekt má týž constraint a po
+  -- zneužití po sobě nechá viditelný nepořádek, ne změněnou cenu.
+  DECLARE _zdarma uuid;
+  BEGIN
+    INSERT INTO public.subjects (type, name, ico, default_rate)
+      VALUES ('club', 'Klub zdarma', '00000196', 0)
+      RETURNING id INTO _zdarma;
+    PERFORM pg_temp.tvrd(
+      (SELECT default_rate FROM public.subjects WHERE id = _zdarma) = 0,
+      'nulová sazba projde constraintem (databáze je podlaha, ne strop)');
+  END;
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 4d) Srozumitelná hláška místo syrového CHECKu
+--     Trigger trg_reservations_z_money musí promluvit dřív než constraint —
+--     jinak dostane admin volající RPC hlášku v jazyce Postgresu, a s ní
+--     (uvnitř SECURITY DEFINER funkce, kde neplatí RLS) i celý obsah řádku
+--     včetně sazby a částky.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _r uuid;
+BEGIN
+  PERFORM pg_temp.prihlas('11111111-1111-1111-1111-111111111111');
+  SELECT id INTO _r FROM public.reservations WHERE deleted_at IS NULL ORDER BY id LIMIT 1;
+
+  PERFORM pg_temp.ocekavej_chybu(
+    format('UPDATE public.reservations SET rate_per_hour = 1250.50 WHERE id = %L', _r),
+    'v celých korunách', 'sazba s haléři: česká hláška, ne jméno constraintu');
+
+  PERFORM pg_temp.ocekavej_chybu(
+    format('UPDATE public.reservations SET rate_per_hour = -5 WHERE id = %L', _r),
+    'nesmí být záporná', 'záporná sazba: česká hláška');
+
+  PERFORM pg_temp.ocekavej_chybu(
+    format('UPDATE public.reservations SET corrected_hours = 1.1, correction_reason = %L WHERE id = %L', 'x', _r),
+    'po čtvrthodinách', 'korekce mimo čtvrthodiny: česká hláška');
+
+  -- A hlavně: hláška nesmí obsahovat výpis řádku, kterým Postgres doprovází
+  -- porušení CHECKu („Failing row contains …“).
+  PERFORM pg_temp.ocekavej_chybu(
+    format('UPDATE public.reservations SET rate_per_hour = 1250.50 WHERE id = %L', _r),
+    'Kč/h', 'hláška uvádí jen zadanou hodnotu, ne celý řádek');
 END $$;
 
 -- -----------------------------------------------------------------------------

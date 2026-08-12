@@ -18,5 +18,10 @@
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["vite.config.ts"]
+  // Pozor: co tu není, to `npm run typecheck` NEZKONTROLUJE. Dřív tu byl jen
+  // vite.config.ts, takže se netypoval ani scripts/overit-zaokrouhleni.ts —
+  // a to je důkazní základna rozhodnutí R3, která importuje ze src/lib/money.
+  // Změna signatury v money.ts by tedy prošla zeleným typecheckem a skript by
+  // se rozbil až za běhu.
+  "include": ["vite.config.ts", "vitest.config.ts", "tailwind.config.ts", "scripts/**/*.ts"]
 }

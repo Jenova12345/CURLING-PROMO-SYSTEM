@@ -20,6 +20,7 @@ import {
 import { useToast } from '@/components/ui/use-toast';
 import { sanitizeText, VALIDATION_LIMITS } from '@/lib/validation';
 import { hoursForDay } from '@/lib/openingHours';
+import { parseSazba } from '@/lib/money';
 import type {
   Sheet, Subject, Settings, CalendarReservation, BookingKind, Conflict,
   BookingInput, SeriesInput, Membership,
@@ -235,7 +236,10 @@ export function ReservationDialog({
     }));
   };
 
-  const rateNum = rate.trim() ? Number(rate.replace(',', '.')) : undefined;
+  // Jedna politika sazeb pro celou appku (viz src/lib/money.ts) — prázdné pole
+  // znamená „z ceníku", ne chybu.
+  const sazba = parseSazba(rate);
+  const rateNum = sazba.hodnota != null ? sazba.hodnota : undefined;
   const busy = api.isCreating || api.isUpdating || aresLoading;
   const needsSubject = kind !== 'maintenance';
   const startOptions = Array.from({ length: Math.max(closeHour - openHour, 1) }, (_, i) => openHour + i);
@@ -297,8 +301,8 @@ export function ReservationDialog({
     if (!title.trim()) return 'Vyplňte název akce.';
     if (needsSubject && !subjectId) return kind === 'commercial' ? 'Vyberte firmu.' : 'Vyberte klub.';
     if (kind === 'commercial' && (roleCounts.instructor ?? 0) < 1) return 'Komerční akce potřebuje aspoň jednoho instruktora.';
-    if (isAdmin && kind !== 'maintenance' && rate.trim() && (rateNum === undefined || isNaN(rateNum) || rateNum <= 0)) {
-      return 'Sazba musí být kladné číslo (nebo prázdná = z ceníku).';
+    if (isAdmin && kind !== 'maintenance' && sazba.chyba) {
+      return `${sazba.chyba} Prázdné pole znamená sazbu z ceníku.`;
     }
     if (repeat) {
       if (!weekdays.length) return 'Vyberte dny v týdnu, kdy se má opakovat.';
@@ -319,7 +323,7 @@ export function ReservationDialog({
     role_reqs: kind === 'commercial'
       ? Object.fromEntries(Object.entries(roleCounts).filter(([, c]) => c > 0))
       : {},
-    rate_per_hour: isAdmin && rateNum !== undefined && !isNaN(rateNum) ? rateNum : null,
+    rate_per_hour: isAdmin && rateNum !== undefined ? rateNum : null,
   });
 
   const submitBooking = async (override: boolean) => {
@@ -370,7 +374,7 @@ export function ReservationDialog({
           title: sanitizeText(title),
           // prázdný řetězec = „smaž poznámku" (null by znamenalo „neměň")
           note: note ? sanitizeText(note) : '',
-          rate_per_hour: isAdmin && rateNum !== undefined && !isNaN(rateNum) ? rateNum : undefined,
+          rate_per_hour: isAdmin && rateNum !== undefined ? rateNum : undefined,
         });
         toast({ title: 'Rezervace upravena' });
         onOpenChange(false);

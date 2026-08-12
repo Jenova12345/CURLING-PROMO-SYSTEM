@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  SAZBA_MAX,
   fmtHodin,
   fmtKc,
   fmtSazba,
   fromHal,
+  parseSazba,
   roundCzk,
   roundingDiff,
   sumHodin,
@@ -21,8 +23,12 @@ import {
 // potřeba držet testem; křížové ověření proti živému Postgresu dělá A1b
 // (supabase/tests/zaokrouhleni_test.sql).
 
-/** Odstraní nedělitelné mezery, ať test nezávisí na tom, čím Node oddělí tisíce. */
-const norm = (s: string) => s.replace(/ /g, ' ');
+/**
+ * Odstraní nedělitelné mezery, ať test nezávisí na tom, čím Node oddělí tisíce.
+ * Zapsáno escapem `\u00a0`, ne doslovným znakem — neviditelná mezera v kódu je
+ * past pro čtenáře i pro eslint (`no-irregular-whitespace`).
+ */
+const norm = (s: string) => s.replace(/\u00a0/g, ' ');
 
 describe('toSetiny — převod na haléře', () => {
   it('zaokrouhluje půlku nahoru v absolutní hodnotě, ne k +∞', () => {
@@ -406,5 +412,115 @@ describe('kontrolní součet od konce', () => {
       nejvetsi = Math.max(nejvetsi, Math.abs(roundCzk(v) - v));
     }
     expect(Number(nejvetsi.toFixed(3))).toBe(0.505);
+  });
+});
+
+describe('parseSazba — sazba z formulářového pole', () => {
+  it('prázdné pole je platný vstup, ne chyba', () => {
+    // Znamená „nemá vlastní sazbu, vezmi z ceníku". Kdyby to byla chyba,
+    // nešlo by sazbu subjektu zrušit.
+    expect(parseSazba('')).toEqual({ hodnota: null });
+    expect(parseSazba('   ')).toEqual({ hodnota: null });
+  });
+
+  it('vezme celé koruny', () => {
+    expect(parseSazba('600')).toEqual({ hodnota: 600 });
+    expect(parseSazba(' 1500 ')).toEqual({ hodnota: 1500 });
+    expect(parseSazba('1250,00')).toEqual({ hodnota: 1250 });
+    expect(parseSazba('1250.00')).toEqual({ hodnota: 1250 });
+  });
+
+  it('bere čárku i tečku', () => {
+    // Na české klávesnici padne na desetinnou čárku každý.
+    expect(parseSazba('1250,50').chyba).toBeTruthy();
+    expect(parseSazba('1250.50').chyba).toBeTruthy();
+    expect(parseSazba('1250,50').chyba).toBe(parseSazba('1250.50').chyba);
+  });
+
+  it('odmítne haléře — to je celé A2 „navíc u zdroje"', () => {
+    // Při celokorunové sazbě a čtvrthodinách je hodiny × sazba přesný součin,
+    // takže zaokrouhlení nemá co řešit a nález N3 je nedosažitelný.
+    for (const vstup of ['1250,50', '600.01', '0,5', '999,99']) {
+      expect(parseSazba(vstup).chyba).toBe('Sazba se zadává v celých korunách, bez haléřů.');
+      expect(parseSazba(vstup).hodnota).toBeNull();
+    }
+  });
+
+  it('odmítne nečíslo a nekladné hodnoty', () => {
+    expect(parseSazba('abc').chyba).toBeTruthy();
+    expect(parseSazba('0').chyba).toBe('Sazba musí být kladná.');
+    expect(parseSazba('-600').chyba).toBe('Sazba musí být kladná.');
+    expect(parseSazba('Infinity').chyba).toBeTruthy();
+    expect(parseSazba('NaN').chyba).toBeTruthy();
+  });
+
+  it('nenechá se zmást tím, co Number() bere navíc', () => {
+    // Number('0x10') je 16 a Number('1e3') je 1000 — jako sazba by to prošlo
+    // a nikdo by to nečekal. Proto vlastní tvar místo holého Number().
+    expect(parseSazba('0x10').chyba).toBeTruthy();
+    expect(parseSazba('1e3').chyba).toBeTruthy();
+    expect(parseSazba('0b1010').chyba).toBeTruthy();
+    expect(parseSazba('  ').hodnota).toBeNull();
+  });
+
+  it('poradí adminovi, který si sazbu zkopíroval z appky', () => {
+    // fmtKc tiskne „1 250 Kč" s úzkou nezlomitelnou mezerou, takže vložit
+    // oddělovač tisíců je snadný omyl. Hláška to musí říct rovnou.
+    for (const vstup of ['1 250', '1\u00a0250', '1.250,00', '1 250,50']) {
+      expect(parseSazba(vstup).chyba).toBeTruthy();
+    }
+    expect(parseSazba('1 250').chyba).toContain('oddělovač');
+  });
+
+  it('odmítne hodnotu, kterou by databáze neuložila', () => {
+    // Sloupce jsou numeric(10,2). Bez téhle meze by uživatel dostal syrové
+    // „numeric field overflow" — přesně tu chybu, které má validace předcházet.
+    expect(parseSazba(String(SAZBA_MAX)).hodnota).toBe(SAZBA_MAX);
+    expect(parseSazba(String(SAZBA_MAX + 1)).chyba).toContain('mimo rozsah');
+    expect(parseSazba('100000000').chyba).toContain('mimo rozsah');
+  });
+
+  it('nepustí sub-haléřové hodnoty jako „celé koruny"', () => {
+    // Kdyby se celokorunovost testovala přes toSetiny(x) % 100, zaokrouhlilo by
+    // se dřív než rozhodlo — a kolem každé koruny by zůstalo okno ±0,005.
+    for (const vstup of ['600.001', '1250,004', '600.0049']) {
+      expect(parseSazba(vstup).chyba).toBe('Sazba se zadává v celých korunách, bez haléřů.');
+      expect(parseSazba(vstup).hodnota).toBeNull();
+    }
+  });
+
+  it('při chybě nikdy nevrátí hodnotu k uložení', () => {
+    // Aby volající, který zapomene chybu ošetřit, neuložil nesmysl.
+    for (const vstup of ['abc', '0', '-1', '1250,50', 'NaN']) {
+      expect(parseSazba(vstup).hodnota).toBeNull();
+    }
+  });
+
+  it('SMLOUVA: co projde validací, uloží databáze beze změny', () => {
+    // Vlastnostní test, ne pár ukázek: přes široký vzorek různých tvarů vstupu
+    // musí platit, že bez `chyba` je hodnota celé kladné číslo v rozsahu
+    // numeric(10,2). Zrcadlí CHECK `settings_sazby_cele_koruny` a spol.
+    const vstupy: string[] = [];
+    for (let i = 0; i < 400; i++) {
+      vstupy.push(String(i), `${i},00`, `${i}.5`, `${i},001`, `${i}e2`, ` ${i} `, `-${i}`);
+    }
+    vstupy.push('', '   ', 'abc', '0x10', '1 250', String(SAZBA_MAX), String(SAZBA_MAX + 1));
+
+    let prijatych = 0;
+    for (const vstup of vstupy) {
+      const v = parseSazba(vstup);
+      if (v.chyba) {
+        // Při chybě se nikdy nesmí vrátit hodnota k uložení.
+        expect(v.hodnota).toBeNull();
+        continue;
+      }
+      if (v.hodnota === null) continue; // prázdné pole = „z ceníku"
+      prijatych++;
+      expect(Number.isInteger(v.hodnota)).toBe(true);
+      expect(v.hodnota).toBeGreaterThan(0);
+      expect(v.hodnota).toBeLessThanOrEqual(SAZBA_MAX);
+      expect(v.hodnota).toBe(roundCzk(v.hodnota));
+    }
+    expect(prijatych).toBeGreaterThan(0); // ať test neprojde naprázdno
   });
 });
