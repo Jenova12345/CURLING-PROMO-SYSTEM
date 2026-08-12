@@ -171,6 +171,13 @@ export type Database = {
             referencedColumns: ["user_id"]
           },
           {
+            foreignKeyName: "billing_settings_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+          {
             foreignKeyName: "billing_settings_updated_by_fkey"
             columns: ["updated_by"]
             isOneToOne: false
@@ -182,6 +189,13 @@ export type Database = {
             columns: ["updated_by"]
             isOneToOne: false
             referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "billing_settings_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
             referencedColumns: ["user_id"]
           },
         ]
@@ -287,6 +301,13 @@ export type Database = {
             referencedRelation: "profiles_public"
             referencedColumns: ["user_id"]
           },
+          {
+            foreignKeyName: "email_outbox_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
         ]
       }
       events: {
@@ -387,6 +408,13 @@ export type Database = {
             referencedColumns: ["user_id"]
           },
           {
+            foreignKeyName: "notifications_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+          {
             foreignKeyName: "notifications_reservation_id_fkey"
             columns: ["reservation_id"]
             isOneToOne: false
@@ -435,6 +463,13 @@ export type Database = {
             referencedRelation: "profiles_public"
             referencedColumns: ["user_id"]
           },
+          {
+            foreignKeyName: "notifications_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
         ]
       }
       payouts: {
@@ -481,6 +516,13 @@ export type Database = {
             referencedColumns: ["user_id"]
           },
           {
+            foreignKeyName: "payouts_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+          {
             foreignKeyName: "payouts_user_id_fkey"
             columns: ["user_id"]
             isOneToOne: false
@@ -492,6 +534,13 @@ export type Database = {
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "payouts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
             referencedColumns: ["user_id"]
           },
         ]
@@ -624,6 +673,13 @@ export type Database = {
             referencedColumns: ["user_id"]
           },
           {
+            foreignKeyName: "reservations_approved_by_fkey"
+            columns: ["approved_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+          {
             foreignKeyName: "reservations_cancelled_by_fkey"
             columns: ["cancelled_by"]
             isOneToOne: false
@@ -638,6 +694,13 @@ export type Database = {
             referencedColumns: ["user_id"]
           },
           {
+            foreignKeyName: "reservations_cancelled_by_fkey"
+            columns: ["cancelled_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+          {
             foreignKeyName: "reservations_created_by_fkey"
             columns: ["created_by"]
             isOneToOne: false
@@ -649,6 +712,13 @@ export type Database = {
             columns: ["created_by"]
             isOneToOne: false
             referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "reservations_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
             referencedColumns: ["user_id"]
           },
           {
@@ -691,6 +761,13 @@ export type Database = {
             columns: ["updated_by"]
             isOneToOne: false
             referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "reservations_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
             referencedColumns: ["user_id"]
           },
         ]
@@ -745,6 +822,13 @@ export type Database = {
             columns: ["updated_by"]
             isOneToOne: false
             referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "settings_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
             referencedColumns: ["user_id"]
           },
         ]
@@ -873,6 +957,13 @@ export type Database = {
             referencedColumns: ["user_id"]
           },
           {
+            foreignKeyName: "shifts_cancelled_by_fkey"
+            columns: ["cancelled_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+          {
             foreignKeyName: "shifts_event_id_fkey"
             columns: ["event_id"]
             isOneToOne: false
@@ -929,6 +1020,13 @@ export type Database = {
             referencedColumns: ["user_id"]
           },
           {
+            foreignKeyName: "subject_reps_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+          {
             foreignKeyName: "subject_reps_subject_id_fkey"
             columns: ["subject_id"]
             isOneToOne: false
@@ -954,6 +1052,13 @@ export type Database = {
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "subject_reps_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
             referencedColumns: ["user_id"]
           },
         ]
@@ -1017,6 +1122,13 @@ export type Database = {
             referencedColumns: ["user_id"]
           },
           {
+            foreignKeyName: "subjects_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+          {
             foreignKeyName: "subjects_updated_by_fkey"
             columns: ["updated_by"]
             isOneToOne: false
@@ -1028,6 +1140,13 @@ export type Database = {
             columns: ["updated_by"]
             isOneToOne: false
             referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "subjects_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
             referencedColumns: ["user_id"]
           },
         ]
@@ -1085,6 +1204,39 @@ export type Database = {
         }
         Relationships: []
       }
+      profiles_self: {
+        Row: {
+          bank_account: string | null
+          created_at: string | null
+          full_name: string | null
+          id: string | null
+          je_muj: boolean | null
+          phone: string | null
+          updated_at: string | null
+          user_id: string | null
+        }
+        Insert: {
+          bank_account?: never
+          created_at?: string | null
+          full_name?: string | null
+          id?: string | null
+          je_muj?: never
+          phone?: never
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          bank_account?: never
+          created_at?: string | null
+          full_name?: string | null
+          id?: string | null
+          je_muj?: never
+          phone?: never
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       reservations_billing: {
         Row: {
           amount: number | null
@@ -1120,6 +1272,13 @@ export type Database = {
             columns: ["created_by"]
             isOneToOne: false
             referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "reservations_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
             referencedColumns: ["user_id"]
           },
           {
@@ -1193,6 +1352,13 @@ export type Database = {
             referencedColumns: ["user_id"]
           },
           {
+            foreignKeyName: "reservations_cancelled_by_fkey"
+            columns: ["cancelled_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+          {
             foreignKeyName: "reservations_created_by_fkey"
             columns: ["created_by"]
             isOneToOne: false
@@ -1204,6 +1370,13 @@ export type Database = {
             columns: ["created_by"]
             isOneToOne: false
             referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "reservations_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
             referencedColumns: ["user_id"]
           },
           {
@@ -1289,6 +1462,13 @@ export type Database = {
             columns: ["updated_by"]
             isOneToOne: false
             referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "settings_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
             referencedColumns: ["user_id"]
           },
         ]
@@ -1398,6 +1578,7 @@ export type Database = {
         }
         Returns: boolean
       }
+      iban_je_platny: { Args: { _iban: string }; Returns: boolean }
       is_subject_member: { Args: { _subject: string }; Returns: boolean }
       is_subject_rep: { Args: { _subject: string }; Returns: boolean }
       move_booking: {

@@ -69,7 +69,10 @@ const Members = () => {
     queryKey: ['members'],
     queryFn: async () => {
       const { data: profiles, error: profilesError } = await supabase
-        .from('profiles')
+        // Pohled místo tabulky (A5). Admin v něm vidí telefony i účty všech,
+        // neadmin dostane u cizích profilů null — a tahle stránka je stejně
+        // jen pro personál, takže se tím nic legitimního neztrácí.
+        .from('profiles_self')
         .select('*')
         .order('created_at', { ascending: false });
 

@@ -59,7 +59,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       // Fetch profile
       const { data: profileData, error: profileError } = await supabase
-        .from('profiles')
+      // Čte se z pohledu, ne z tabulky: telefon a bankovní účet jsou po A5
+      // v `profiles` nečitelné napřímo a pohled je vydá jen vlastníkovi
+      // a adminovi. Zápis dál míří na tabulku, kde ho hlídá RLS.
+        .from('profiles_self')
         .select('*')
         .eq('user_id', userId)
         .single();

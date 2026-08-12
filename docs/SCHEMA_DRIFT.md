@@ -118,10 +118,11 @@ Pak je to první věc na řadě a `money.ts` už bude připravené.
 věci **starší než A2** — jen se ukázaly, když se prosvítila peněžní plocha.
 Ověřeno útokem přes PostgREST, ne čtením kódu.
 
-> **TOHLE NENÍ ODLOŽENÝ SEZNAM.** Rozhodnutí PM z 12. 8. 2026: body 8b–8e se řeší
-> v **PR A5 (security hardening)**, který musí být hotový **dřív, než fáze B sáhne
-> na peněžní tabulky**. Jakmile A5 projde bránami, tyhle body odsud zmizí — nemají
-> tu zůstat ležet. Bod 8a je vyřešený v A2b.
+> **VYŘEŠENO.** Body 8b–8f uzavřel **PR A5** (migrace `20260812200000_security_hardening.sql`),
+> hlídá je `supabase/tests/security_hardening_test.sql`. Kapitola zůstává jako záznam
+> toho, co bylo špatně a proč — ne jako seznam úkolů. Bod 8a vyřešila A2b.
+>
+> Dvě věci, které A5 odhalila a NEuzavřela, jsou zapsané níž jako **8g** a **8h**.
 
 ### 8a) ~~Ceník vidí každý přihlášený~~ — VYŘEŠENO v PR A2b (12. 8. 2026)
 
@@ -229,6 +230,37 @@ korekce může být bez zdůvodnění.
   kdo co a proč zadával".
 Až vznikne UI pro korekce, přidat i `parseKorekce` v `money.ts` (dnes se
 `corrected_hours` z frontendu jen čte).
+
+### 8g) `rate_per_hour` nemá horní mez · **rozhodnutí pro PM**
+
+**Zaevidováno 12. 8. 2026** (bezpečnostní brána A5).
+
+A5 dala `corrected_hours` tvrdý strop 24 h, aby z překlepu „9999" byl okamžitý blok.
+Druhý činitel v součinu ale zábranu nemá žádnou — ověřeno:
+
+```
+UPDATE reservations SET rate_per_hour = 99999999;
+→ amount 99999999.00 | corrected_amount 299999997.00
+```
+
+`hours` ohlídané je (`validate_reservation_slot`: celé hodiny, jeden den, otevírací
+doba → nejvýš ~15 h), takže **`rate_per_hour` je jediný neomezený peněžní vstup
+v systému**. Překlep o řád v sazbě udělá tutéž fakturu na miliony jako překlep
+v korekci, který A5 zavřela.
+
+**Proč to A5 neudělala sama:** hodnota stropu je produktové rozhodnutí, ne technikálie —
+stejně jako u korekce, kde ho určil PM. Vzor je připravený (CHECK + srozumitelná
+hláška v `check_reservation_money`), chybí jen číslo. Sazby jsou dnes 600–1500 Kč/h.
+
+### 8h) Výchozí práva `supabase_admin` migrace nezmění · **na vědomí**
+
+A5 odebrala `TRUNCATE` plošně a upravila výchozí práva role `postgres`, takže nová
+tabulka založená migrací ho nedostane. Supabase má ale ještě výchozí práva role
+`supabase_admin`, na která `ALTER DEFAULT PRIVILEGES` z migrace nedosáhne (na
+hostované instanci není `postgres` superuser). Uplatní se jen na tabulky vytvořené
+`supabase_admin` — tenhle projekt je tak nevytváří (všech 16 tabulek vlastní
+`postgres`), ale kdyby někdo založil tabulku přes Studio, dostane `TRUNCATE` pro
+`anon`. Hlídá to test v `security_hardening_test.sql`.
 
 ---
 
