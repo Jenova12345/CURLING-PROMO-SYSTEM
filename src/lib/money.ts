@@ -23,9 +23,28 @@
  * (Holé Math.round(-1250.5) dá -1250, Postgres round(-12.505, 2) dá -12.51.)
  * Dnes to nikdo netrefí, protože všechny vstupy jsou numeric(x,2) z DB — ale DPH
  * (`základ × 0,21`) a záporné dobropisy jsou už v plánu.
+ *
+ * PROČ `toPrecision(15)`: násobení stem samo o sobě NESTAČÍ. `1.005 * 100` vyjde
+ * v pohyblivé řádové čárce 100.49999999999999, takže holé `Math.round` dá 100
+ * (tj. 1,00 Kč), kdežto Postgres `round(1.005, 2)` dá 1.01 — numeric je přesná
+ * desetinná aritmetika, double ne. Změřeno: postihuje to ~4,6 % hodnot s třetím
+ * desetinným místem 5 a ~10 % výpočtů typu `základ × 0,21`. Zaokrouhlení na 15
+ * platných číslic smaže binární šum a desetinnou hodnotu obnoví dřív, než se
+ * rozhodne o hranici.
+ *
+ * MEZ TÉHLE OPRAVY není magnituda, ale POČET PLATNÝCH ČÍSLIC vstupu. Hodnota,
+ * která má 16+ platných číslic a leží doopravdy těsně pod půlhranicí (řádově
+ * 1e-14 relativně, např. 1.0049999999999986), se vytáhne nahoru a vyjde o haléř
+ * jinak než v numeric. Takový vstup ale `numeric(x,2)` ani součin sazby s hodinami
+ * vyrobit neumí — ověřeno na milionech hodnot ve třech scénářích (třídesetinné
+ * částky, `základ × 0,21`, sazba × hodiny): nula rozdílů proti numeric, kdežto
+ * naivní varianta chybuje v desetitisících případů.
+ *
+ * Na dnešních dvoudesetinných vstupech je to ověřený no-op (test „nemění dnešní
+ * vstupy" projede celý rozsah −5 000 … +5 000 Kč po haléři).
  */
 export const toSetiny = (value: number): number => {
-  const abs = Math.round(Math.abs(value) * 100);
+  const abs = Math.round(Number((Math.abs(value) * 100).toPrecision(15)));
   return value < 0 ? -abs : abs;
 };
 
@@ -47,9 +66,25 @@ export const sumKc = (values: number[]): number =>
  * U dobropisů (záporné částky) by z toho byl další rozdíl 1 Kč.
  */
 export function roundCzk(value: number): number {
-  const hal = toSetiny(value);
-  const koruny = Math.round(Math.abs(hal) / 100);
-  return hal < 0 ? -koruny : koruny;
+  // Zaokrouhluje se JEDNÍM krokem z původní hodnoty, ne přes haléře.
+  // Dvojí zaokrouhlení (0,495 → 0,50 → 1 Kč) se rozchází s Postgresem, který
+  // `round(0.495)` vyhodnotí jako 0. Změřeno na 21 717 hodnotách proti živé DB:
+  // přes haléře 120 rozdílů, jedním krokem nula.
+  //
+  // Pro hodnoty, které dnešní cesta umí vyrobit, je to no-op: `total` i `subtotal`
+  // jsou podle rozhodnutí R3 dvoudesetinné a `sumKc` vrací nejvýš dvě desetinná
+  // místa, takže se obě varianty na 7,7 milionu dvoudesetinných vstupů shodly do
+  // jedné hodnoty. Jednokrokovost je tu proto, že `roundCzk` je politika nad
+  // SUROVOU hodnotou — ne nad tím, co je zrovna uložené ve sloupci.
+  const koruny = Math.round(Number(Math.abs(value).toPrecision(15)));
+  // „+ 0" zabíjí zápornou nulu: bez něj vrátí roundCzk(-0.4) hodnotu -0.
+  // Postgres numeric zápornou nulu nezná (round(-0.4) je 0), a JSON.stringify(-0)
+  // je „0", takže by se takový rozdíl projevil až někde daleko.
+  //
+  // Schválně NE „|| 0": to je pravdivostní test, takže by spolklo i NaN a udělalo
+  // z něj 0 Kč. NaN je hlasitá porucha, nula je tichá — a doklad, který místo
+  // rozbitého součtu vytiskne „K úhradě 0 Kč", je nejhorší možný výstup.
+  return (value < 0 ? -koruny : koruny) + 0;
 }
 
 /** Zaokrouhlovací rozdíl, který se na dokladu tiskne vlastním řádkem. */

@@ -61,10 +61,14 @@ jdou jako další migrace nad baseline, ne přepisem historie.
 2. Agenti jako kontrolní brány. Před dokončením každé změny ji nech zkontrolovat příslušnými specializovanými agenty. Povinné brány: (a) Bezpečnost/RLS u čehokoli kolem přístupů, auth, RLS a klíčů; (b) Databáze/migrace u každé migrace (bezpečná, vratná, bez ztráty dat); (c) Code review u implementace před commitem.
 3. Záloha před zásahem do produkce. Nikdy neaplikuj změnu na produkční DB bez čerstvé zálohy a odsouhlasení PM.
    - **Supabase CLI proti živé databázi = zakázáno bez výslovného souhlasu PM a čerstvé zálohy.** NIKDY nespouštěj `supabase db push` ani `supabase link` sám od sebe. Lokální vývoj (`supabase start`, `supabase db reset`) je bezpečný a míří jen na lokální Docker.
-   - **Kam `db push` doopravdy míří:** na **nalinkovaný** projekt, ne na to, co je v `config.toml`. `project_id` v `supabase/config.toml` je jen lokální jméno Docker kontejnerů a cíl pushe neurčuje (dřívější znění téhle poznámky tvrdilo opak). Link žije v `supabase/.temp/`, což je v `.gitignore` — po čerstvém klonu tam nic není, takže **stav linku si vždycky ověř a nikdy ho nehádej**. Ověřuj **jen pro čtení**: `supabase projects list` (má sloupec `LINKED`) nebo `cat supabase/.temp/project-ref`. **Nikdy ne `supabase db push --dry-run`** — je to zakázaný příkaz jeden flag od ostrého běhu, na ověřování se nehodí.
+   - **Kam `db push` doopravdy míří:** na **nalinkovaný** projekt, ne na to, co je v `config.toml`. `project_id` v `supabase/config.toml` je jen lokální jméno Docker kontejnerů a cíl pushe neurčuje (dřívější znění téhle poznámky tvrdilo opak). Link žije v `supabase/.temp/`, což je v `.gitignore` — po čerstvém klonu tam nic není, takže **stav linku si vždycky ověř a nikdy ho nehádej**. Ověřuj **jen pro čtení**: `supabase projects list` (má sloupec `LINKED`) nebo `cat supabase/.temp/linked-project.json`. (Pozor: soubor `project-ref` tenhle CLI nezakládá — kdo se po něm shání, dostane „no such file" a mylně si to přečte jako „nic není nalinkované".) **Nikdy ne `supabase db push --dry-run`** — je to zakázaný příkaz jeden flag od ostrého běhu, na ověřování se nehodí.
    - **Dva projekty, ať se nepletou:** `fareavttiwkamrukpfqk` = stará Lovable DB (jen směny a brigádníci, **rezervační tabulky tam vůbec nejsou**). `ltrazktulfxvzlvkxdsb` = curling-demo, kde běží rezervační systém i Etapa 2.
 4. Nic nemazat natvrdo, vše auditovat.
 5. Změna je hotová, teprve až projde svými bránami.
+6. **Commit po každém PR, který prošel bránami.** Neschovávej odbraněnou práci
+   v pracovním stromu „než bude celek hotový" — necommitnutá práce má stejnou
+   expozici na pád session jako nezaverzovaný dokument. Jeden PR = jeden commit,
+   hned jak projde. (Push a merge zůstávají na vyžádání, tohle je o commitu.)
 
 ## Pravidlo pro Etapu 2 (fakturace) — povinné
 

@@ -385,7 +385,7 @@ jedna společná řada, ruční evidence plateb, bez kopie do Drive.
 | 4 | Špatný IBAN → QR posílá peníze jinam | zjistí se po týdnech | mod-11 validace + **povinné potvrzení dopočteného IBANu** + testovací sken |
 | 5 | Změna `billing_settings` přepíše historii | staré faktury ukazují nové údaje | snapshot dodavatele na faktuře; `BRAND.billing` z fakturační cesty odstranit |
 | 6 | Běh vůbec neproběhne (pauza projektu, restore) | zjištěno pozdě | mrtvý muž: `last_tick_at` + počet nevyfakturovaných starých rezervací, vyhodnocení **mimo** DB |
-| 7 | `supabase db push` proti nesprávné databázi | migrace na cizí DB | zákaz CLI proti živé DB bez souhlasu PM + **read-only ověření stavu linku** (`supabase projects list`, `cat supabase/.temp/project-ref`) před každým zásahem. Pozor: editace `project_id` v `config.toml` riziko **nesnižuje** — cíl pushe se odtud nebere |
+| 7 | `supabase db push` proti nesprávné databázi | migrace na cizí DB | zákaz CLI proti živé DB bez souhlasu PM + **read-only ověření stavu linku** (`supabase projects list`, `cat supabase/.temp/linked-project.json` — soubor `project-ref` tenhle CLI nezakládá) před každým zásahem. Pozor: editace `project_id` v `config.toml` riziko **nesnižuje** — cíl pushe se odtud nebere |
 | 8 | Zálohy PDF | `pg_dump` bucket neobsahuje → doklady bez souborů | samostatná záloha Storage **musí být vyřešená, ne odložená** |
 | 9 | `pdf-lib` je od 2021 zamrzlý | automatika stojí při změně Dena | verze připnutá přesně, smoke test v CI, fork `@cantoo/pdf-lib` jako připravená úniková cesta |
 
