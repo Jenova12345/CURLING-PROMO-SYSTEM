@@ -91,7 +91,7 @@ CREATE TRIGGER on_auth_user_created
 **Zaevidováno 11. 8. 2026** při Etapě 2 (code review PR A1). **Záměrně NEOPRAVUJEME teď.**
 
 Fakturace dostala jednotnou peněžní politiku (`src/lib/money.ts`: sčítání v haléřích,
-zaokrouhlení jednou na konci, půlka nahoru v absolutní hodnotě jako Postgres).
+stupňovitá kvantizace podle R3, půlka nahoru v absolutní hodnotě jako Postgres).
 **Výplatní modul ji nemá** a trpí toutéž vadou, kterou to opravovalo:
 
 - `baseline_production.sql:311` — `payouts.amount numeric` **bez precision**;

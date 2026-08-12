@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest",
-    "test:run": "vitest run"
+    "test:run": "vitest run",
+    "overit:zaokrouhleni": "vite-node scripts/overit-zaokrouhleni.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -82,6 +83,7 @@
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.38.0",
     "vite": "^5.4.19",
+    "vite-node": "^2.1.9",
     "vitest": "^2.1.9"
   }
 }

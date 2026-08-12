@@ -51,9 +51,11 @@ function esc(value: unknown): string {
 }
 
 function buildHtml({ subject, rows, periodFrom, periodTo }: InvoiceDraft): string {
-  // Součet je PŘESNÝ součet tištěných řádků (viz src/lib/money.ts). Zaokrouhlení
-  // se dělá jednou, až u částky k úhradě, a je vidět vlastním řádkem — takže
-  // „součet sloupce == mezisoučet" platí triviálně, ne shodou okolností.
+  // Součet je PŘESNÝ součet tištěných řádků (viz src/lib/money.ts). Na celé
+  // koruny se zaokrouhluje stupňovitě až u částky k úhradě, a to z TÉHOŽ
+  // kvantizovaného mezisoučtu, který je vytištěný — proto „součet sloupce ==
+  // mezisoučet" i „mezisoučet + zaokrouhlení == k úhradě" platí triviálně,
+  // ne shodou okolností. Zaokrouhlovací rozdíl je vidět vlastním řádkem.
   const mezisoucet = sumKc(rows.map((r) => r.amount));
   const zaokrouhleni = roundingDiff(mezisoucet);
   const kUhrade = roundCzk(mezisoucet);

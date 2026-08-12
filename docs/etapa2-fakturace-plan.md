@@ -143,29 +143,95 @@ zdanitelné — tedy **dva režimy na jedné hale**.
 Postavit takhle hned = přechod na plátce je konfigurace. Postavit jako boolean = přepis modulu.
 **Toto je nejdražší chyba, které se dá teď zadarmo vyhnout.**
 
-### R3 — Zaokrouhlení jednou, na konci, s viditelným řádkem
+### R3 — Stupňovitá kvantizace: jedno kanonické pravidlo pro obě strany
 
-| Veličina | Přesnost | Výpočet |
+> Upřesněno 12. 8. 2026 (PR A1d). Původní znění říkalo „zaokrouhlení jednou, na konci",
+> což šlo číst dvěma způsoby — a implementace se podle toho taky rozešly. Rozhodnutí PM:
+> **kanonické je stupňovité (staged) pravidlo**, protože jediné přežije přechod na plátce
+> DPH. Zapsáno takhle podrobně schválně: tichý rozdíl mezi jednokrokovou a dvoukrokovou
+> cestou je přesně ten druh chyby, který se u peněz dědí roky.
+
+**Pravidlo.** Každá peněžní veličina se kvantizuje **na haléře ve své vlastní fázi**,
+půlka nahoru v absolutní hodnotě. Na celé koruny se zaokrouhluje **jen jednou, a to
+z hodnoty, která už kvantizací prošla** — nikdy ze surové.
+
+| # | Veličina | Přesnost | Výpočet |
+|---|---|---|---|
+| — | sazba (jednotková cena) | 2 des. místa | `rate_per_hour`, **nikdy** se nedopočítává z částky |
+| 1 | `invoice_items.line_total` | 2 des. místa | `round(hodiny × sazba, 2)` |
+| 2 | `invoices.subtotal` | 2 des. místa | `SUM(line_total)` — přesný součet už kvantizovaných řádků |
+| 3 | `invoice_items.vat_base` / `vat_amount` | 2 des. místa | každé zvlášť `round(…, 2)`; daň se počítá z kvantizovaného základu — **agregace viz Q7** |
+| 4 | `invoices.total` | 2 des. místa | `subtotal + Σ vat_amount` — **veličina pro kontrolní součet** |
+| 5 | `invoices.total_rounded` | celé Kč | `round(round(total, 2), 0)` — **zákazník platí tohle, tohle je v QR** |
+| 6 | `invoices.rounding_amount` | 2 des. místa | `total_rounded − total`; tiskne se vlastním řádkem a **stojí mimo základ daně** |
+
+Řádek 5 je schválně zapsaný v kanonické formě, i když je vnější `round` nad dvoudesetinným
+`total` no-op. Implementátor si opisuje tabulku, ne prózu pod ní — a právě ten implicitní
+úsudek („vždyť je to dvoudesetinné, tak stačí `round(total, 0)`") je důvod, proč tenhle PR vznikl.
+
+**Kanonický zápis:** `částka k úhradě = round(round(v, 2), 0)`, **ne** `round(v, 0)`.
+Rozdíl je vidět na 0,495 → stupňovitě 1 Kč, jednorázově 0 Kč. Na vzorku ze skriptu
+`scripts/overit-zaokrouhleni.ts` se obě cesty liší ve **140 z 25 718** hodnot (0,54 %),
+takže nejde o kosmetiku. Čísla se dají kdykoli přeměřit: `npm run overit:zaokrouhleni`.
+
+**Proč stupňovitě, a ne jednorázově:**
+
+1. **Účetní důvod (rozhodující).** Základ daně musí být určité dvoudesetinné číslo, ze
+   kterého se daň počítá a které se tiskne — není to mezivýsledek, který se smí přeskočit.
+   Jednorázové zaokrouhlení ze surové hodnoty by po registraci k DPH počítalo daň z čísla,
+   které na dokladu nikde nestojí.
+2. **Doklad musí sedět sám se sebou.** Částka k úhradě se odvozuje z **vytištěného**
+   mezisoučtu. Kdyby se zaokrouhlovalo ze surové hodnoty, mohl by doklad ukázat
+   „Mezisoučet 1 250,50 Kč" a hned pod tím „K úhradě 1 250 Kč".
+3. **Zaokrouhlení po řádcích je pořád zakázané.** Stupňovitost znamená kvantizaci na
+   haléře, ne zaokrouhlování řádků na celé koruny — to by základ daně zkreslilo.
+
+**Kontrolní součet** porovnává **`total`**, ne `total_rounded` — jinak by se drift
+z per-fakturového zaokrouhlení nasčítal. Meze jsou **dvě a je potřeba je nezaměnit:**
+
+| Proti čemu se měří | Mez na doklad | Pro N dokladů |
 |---|---|---|
-| sazba (jednotková cena) | 2 des. místa | `rate_per_hour`, **nikdy** se nedopočítává z částky |
-| `invoice_items.line_total` | 2 des. místa | `round(hodiny × sazba, 2)` |
-| `invoices.subtotal` | 2 des. místa | `SUM(line_total)`, přesně |
-| `invoices.total` | 2 des. místa | `subtotal + vat_amount` — **veličina pro kontrolní součet** |
-| `invoices.rounding_amount` | 2 des. místa | `round(total, 0) − total`, tiskne se jako vlastní řádek |
-| `invoices.total_rounded` | 2 des. místa | `round(total, 0)` — **zákazník platí tohle, tohle je v QR** |
+| kvantizovanému `total` (**tudy jde kontrolní součet**) | 0,50 Kč | ±N/2 |
+| surové hodnotě s víc než 2 des. místy | 0,505 Kč | ±0,505·N |
 
-Kontrolní součet porovnává **`total`**, ne `total_rounded` — jinak by se po deseti fakturách
-nasčítalo až ±5 Kč z per-fakturového zaokrouhlení.
+Těch 0,005 navíc je cena za stupňovitost: `k+0,495` se přes haléře vytáhne až na `k+1`.
+Jednorázové pravidlo by v téhle metrice mělo mez rovných 0,500 — stupňovité je tedy
+o 5 haléřů horší **v metrice, na které nezáleží**, a správné v té, na které záleží.
+Do kontrolního součtu se to nepromítá, protože ten jede přes už kvantizované `total`.
+Teoretické meze výše nejsou totéž co naměřená hodnota — na fixtuře v `money.test.ts`
+(40 dokladů) vychází drift **12,20 Kč** proti mezi 20 Kč.
 
-Zvolena varianta „jednou na konci" (ne „každý řádek na celé koruny"), protože **přežije
-přechod na plátce DPH**, kde základ daně nesmí být zkreslený zaokrouhlením po řádcích.
+**Kde `roundCzk` je a kde není.** Volá ho **jediné místo**: `src/lib/invoiceDraft.ts`,
+tedy generátor dokladu. `useDues` a `Dues.tsx` na celé koruny nezaokrouhlují vůbec
+a je to tak správně — „Kdo kolik dluží" má ukazovat přesnou dvoudesetinnou částku.
+**Důsledek: `roundCzk` neleží na cestě kontrolního součtu**, takže změna pravidla
+zaokrouhlení na celé koruny akceptační kritérium Etapy 2 ohrozit nemůže.
+
+**Shoda obou stran je ověřená, ne tvrzená.** `scripts/overit-zaokrouhleni.ts` porovnává
+`src/lib/money.ts` proti živému Postgresu: 25 718 hodnot (celý rozsah po haléři, hranice
+`.xx5`, čtyři desetinná místa, `základ × 0,21`, záporné protějšky) — **0 rozdílů**.
+Pozn.: SQL strana zatím neexistuje (tabulka `invoices` není v migracích) — `round(round(v, 2), 0)`
+je pro ni **závazné zadání**, ne popis stavu. Testy drží obě strany: `src/lib/money.test.ts`
+(nezávislá reference v `BigInt` nad desetinným zápisem, ne přes `money.ts`)
+a `supabase/tests/zaokrouhleni_test.sql`.
+
+**Tři pasti, všechny už zaplacené:**
+- `Math.round(-1250.5) === -1250` v JS, ale `round(-1250.5) = -1251` v Postgresu.
+  `roundCzk` proto musí být `sign(x) · round(abs(x))`.
+- Zápornou nulu nesmí zabíjet `|| 0` — je to pravdivostní test, takže spolkne i `NaN`
+  a vyrobí doklad „K úhradě 0 Kč". Správně je `+ 0`.
+- **Mez přesnosti `toSetiny` stojí korunu, ne haléř.** `roundCzk` prochází fází 1,
+  takže se limit 15 platných číslic promítá až do částky k úhradě
+  (`1.4949999999999999` → 2 Kč místo 1 Kč). Nedosažitelné to je jen díky tomu, že
+  zdroj je `numeric(x,2)`. **Tatáž záruka musí platit i pro `invoices.total`** — jakmile
+  by do něj šla hodnota s 16+ platnými číslicemi, je to koruna rozdílu proti dokladu.
 
 **Navíc u zdroje** (aby zaokrouhlení skoro nikdy nemuselo nic dělat): sazby v celých
 korunách (validace + CHECK), `corrected_hours` na čtvrthodiny a nezáporné.
 
-**Jedna sdílená implementace** `roundCzk()` importovaná do `useDues`, `Dues.tsx`
-i generátoru. Pozor: `Math.round(-1250.5) === -1250` v JS, ale `round(-1250.5) = -1251`
-v Postgresu — u dobropisů to je další 1 Kč. `roundCzk` musí být `sign(x) * round(abs(x))`.
+**Otevřeno pro B2 — bez rozhodnutí se tabulka `invoices` psát nemá.** Kanonické pravidlo
+řeší poslední fázi, ne agregaci DPH. Ta je vlastní otázka a **rozhoduje o odvedené dani**,
+takže patří účetní klienta, ne nám — viz Q7 v kapitole 6.
 
 ### R4 — PDF serverově, `pdf-lib` v Edge funkci
 
@@ -354,6 +420,8 @@ jedna společná řada, ruční evidence plateb, bez kopie do Drive.
    na klubové tréninky? (Znamenalo by **dva daňové režimy na jedné hale**.)
 3. Dobropis: záporné částky, nebo kladné s označením? Stejná řada, nebo vlastní?
 4. Označení opravného dokladu u neplátce: „Opravný doklad", nebo „Dobropis"?
+4b. **Počítá se DPH po řádcích, nebo z mezisoučtu za sazbu?** (viz Q7 — měřitelný
+   rozdíl v odvedené dani, potřebujeme jednu závaznou odpověď)
 5. Existuje s kluby písemná smlouva o pronájmu ledu? Bez ní je souhrnná měsíční faktura
    po registraci k DPH problém (§ 21 odst. 4 písm. b) — dílčí plnění).
 
@@ -372,6 +440,11 @@ jedna společná řada, ruční evidence plateb, bez kopie do Drive.
 | **Q4** | **Fakturují se nepotvrzené rezervace členů?** Dnes do „Kdo dluží" spadnou. Drží led, takže logika pro fakturaci je — ale klub dostane fakturu za něco, co jeho zástupce neschválil | Fakturovat, ale na obrazovce rozlišit. **Jediná defaultovaná otázka, kde špatná odpověď znamená chybně vystavené doklady** — zeptat se dřív než na ostatní |
 | **Q5** | **Význam „hybridní" v názvu souboru** (`001_hybridní_curling_220826`) | Nejspíš `{pořadí}_{název akce}_{datum}`, kde „hybridní curling" je jeden dvouslovný **název akce** (je to reálná varianta hry) a `curling` je jen fallback. Stojí za to se zeptat přesně takhle |
 | **Q6** | **Formát čísla faktury musí dát ≤ 10 číslic** (limit variabilního symbolu) a být jednoznačný napříč řadami | `RRRRNNNN` vyhovuje. Kdyby klient chtěl oddělené řady, navrhnout `RRRR{1\|2}NNN` — 9 číslic, jednoznačné |
+| **Q7** | **Agreguje se DPH po řádcích, nebo z mezisoučtu za sazbu?** Kanonické pravidlo R3 řeší poslední fázi, tuhle otázku ne — a přitom **rozhoduje o odvedené dani**. Změřeno na 40 000 modelových dokladech po 8 řádcích: obě varianty se liší u **54,5 %** dokladů (až 0,03 Kč na dani) a u **0,6 %** se liší i částka k úhradě o celou korunu | **Rozhodnout před B2, ať se to nemusí migrovat nad ostrými doklady.** Doporučení k potvrzení účetní: daň počítat **z agregovaného základu za každou sazbu zvlášť** (`vat_amount = round(Σ vat_base za sazbu × sazba, 2)`), s invariantem `Σ vat_base = subtotal`. Rekapitulace po sazbách je náležitost daňového dokladu, takže rozpad podle sazeb potřebujeme tak jako tak — a R2 počítá s **dvěma režimy na jedné hale**. `rounding_amount` stojí **mimo základ daně** |
+
+> **Q7 není technické rozhodnutí.** Nesmí ho udělat CC ani PM od stolu — ať ho potvrdí
+> účetní klienta. Do té doby je `invoices` blokovaná: jednou vystavené doklady se
+> přepočítat nedají.
 
 ---
 

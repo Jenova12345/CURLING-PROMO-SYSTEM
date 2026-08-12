@@ -6,10 +6,18 @@
 // daly na obrazovce 3 752 Kč a na dokladu z ní 3 753 Kč. Akceptační kritérium
 // „suma faktur == Kdo kolik dluží" tím neprošlo už samo se sebou.
 //
-// PRAVIDLO (Etapa 2, rozhodnutí R3):
-//   • řádek dokladu    → přesně na 2 desetinná místa (tak to počítá i DB)
-//   • součet           → PŘESNÝ součet řádků, žádné průběžné zaokrouhlování
-//   • částka k úhradě  → zaokrouhlení na celé koruny AŽ TADY, viditelným řádkem
+// KANONICKÉ PRAVIDLO (Etapa 2, rozhodnutí R3) — zaokrouhluje se STUPŇOVITĚ:
+//   • řádek dokladu    → kvantizace na haléře, round(hodiny × sazba, 2)
+//   • mezisoučet       → PŘESNÝ součet už kvantizovaných řádků (sám dvoudesetinný)
+//   • základ a daň     → každé zvlášť kvantizované na haléře (až přijde DPH)
+//   • částka k úhradě  → zaokrouhlení na celé koruny AŽ TADY, a to z už
+//                        kvantizované hodnoty, ne ze surové; viditelným řádkem
+//
+// Na celé koruny se NIKDY nezaokrouhluje surová hodnota. Ekvivalent v SQL je
+// `round(round(v, 2), 0)`, ne `round(v, 0)` — a obě strany to musí dělat stejně.
+// Důvod je účetní, ne estetický: základ daně je právně významné dvoudesetinné
+// číslo, ne mezivýsledek, který se smí přeskočit. Podrobně u `roundCzk` níž.
+//
 // Kontrolní součet porovnává přesný součet, ne zaokrouhlenou částku k úhradě —
 // jinak by se po deseti fakturách nasčítalo až ±5 Kč z per-fakturového zaokrouhlení.
 
@@ -59,24 +67,44 @@ export const sumKc = (values: number[]): number =>
   zeSetin(values.reduce((sum, v) => sum + toSetiny(v), 0));
 
 /**
- * Zaokrouhlení na celé koruny; půlka nahoru v ABSOLUTNÍ hodnotě.
+ * Částka k úhradě: zaokrouhlení na celé koruny STUPŇOVITĚ, přes haléře.
  *
- * Pozor na rozdíl proti holému Math.round: ten zaokrouhluje k +∞, takže
- * Math.round(-1250.5) === -1250, kdežto Postgres round(-1250.5) = -1251.
- * U dobropisů (záporné částky) by z toho byl další rozdíl 1 Kč.
+ * Ekvivalent v SQL je `round(round(v, 2), 0)`, NE `round(v, 0)`. Rozdíl je
+ * vidět na 0,495: stupňovitě 0,495 → 0,50 → 1 Kč, jednorázově 0 Kč.
+ *
+ * PROČ STUPŇOVITĚ (kanonické pravidlo R3):
+ * Částka k úhradě se odvozuje z toho, co je na dokladu VYTIŠTĚNO, ne z abstraktní
+ * reálné hodnoty. Vytištěný mezisoučet je dvoudesetinný, takže se z dvoudesetinné
+ * hodnoty musí odvíjet i zaokrouhlení — jinak doklad ukáže „Mezisoučet 1 250,50 Kč"
+ * a hned pod tím „K úhradě 1 250 Kč", což si odporuje.
+ *
+ * Účetně je to navíc jediná varianta, která přežije přechod na plátce DPH: základ
+ * daně musí být určité dvoudesetinné číslo, ze kterého se daň počítá a které se
+ * tiskne. Kvantizace na haléře tedy není artefakt výpočtu, ale právně významný
+ * mezikrok — a zaokrouhlení na koruny se dělá až za ním.
+ *
+ * Půlka jde nahoru v ABSOLUTNÍ hodnotě. Holý Math.round zaokrouhluje k +∞, takže
+ * Math.round(-1250.5) === -1250, kdežto Postgres round(-1250.5) = -1251; u dobropisů
+ * by z toho byl rozdíl koruny.
+ *
+ * Shoda s Postgresem se dá kdykoli přeměřit: `npm run overit:zaokrouhleni`
+ * (skript `scripts/overit-zaokrouhleni.ts` proti živé lokální DB). Poslední běh:
+ * 25 718 hodnot, 0 rozdílů; 140 z nich (0,54 %) by dopadlo jinak jednorázově.
+ *
+ * POZOR NA CENU MEZE `toSetiny`: tím, že `roundCzk` prochází fází 1, se limit
+ * 15 platných číslic promítá až do částky k úhradě — jeho cena tedy není haléř,
+ * ale CELÁ KORUNA (`1.4949999999999999` vyjde 2 Kč místo 1 Kč). Nedosažitelné to
+ * je jen díky tomu, že zdroj je `numeric(x,2)`: sazba i hodiny mají dvě desetinná
+ * místa a `amount` je `round(…, 2)`. Tatáž záruka musí platit i pro budoucí
+ * `invoices.total` — kdyby se do něj někdy dostala hodnota s 16+ platnými
+ * číslicemi, je to koruna rozdílu proti dokladu.
  */
 export function roundCzk(value: number): number {
-  // Zaokrouhluje se JEDNÍM krokem z původní hodnoty, ne přes haléře.
-  // Dvojí zaokrouhlení (0,495 → 0,50 → 1 Kč) se rozchází s Postgresem, který
-  // `round(0.495)` vyhodnotí jako 0. Změřeno na 21 717 hodnotách proti živé DB:
-  // přes haléře 120 rozdílů, jedním krokem nula.
-  //
-  // Pro hodnoty, které dnešní cesta umí vyrobit, je to no-op: `total` i `subtotal`
-  // jsou podle rozhodnutí R3 dvoudesetinné a `sumKc` vrací nejvýš dvě desetinná
-  // místa, takže se obě varianty na 7,7 milionu dvoudesetinných vstupů shodly do
-  // jedné hodnoty. Jednokrokovost je tu proto, že `roundCzk` je politika nad
-  // SUROVOU hodnotou — ne nad tím, co je zrovna uložené ve sloupci.
-  const koruny = Math.round(Number(Math.abs(value).toPrecision(15)));
+  // Fáze 1 — kvantizace na haléře. Tatáž, kterou prošel každý řádek i mezisoučet.
+  const hal = toSetiny(value);
+  // Fáze 2 — z už kvantizované hodnoty na celé koruny. `hal` je celé číslo, takže
+  // dělení stem trefí hranici .5 přesně a žádná další korekce šumu není potřeba.
+  const koruny = Math.round(Math.abs(hal) / 100);
   // „+ 0" zabíjí zápornou nulu: bez něj vrátí roundCzk(-0.4) hodnotu -0.
   // Postgres numeric zápornou nulu nezná (round(-0.4) je 0), a JSON.stringify(-0)
   // je „0", takže by se takový rozdíl projevil až někde daleko.
@@ -84,7 +112,7 @@ export function roundCzk(value: number): number {
   // Schválně NE „|| 0": to je pravdivostní test, takže by spolklo i NaN a udělalo
   // z něj 0 Kč. NaN je hlasitá porucha, nula je tichá — a doklad, který místo
   // rozbitého součtu vytiskne „K úhradě 0 Kč", je nejhorší možný výstup.
-  return (value < 0 ? -koruny : koruny) + 0;
+  return (hal < 0 ? -koruny : koruny) + 0;
 }
 
 /** Zaokrouhlovací rozdíl, který se na dokladu tiskne vlastním řádkem. */
@@ -114,8 +142,15 @@ export function fmtKc(value: number): string {
  */
 export const fmtSazba = (value: number): string => `${fmtKc(value)}/h`;
 
+/**
+ * Hodiny pro zobrazení. Jde přes `toSetiny` schválně: byla to jediná cesta
+ * v modulu, která obcházela společnou kvantizaci a spoléhala na zaokrouhlení
+ * uvnitř `toLocaleString`. Na dnešních datech se to shoduje, ale rozejde se to
+ * na hodnotách jako 2.9749999999999996 („2,97 h" místo 2,98) — a modul, který
+ * se prohlašuje za jedinou politiku zaokrouhlování, nesmí mít výjimku.
+ */
 export const fmtHodin = (value: number): string =>
-  `${value.toLocaleString('cs-CZ', { maximumFractionDigits: 2 })} h`;
+  `${zeSetin(toSetiny(value)).toLocaleString('cs-CZ', { maximumFractionDigits: 2 })} h`;
 
 /** Hodiny se sčítají po setinách ze stejného důvodu jako částky. */
 export const sumHodin = (values: number[]): number =>

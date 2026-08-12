@@ -127,20 +127,85 @@ describe('roundCzk — zaokrouhlení na celé koruny', () => {
     // Pozor na „|| 0" místo „+ 0": to je pravdivostní test, takže by spolklo
     // i NaN. Doklad by pak měl mezisoučet „NaN Kč" a k úhradě „0 Kč" — jediné
     // číslo, na které se zákazník dívá, by bylo tiše nulové.
+    //
+    // Návrat k „|| 0" je chyba, kterou lze udělat omylem při úklidu, takže se
+    // tady hlídá víc než jedním tvrzením — i na celé cestě, kudy jde doklad.
     expect(roundCzk(NaN)).toBeNaN();
     expect(roundCzk(Infinity)).toBe(Infinity);
     expect(roundCzk(-Infinity)).toBe(-Infinity);
+
+    // Nula je legitimní výsledek, ale jen ze skutečné nuly — ne z poruchy.
+    expect(roundCzk(0)).toBe(0);
+    expect(roundCzk(0.4)).toBe(0);
+    expect(Number.isNaN(roundCzk(NaN))).toBe(true);
+
+    // Porucha se nesmí umlčet ani cestou přes mezisoučet a zaokrouhlovací řádek.
+    expect(sumKc([1250.5, NaN])).toBeNaN();
+    expect(roundingDiff(NaN)).toBeNaN();
+    expect(roundCzk(sumKc([1250.5, NaN]))).toBeNaN();
+    expect(fmtKc(NaN)).toContain('NaN');
   });
 
-  it('zaokrouhluje jedním krokem, ne přes haléře', () => {
-    // Dvojí zaokrouhlení dá 0,495 → 0,50 → 1 Kč. Postgres round(0.495) je 0.
-    // Křížové ověření proti živé DB našlo na tomhle vzoru 120 rozdílů z 21 717
-    // hodnot; po opravě nula. Viz supabase/tests/zaokrouhleni_test.sql.
-    expect(roundCzk(0.495)).toBe(0);
-    expect(roundCzk(-0.495)).toBe(0);
-    expect(roundCzk(1.495)).toBe(1);
-    expect(roundCzk(2.495)).toBe(2);
-    expect(roundCzk(-2.495)).toBe(-2);
+  it('zaokrouhluje STUPŇOVITĚ, přes haléře — kanonické pravidlo R3', () => {
+    // Ekvivalent v SQL je round(round(v,2), 0), ne round(v, 0). Na 0,495 je
+    // ten rozdíl vidět: stupňovitě 0,495 → 0,50 → 1 Kč, jednorázově 0 Kč.
+    // Stupňovitě proto, že částka k úhradě se odvozuje z VYTIŠTĚNÉHO
+    // dvoudesetinného mezisoučtu, a základ daně je dvoudesetinný ze zákona.
+    expect(roundCzk(0.495)).toBe(1);
+    expect(roundCzk(-0.495)).toBe(-1);
+    expect(roundCzk(1.495)).toBe(2);
+    expect(roundCzk(2.495)).toBe(3);
+    expect(roundCzk(-2.495)).toBe(-3);
+  });
+
+  it('stupňovité zaokrouhlení odpovídá round(round(v,2),0), ne round(v,0)', () => {
+    // NEZÁVISLÁ reference: exaktní desetinná aritmetika nad ZÁPISEM čísla, v BigInt.
+    // Nesmí se dotknout ničeho z money.ts — jinak by test jen potvrzoval, že se
+    // implementace shoduje sama se sebou, a prošel by i s fází 2, která dělí
+    // tisícem místo stem. (Přesně tuhle díru našla brána v první verzi testu.)
+    const referenceStupnovite = (zapis: string): number => {
+      const zaporne = zapis.startsWith('-');
+      const cislo = zaporne ? zapis.slice(1) : zapis;
+      const [cela, des = ''] = cislo.split('.');
+
+      // Fáze 1 — na haléře, půlka nahoru.
+      let hal = BigInt(cela) * 100n + BigInt(des.slice(0, 2).padEnd(2, '0'));
+      if (des.length > 2 && des[2] >= '5') hal += 1n;
+
+      // Fáze 2 — na celé koruny, půlka nahoru. Dělení v BigInt zkracuje k nule,
+      // takže „+ 50" před dělením je právě zaokrouhlení půlky nahoru.
+      const koruny = Number((hal + 50n) / 100n);
+      const vysledek = zaporne ? -koruny : koruny;
+      // Postgres numeric zápornou nulu nezná, takže ji nesmí vyrábět ani reference.
+      return Object.is(vysledek, -0) ? 0 : vysledek;
+    };
+
+    // Smyčku řídí desetinný ZÁPIS, ne double — jinak by se do reference protáhl
+    // týž binární šum, který má test odhalovat.
+    const zkontroluj = (tis: number) => {
+      const zapis = (tis / 1000).toFixed(3);
+      expect(roundCzk(Number(zapis))).toBe(referenceStupnovite(zapis));
+    };
+
+    // Hustě kolem nuly (±200 Kč po tisícině), kde jsou všechny zajímavé hranice.
+    // Krok 3 padne i na .500 i na .495, takže obě rozhodovací situace nastanou.
+    let lisiSeOdJednorazoveho = 0;
+    for (let tis = -200_000; tis <= 200_000; tis += 3) {
+      zkontroluj(tis);
+
+      // Jednorázová varianta ze surové hodnoty — jen pro doložení, že se pravidla
+      // opravdu liší. Kdyby se počet propadl na nulu, test by přestal cokoli určovat.
+      const v = Number((tis / 1000).toFixed(3));
+      if (roundCzk(v) !== Math.sign(v) * Math.round(Math.abs(v))) lisiSeOdJednorazoveho++;
+    }
+
+    // Přišpendleno přesně, ne jen „> 0": tichý posun v poměru je taky regrese.
+    // Číslo platí pro hustý rozsah výš, proto se počítá jen v něm.
+    expect(lisiSeOdJednorazoveho).toBe(667);
+
+    // Řídce až do ±500 000 Kč. Reálné faktury jsou v tisících, tedy nad hustým
+    // pásmem — shoda se nesmí opírat jen o okolí nuly.
+    for (let tis = -500_000_000; tis <= 500_000_000; tis += 999_983) zkontroluj(tis);
   });
 });
 
@@ -161,12 +226,13 @@ describe('roundingDiff — řádek „zaokrouhlení" na dokladu', () => {
   });
 
   it('invariant drží i na TŘECH desetinných místech', () => {
-    // roundingDiff míchá roundCzk (jednokrokový) s toSetiny (přes haléře), takže
-    // právě u třídesetinných hodnot by se dvojí zaokrouhlení mohlo schovat.
-    // Algebraicky se toSetiny vykrátí, ale u peněz se na algebru nespoléhá.
+    // Pozor na to, co invariant znamená: platí pro KVANTIZOVANÝ mezisoučet, tedy
+    // pro číslo, které je na dokladu vytištěné — ne pro surovou hodnotu. To není
+    // slabina, to je celý smysl stupňovitého pravidla: doklad sedí sám se sebou.
     for (let tis = -200_000; tis <= 200_000; tis += 3) {
-      const mezisoucet = tis / 1000;
-      expect(sumKc([mezisoucet, roundingDiff(mezisoucet)])).toBe(roundCzk(mezisoucet));
+      const surovy = tis / 1000;
+      const vytisteny = zeSetin(toSetiny(surovy)); // to, co uvidí zákazník
+      expect(sumKc([vytisteny, roundingDiff(surovy)])).toBe(roundCzk(surovy));
     }
   });
 
@@ -292,17 +358,53 @@ describe('kontrolní součet od konce', () => {
   });
 
   it('drift částek k úhradě roste s počtem dokladů — proto se nesčítají', () => {
-    // Mez je N/2 Kč, ne konstanta. Kdyby test tvrdil jen „≤ 1 Kč" pro dva
+    // Mez roste s N, není to konstanta. Kdyby test tvrdil jen „≤ 1 Kč" pro dva
     // doklady, prošel by i tehdy, kdyby se zaokrouhlení začalo systematicky
     // vychylovat jedním směrem. Tohle je důvod, proč rozhodnutí R3 porovnává
     // kontrolní součet nad `total`, ne nad `total_rounded`.
+    //
+    // POZOR, jsou to DVĚ různé meze a záleží, proti čemu se měří:
+    //   • proti KVANTIZOVANÉMU součtu (`sumKc`, tedy `total` z R3 — to, co
+    //     porovnává kontrolní součet): nejvýš 0,50 Kč na doklad, tedy N/2;
+    //   • proti SUROVÉ hodnotě s víc než dvěma desetinnými místy: až 0,505 Kč
+    //     na doklad, protože k+0,495 se přes haléře vytáhne až na k+1.
+    // Kontrolní součet Etapy 2 jede po první z nich.
     const N = 40;
     const doklady = Array.from({ length: N }, (_, i) => 1250.5 + i * 0.01);
     const celkemZdroj = sumKc(doklady);
     const soucetKUhrade = doklady.reduce((s, d) => s + roundCzk(d), 0);
 
     expect(Math.abs(soucetKUhrade - celkemZdroj)).toBeLessThanOrEqual(N / 2);
-    // A že drift opravdu vzniká — jinak by ta mez nic nehlídala.
-    expect(soucetKUhrade).not.toBe(celkemZdroj);
+    // Naměřeno na téhle fixtuře; přišpendleno, ať je vidět, když se pohne.
+    expect(Number(Math.abs(soucetKUhrade - celkemZdroj).toFixed(2))).toBe(12.2);
+
+    // Nejhorší případ proti kvantizovanému součtu: okno .495, kde stupňovité
+    // pravidlo tahá nahoru pokaždé. Mez N/2 se dotkne, ale nepřekročí.
+    const nejhorsi = Array.from({ length: N }, (_, i) => i + 0.495);
+    const driftNejhorsi = Math.abs(
+      nejhorsi.reduce((s, d) => s + roundCzk(d), 0) - sumKc(nejhorsi),
+    );
+    expect(driftNejhorsi).toBe(N / 2);
+  });
+
+  it('proti SUROVÉ hodnotě umí zaokrouhlení překročit půl koruny', () => {
+    // Doložení druhé meze z předchozího testu. Není to chyba — je to cena
+    // za stupňovitost, kterou R3 vědomě platí kvůli základu daně. Důležité je,
+    // že se to nikdy nesčítá do kontrolního součtu, protože ten jede přes `total`.
+    //
+    // Aby bylo jasné, co ta cena je: jednorázové pravidlo by mělo v téhle metrice
+    // mez rovných 0,500. Stupňovité má 0,505 — o 5 haléřů horší v metrice, na které
+    // nezáleží, a správné v té, na které záleží (doklad sedí sám se sebou a základ
+    // daně je určité vytištěné číslo).
+    expect(Math.abs(roundCzk(0.495) - 0.495)).toBeCloseTo(0.505, 10);
+    expect(Math.abs(roundCzk(-0.495) - -0.495)).toBeCloseTo(0.505, 10);
+
+    // A že 0,505 je opravdu strop, ne náhodná ukázka.
+    let nejvetsi = 0;
+    for (let tis = -200_000; tis <= 200_000; tis += 1) {
+      const v = tis / 1000;
+      nejvetsi = Math.max(nejvetsi, Math.abs(roundCzk(v) - v));
+    }
+    expect(Number(nejvetsi.toFixed(3))).toBe(0.505);
   });
 });

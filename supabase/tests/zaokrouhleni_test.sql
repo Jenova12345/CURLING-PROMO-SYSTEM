@@ -29,9 +29,15 @@ BEGIN;
 -- autocommit a testovací kluby mu zůstanou v datech. Proto skript odmítne běžet
 -- kdekoli, kde jsou jiní než seedoví uživatelé, tedy na čemkoli kromě lokálního
 -- Dockeru.
+-- Ověřuje se PŘÍTOMNOST seedových UUID, ne tvar e-mailu. Podmínka na e-mail
+-- („žádný uživatel mimo @test.local") totiž selhává směrem k propuštění: projde
+-- na prázdné tabulce i tam, kde se lidé přihlašují bez e-mailu (OAuth, telefon),
+-- protože `NULL NOT LIKE …` je NULL. Takhle formulovaná pojistka naopak nepustí
+-- nic, co seed nemá.
 DO $$
 BEGIN
-  IF EXISTS (SELECT 1 FROM auth.users WHERE email NOT LIKE '%@test.local') THEN
+  IF NOT EXISTS (SELECT 1 FROM auth.users WHERE id = '11111111-1111-1111-1111-111111111111')
+     OR EXISTS (SELECT 1 FROM auth.users WHERE email IS NULL OR email NOT LIKE '%@test.local') THEN
     RAISE EXCEPTION 'ODMÍTNUTO: tohle není lokální seed databáze. Test patří jen na lokální Docker Postgres.';
   END IF;
 END $$;
@@ -95,12 +101,19 @@ BEGIN
   -- Záporná nula v numeric neexistuje; roundCzk ji proto taky nevrací.
   PERFORM pg_temp.rovno(round(-0.4), 0, 'round(-0.4) = 0, ne -0');
 
-  -- Zaokrouhluje se JEDNÍM krokem z původní hodnoty. Kdo by šel přes haléře
-  -- (0,495 → 0,50 → 1 Kč), rozejde se s DB. Tohle je vzor, na kterém křížové
-  -- ověření JS proti DB našlo 120 rozdílů z 21 717 hodnot.
-  PERFORM pg_temp.rovno(round(0.495), 0, 'round(0.495) = 0, ne 1 (žádné dvojí zaokrouhlení)');
-  PERFORM pg_temp.rovno(round(-0.495), 0, 'round(-0.495) = 0');
-  PERFORM pg_temp.rovno(round(2.495), 2, 'round(2.495) = 2');
+  -- KANONICKÉ PRAVIDLO R3: na celé koruny se zaokrouhluje STUPŇOVITĚ, tedy
+  -- `round(round(v, 2), 0)`, NIKDY `round(v, 0)` ze surové hodnoty. Důvod je
+  -- účetní: základ daně i vytištěný mezisoučet jsou dvoudesetinné, a částka
+  -- k úhradě se musí odvíjet od toho, co je na dokladu, ne od abstraktní hodnoty.
+  -- Na 0,495 je rozdíl vidět — a právě takhle to počítá i `roundCzk` v JS.
+  PERFORM pg_temp.rovno(round(round(0.495, 2), 0), 1, 'stupňovitě: 0,495 → 0,50 → 1 Kč');
+  PERFORM pg_temp.rovno(round(round(-0.495, 2), 0), -1, 'stupňovitě: -0,495 → -0,50 → -1 Kč');
+  PERFORM pg_temp.rovno(round(round(2.495, 2), 0), 3, 'stupňovitě: 2,495 → 2,50 → 3 Kč');
+
+  -- A doložení, že na směru opravdu záleží: jednorázová varianta dá jinak.
+  PERFORM pg_temp.rovno(round(0.495, 0), 0, 'jednorázově by 0,495 dalo 0 Kč — proto se pravidlo píše nahlas');
+  PERFORM pg_temp.tvrd(round(round(2.495, 2), 0) <> round(2.495, 0),
+    'stupňovitá a jednorázová cesta se liší (jinak by pravidlo nic neurčovalo)');
 
   -- Běžné směry pod a nad půlkou
   PERFORM pg_temp.rovno(round(2.49), 2, 'round(2.49) = 2');
@@ -168,11 +181,11 @@ BEGIN
 
   PERFORM pg_temp.rovno(_radku, 3, 'vznikly tři rezervace');
   PERFORM pg_temp.rovno(_presny, 3751.50, 'přesný součet je 3 751,50 Kč');
-  PERFORM pg_temp.rovno(round(_presny, 0), 3752, 'zaokrouhlení AŽ na konci dá 3 752 Kč');
+  PERFORM pg_temp.rovno(round(round(_presny, 2), 0), 3752, 'stupňovité zaokrouhlení až u částky k úhradě dá 3 752 Kč');
 
   -- A takhle vypadala chyba: zaokrouhlit každý řádek zvlášť a pak teprve sečíst.
   PERFORM pg_temp.rovno(_po_radcich, 3753, 'sečtené zaokrouhlené řádky dají 3 753 Kč — nález N2');
-  PERFORM pg_temp.tvrd(round(_presny, 0) <> _po_radcich,
+  PERFORM pg_temp.tvrd(round(round(_presny, 2), 0) <> _po_radcich,
     'obě politiky se opravdu liší (jinak by test nic nehlídal)');
 END $$;
 
@@ -301,7 +314,9 @@ BEGIN
   PERFORM pg_temp.rovno(_doklad1 + _doklad2, _celkem,
     'přesné součty dokladů dají přesný součet zdroje');
 
-  SELECT round(_doklad1, 0) + round(_doklad2, 0) INTO _k_uhrade;
+  -- Kanonická forma i tady: vstupy jsou sice dvoudesetinné, ale test je vzor,
+  -- který si budoucí SQL implementace opíše.
+  SELECT round(round(_doklad1, 2), 0) + round(round(_doklad2, 2), 0) INTO _k_uhrade;
   PERFORM pg_temp.tvrd(abs(_k_uhrade - _celkem) <= 1,
     format('součet ČÁSTEK K ÚHRADĚ se od zdroje smí lišit, ale jen o zaokrouhlení (%s vs %s)',
            _k_uhrade, _celkem));
