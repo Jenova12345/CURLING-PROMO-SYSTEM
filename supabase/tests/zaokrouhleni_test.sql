@@ -320,6 +320,12 @@ BEGIN
   -- U rezervací mluví dřív trigger (viz 4d), takže se tady ověřuje ZÁRUKA:
   -- že constrainty existují a že drží i bez triggeru. Trigger je jen hlas,
   -- constraint je zámek — a test musí umět rozeznat, který z nich zabral.
+  -- Bez tohohle by se dalo přehlédnout, že testy níž běží nad prázdným výběrem.
+  PERFORM pg_temp.tvrd(
+    EXISTS (SELECT 1 FROM public.reservations
+             WHERE deleted_at IS NULL AND subject_id IS NOT NULL AND rate_per_hour IS NOT NULL),
+    'existuje rezervace se subjektem i sazbou, na které jde CHECKy zkoušet');
+
   PERFORM pg_temp.tvrd(
     (SELECT count(*) FROM pg_constraint WHERE conname IN (
        'reservations_corrected_hours_nezaporne', 'reservations_corrected_hours_ctvrthodiny',
@@ -333,17 +339,23 @@ BEGIN
 
   PERFORM pg_temp.ocekavej_chybu(
     $q$UPDATE public.reservations SET corrected_hours = -1, correction_reason = 'x'
-        WHERE id = (SELECT id FROM public.reservations WHERE deleted_at IS NULL ORDER BY id LIMIT 1)$q$,
+        WHERE id = (SELECT id FROM public.reservations
+                     WHERE deleted_at IS NULL AND subject_id IS NOT NULL AND rate_per_hour IS NOT NULL
+                     ORDER BY id LIMIT 1)$q$,
     'reservations_corrected_hours_nezaporne', 'bez triggeru drží CHECK: záporná korekce');
 
   PERFORM pg_temp.ocekavej_chybu(
     $q$UPDATE public.reservations SET corrected_hours = 1.1, correction_reason = 'x'
-        WHERE id = (SELECT id FROM public.reservations WHERE deleted_at IS NULL ORDER BY id LIMIT 1)$q$,
+        WHERE id = (SELECT id FROM public.reservations
+                     WHERE deleted_at IS NULL AND subject_id IS NOT NULL AND rate_per_hour IS NOT NULL
+                     ORDER BY id LIMIT 1)$q$,
     'reservations_corrected_hours_ctvrthodiny', 'bez triggeru drží CHECK: korekce mimo čtvrthodiny');
 
   PERFORM pg_temp.ocekavej_chybu(
     $q$UPDATE public.reservations SET rate_per_hour = 1250.50
-        WHERE id = (SELECT id FROM public.reservations WHERE deleted_at IS NULL ORDER BY id LIMIT 1)$q$,
+        WHERE id = (SELECT id FROM public.reservations
+                     WHERE deleted_at IS NULL AND subject_id IS NOT NULL AND rate_per_hour IS NOT NULL
+                     ORDER BY id LIMIT 1)$q$,
     'reservations_rate_per_hour_cele_koruny', 'bez triggeru drží CHECK: sazba s haléři');
 
   ALTER TABLE public.reservations ENABLE TRIGGER trg_reservations_z_money;
@@ -378,7 +390,11 @@ DO $$
 DECLARE _r uuid;
 BEGIN
   PERFORM pg_temp.prihlas('11111111-1111-1111-1111-111111111111');
-  SELECT id INTO _r FROM public.reservations WHERE deleted_at IS NULL ORDER BY id LIMIT 1;
+  -- Musí mít subjekt i sazbu: u rezervace bez subjektu pricing trigger sazbu
+  -- vynuluje, takže by CHECK i trigger prošly právem a test by nic netvrdil.
+  SELECT id INTO _r FROM public.reservations
+   WHERE deleted_at IS NULL AND subject_id IS NOT NULL AND rate_per_hour IS NOT NULL
+   ORDER BY id LIMIT 1;
 
   PERFORM pg_temp.ocekavej_chybu(
     format('UPDATE public.reservations SET rate_per_hour = 1250.50 WHERE id = %L', _r),

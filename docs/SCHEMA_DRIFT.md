@@ -112,11 +112,16 @@ Pak je to první věc na řadě a `money.ts` už bude připravené.
 
 ---
 
-## 8. Nálezy bezpečnostní brány u PR A2, které leží mimo jeho rozsah
+## 8. Nálezy bezpečnostní brány u PR A2
 
 **Zaevidováno 12. 8. 2026** při Etapě 2 (bezpečnostní brána PR A2). Všechno jsou
 věci **starší než A2** — jen se ukázaly, když se prosvítila peněžní plocha.
 Ověřeno útokem přes PostgREST, ne čtením kódu.
+
+> **TOHLE NENÍ ODLOŽENÝ SEZNAM.** Rozhodnutí PM z 12. 8. 2026: body 8b–8e se řeší
+> v **PR A5 (security hardening)**, který musí být hotový **dřív, než fáze B sáhne
+> na peněžní tabulky**. Jakmile A5 projde bránami, tyhle body odsud zmizí — nemají
+> tu zůstat ležet. Bod 8a je vyřešený v A2b.
 
 ### 8a) ~~Ceník vidí každý přihlášený~~ — VYŘEŠENO v PR A2b (12. 8. 2026)
 
@@ -140,7 +145,7 @@ protože `defaultRateFor` sahá po sazbě subjektu dřív než po ceníku. Hlíd
 Souvisí s rozhodnutím R9 v `etapa2-fakturace-plan.md`, které právě kvůli
 `USING (true)` zakazuje dávat fakturační údaje do `public.settings`.
 
-### 8b) `SECURITY DEFINER` RPC prozradí obsah řádku při porušení CHECKu
+### 8b) `SECURITY DEFINER` RPC prozradí obsah řádku při porušení CHECKu · **→ A5**
 
 Uvnitř `SECURITY DEFINER` funkce vlastněné `postgres` není RLS aktivní, takže
 Postgres do chyby doplní `DETAIL: Failing row contains (…)` — a PostgREST ho pošle
@@ -155,7 +160,7 @@ který vyhodí srozumitelnou chybu dřív, než CHECK vůbec dostane slovo (ově
 `move_booking` a `cancel_booking` doplnit `EXCEPTION WHEN check_violation` s vlastní
 hláškou, vedle už existujícího handleru na `exclusion_violation`.
 
-### 8c) `reservations_update` nemá v `USING` filtr `deleted_at IS NULL`
+### 8c) `reservations_update` nemá v `USING` filtr `deleted_at IS NULL` · **→ A5**
 
 Na rozdíl od `reservations_select`. Dnes to nevadí — Postgres na `UPDATE` s podmínkou
 nad sloupci uplatní i SELECT politiku, takže soft-smazané řádky zapisovatelné nejsou
@@ -163,26 +168,63 @@ nad sloupci uplatní i SELECT politiku, takže soft-smazané řádky zapisovatel
 `authenticated` přidal tabulkový `SELECT`, a soft-smazané rezervace se stanou
 zapisovatelnými.
 
-### 8d) `anon` a `authenticated` mají `TRUNCATE` na peněžních tabulkách
+### 8d) `anon` a `authenticated` mají `TRUNCATE` na peněžních tabulkách · **→ A5**
 
 `GRANT ALL` zahrnuje `TRUNCATE`, na který se **RLS nevztahuje**. Ověřeno:
 `SET ROLE anon; TRUNCATE public.settings;` projde (v odrolované transakci).
-Přes PostgREST to dosažitelné není (neumí `TRUNCATE` vygenerovat), takže jde
-o obranu do hloubky — ale `audit_log` truncatable rolí `anon` sedí špatně proti
-požadavku „auditovatelnost" a „garance, že se data nesmažou".
+**Verdikt k závažnosti (ověřeno útokem 12. 8. 2026, na žádost PM):** teoretické
+právo bez cesty k němu. `TRUNCATE` přes PostgREST vyjádřit nejde; `DELETE` vyjádřit
+jde, ale RLS ho zahodí (`audit_log` má jedinou politiku, a to na SELECT), takže
+anonymní `DELETE` vrátí 204 a smaže **0 řádků** — ověřeno, počty se nezměnily.
+Žádná funkce s dynamickým SQL není pro anon volatelná (0 nálezů) a Edge funkce
+arbitrární SQL nespouštějí.
+
+**A3 (12. 8. 2026) ale zvýšila cenu toho, co se tím chrání.** `billing_settings`
+posílá přes auditní trigger do `audit_log` **IBAN a IČO dodavatele v plném znění**
+(v `old_data` i `new_data`). Čtení `audit_log` je kryté admin-only politikou, takže
+únik to není — ale seznam toho, o co by při smazání či úniku šlo, se rozrostl
+o bankovní spojení haly. Verdikt „bez cesty k němu" platí dál, závažnost dopadu
+při případném otevření cesty stoupla.
+
+Nehoří to tedy, ale je to **latentní zesilovač**: `TRUNCATE` je jediná operace,
+na kterou se RLS nevztahuje, takže první RPC s dynamickým SQL nebo edge funkce
+s uživatelským vstupem v dotazu ji zpřístupní — a nic by to nezachytilo.
+`REVOKE` je nulová změna chování, proto do A5.
 
 **Návrh:** `REVOKE TRUNCATE, DELETE ON settings, subjects, audit_log, reservations
 FROM anon, authenticated;` a `REVOKE ALL ON settings, subjects FROM anon;`
 
-### 8e) Korekce hodin nemá horní mez ani povinný důvod
+### 8f) `profiles.bank_account` čte každý přihlášený · **→ backlog Etapy 2**
+
+**Zaevidováno 12. 8. 2026** (bezpečnostní brána A3). Politika
+`Anyone authenticated can read profiles USING (true)` plus plné sloupcové granty
+znamenají, že si běžný člen přečte přes REST **cizí bankovní účty a telefony**:
+
+```
+{"full_name":"Test Instruktor","phone":"+420700000002","bank_account":"1000000002/0800"}
+```
+
+Je to starší dluh, ne A3 — ale je absurdní chránit IBAN haly na úroveň „nikdo kromě
+admina", zatímco čísla účtů brigádníků jsou na jeden GET. Není to v rozsahu A5 (ten je
+o peněžních tabulkách fakturace), takže **samostatný úkol do backlogu Etapy 2**;
+rozhodnutí, kdo smí vidět jaká pole profilu, patří PM.
+
+### 8e) Korekce hodin nemá horní mez ani povinný důvod · **→ A5**
 
 `corrected_hours = 9999.75` na jednohodinové rezervaci projde — to je faktura
 na šest milionů. `correction_reason` není vynucený žádným constraintem, takže
 korekce může být bez zdůvodnění.
 
-**Kdy to řešit:** jakmile vznikne UI pro korekce (dnes se `corrected_hours`
-z frontendu jen čte). Tehdy tam patří i `parseKorekce` v `money.ts` a
-`CHECK (corrected_hours IS NULL OR correction_reason IS NOT NULL)`.
+**Rozhodnutí PM (12. 8. 2026), řeší A5:**
+- **Tvrdý absolutní strop 24 h**, NEvázaný na délku rezervace. Rezervace je vždy
+  v rámci jednoho dne a otevírací okno je nejvýš 7–22, tedy 15 h; 24 h je pohodlná
+  rezerva, která nezablokuje nic legitimního, ale z překlepu „9 999" udělá okamžitý
+  blok. Vázat strop na rezervovaný čas se **zamítá** — zablokovalo by to běžný
+  případ „klub použil led o půl hodiny déle, naúčtuj mu víc, než měl rezervováno".
+- **`correction_reason` povinný CHECKem**, sedí na požadavek „musí být vidět,
+  kdo co a proč zadával".
+Až vznikne UI pro korekce, přidat i `parseKorekce` v `money.ts` (dnes se
+`corrected_hours` z frontendu jen čte).
 
 ---
 

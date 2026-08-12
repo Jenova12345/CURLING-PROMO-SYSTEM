@@ -67,6 +67,125 @@ export type Database = {
         }
         Relationships: []
       }
+      billing_settings: {
+        Row: {
+          auto_issue: boolean
+          automation_enabled: boolean
+          bank_account: string | null
+          bank_bic: string | null
+          bank_iban: string | null
+          created_at: string
+          created_by: string | null
+          daily_run_hour: number
+          due_days: number
+          file_prefix: string
+          id: string
+          invoice_only_approved: boolean
+          monthly_run_day: number
+          monthly_run_hour: number
+          number_format: string
+          payment_message: string | null
+          separate_series: boolean
+          singleton: boolean
+          supplier_address: string | null
+          supplier_dic: string | null
+          supplier_ico: string | null
+          supplier_legal_form: string | null
+          supplier_name: string | null
+          supplier_registry: string | null
+          updated_at: string
+          updated_by: string | null
+          vat_mode: Database["public"]["Enums"]["vat_mode"]
+        }
+        Insert: {
+          auto_issue?: boolean
+          automation_enabled?: boolean
+          bank_account?: string | null
+          bank_bic?: string | null
+          bank_iban?: string | null
+          created_at?: string
+          created_by?: string | null
+          daily_run_hour?: number
+          due_days?: number
+          file_prefix?: string
+          id?: string
+          invoice_only_approved?: boolean
+          monthly_run_day?: number
+          monthly_run_hour?: number
+          number_format?: string
+          payment_message?: string | null
+          separate_series?: boolean
+          singleton?: boolean
+          supplier_address?: string | null
+          supplier_dic?: string | null
+          supplier_ico?: string | null
+          supplier_legal_form?: string | null
+          supplier_name?: string | null
+          supplier_registry?: string | null
+          updated_at?: string
+          updated_by?: string | null
+          vat_mode?: Database["public"]["Enums"]["vat_mode"]
+        }
+        Update: {
+          auto_issue?: boolean
+          automation_enabled?: boolean
+          bank_account?: string | null
+          bank_bic?: string | null
+          bank_iban?: string | null
+          created_at?: string
+          created_by?: string | null
+          daily_run_hour?: number
+          due_days?: number
+          file_prefix?: string
+          id?: string
+          invoice_only_approved?: boolean
+          monthly_run_day?: number
+          monthly_run_hour?: number
+          number_format?: string
+          payment_message?: string | null
+          separate_series?: boolean
+          singleton?: boolean
+          supplier_address?: string | null
+          supplier_dic?: string | null
+          supplier_ico?: string | null
+          supplier_legal_form?: string | null
+          supplier_name?: string | null
+          supplier_registry?: string | null
+          updated_at?: string
+          updated_by?: string | null
+          vat_mode?: Database["public"]["Enums"]["vat_mode"]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_settings_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "billing_settings_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "billing_settings_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "billing_settings_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
       chat_groups: {
         Row: {
           authorized_roles: Database["public"]["Enums"]["app_role"][]
@@ -1339,6 +1458,7 @@ export type Database = {
       shift_status: "open" | "pending" | "claimed" | "completed" | "cancelled"
       subject_rep_level: "rep" | "member"
       subject_type: "club" | "commercial"
+      vat_mode: "neplatce" | "identifikovana_osoba" | "platce"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1490,6 +1610,7 @@ export const Constants = {
       shift_status: ["open", "pending", "claimed", "completed", "cancelled"],
       subject_rep_level: ["rep", "member"],
       subject_type: ["club", "commercial"],
+      vat_mode: ["neplatce", "identifikovana_osoba", "platce"],
     },
   },
 } as const

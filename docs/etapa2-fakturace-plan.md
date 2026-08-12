@@ -233,6 +233,34 @@ korunách (validace + CHECK), `corrected_hours` na čtvrthodiny a nezáporné.
 řeší poslední fázi, ne agregaci DPH. Ta je vlastní otázka a **rozhoduje o odvedené dani**,
 takže patří účetní klienta, ne nám — viz Q7 v kapitole 6.
 
+### R11 — Každá SECURITY DEFINER funkce nad `billing_settings` musí dusit chyby constraintů
+
+> Doplněno 12. 8. 2026 (bezpečnostní brána A3). **Není to dnes zneužitelné — je to past,
+> kterou si A3 sama nastražila na fázi B.**
+
+Uvnitř `SECURITY DEFINER` funkce neplatí RLS, takže je řádek viditelný a Postgres při
+porušení CHECKu vysype jeho obsah do `DETAIL`. PostgREST ten DETAIL u **RPC** přeposílá
+klientovi. Ověřeno útokem: člen, který z přímého `SELECT` dostane `[]`, dostal z RPC
+
+```
+"details": "Failing row contains (…, 27074358, CZ27074358, 192000145399/0800,
+            CZ6508000000192000145399, …)"
+```
+
+tedy **IBAN, číslo účtu, IČO i DIČ**. Dnes na `billing_settings` žádná taková funkce
+nesahá — ale A3 v hlavičce sama plánuje, že kontrola úplnosti údajů bude „ve funkci,
+která doklad vystavuje (fáze B)". Jakmile ji B1/B2 přidá, díra se otevře sama.
+
+**Pravidlo pro B:** každá `SECURITY DEFINER` funkce sahající na `billing_settings`
+(a) začne kontrolou `has_role(auth.uid(), 'admin')` a (b) odchytí porušení constraintů:
+
+```sql
+EXCEPTION WHEN check_violation OR unique_violation THEN
+  RAISE EXCEPTION 'Neplatná hodnota fakturačního nastavení.' USING ERRCODE = '22023';
+```
+
+Je to táž třída jako nález 8b v `SCHEMA_DRIFT` (RPC nad `reservations`), který řeší A5.
+
 ### R4 — PDF serverově, `pdf-lib` v Edge funkci
 
 Headless Chromium v Supabase Edge Functions **není** a spouštět podprocesy nejde →
@@ -324,6 +352,13 @@ Podle pravidla Etapy 2 v `CLAUDE.md` neprojde nic bez svých bran.
 | **A2** | CHECK na `corrected_hours` (nezáporné, čtvrthodiny) + sazby v celých Kč (`settings`, `subjects.default_rate`) + validace ve formuláři | ano, malá | nízké — může narazit na existující data, migrace to musí ohlásit, ne opravit | CR, DB |
 | **A3** | `billing_settings` (singleton, vše NULLABLE), RLS **admin-only na SELECT i UPDATE**, audit trigger, `set_updated_fields` | ano | nízké | CR, SEC, DB |
 | **A4** | UI Nastavení → Fakturace: formulář, dopočet IBANu z českého čísla účtu (mod-11 + mod-97) s **povinným potvrzením adminem**, náhled | ne | nízké | CR |
+| **A5** | **Bezpečnostní zpevnění — MUSÍ být hotové, než B1 sáhne na peněžní tabulky.** (1) `EXCEPTION WHEN check_violation` ve všech SECURITY DEFINER RPC — bez něj posílá PostgREST klientovi `Failing row contains` i s částkou; (2) `deleted_at IS NULL` do politiky `reservations_update`; (3) horní mez `corrected_hours` — **tvrdý strop 24 h** (rozhodnutí PM 12. 8. 2026, NEvázat na délku rezervace) + povinný `correction_reason`; (4) `REVOKE TRUNCATE, DELETE` od anon/authenticated na peněžních tabulkách | ano | střední | CR, SEC, DB |
+
+> **Fáze A se za pochodu rozrostla** o PR, které plán původně neměl. Pro dohledatelnost:
+> **A1b** (SQL testy zaokrouhlení proti živému Postgresu), **A1c** (Vitest + `money.test.ts`),
+> **A1d** (sjednocení R3 na stupňovitou kvantizaci), **A2b** (ceník a sazby subjektů jen
+> adminovi — dodržení klientova „částku vidí admin a autor"), **A5** (výše).
+> Nálezy, které do A5 patří, jsou rozepsané v `docs/SCHEMA_DRIFT.md`, kapitola 8.
 
 > A4 je místo, kde se od klienta poprvé sbírají reálné údaje — ale formulář se dá
 > postavit a otestovat prázdný.
@@ -333,7 +368,7 @@ Podle pravidla Etapy 2 v `CLAUDE.md` neprojde nic bez svých bran.
 | PR | Obsah | Migrace | Riziko | Brány |
 |---|---|---|---|---|
 | **B1** | `invoice_counter` + `next_invoice_number()` (upsert `RETURNING`) + `invoice_series_for()` + `set_invoice_counter()` pro navázání na ručně vystavené doklady. RLS **bez jediné politiky** | ano | nízké | CR, SEC, DB |
-| **B2** | Enumy (`invoice_status`, `invoice_doc_type`, `invoice_kind`, `vat_mode`), `invoices`, `invoice_items`, indexy, CHECKy, audit + updated triggery, RLS v **téže** migraci | ano | nízké | CR, SEC, DB |
+| **B2** | Enumy (`invoice_status`, `invoice_doc_type`, `invoice_kind`; **`vat_mode` už existuje — založila ho A3, nezakládat znovu**), `invoices`, `invoice_items`, indexy, CHECKy, audit + updated triggery, RLS v **téže** migraci | ano | nízké | CR, SEC, DB |
 | **B3** | Immutability guardy (faktura i položky) + `recalc_invoice_totals()` | ano | střední — logika stavového automatu | CR, SEC, DB |
 | **B4** | `reservations.invoice_id` + `invoiced_at`, 2 indexy, **doplnění INSERT větve guardu** (`NEW.invoice_id := NULL`), `guard_invoiced_reservation` jako `trg_reservations_z_invoiced` | ano | **vysoké — jediná migrace sahající na živou tabulku** | CR, SEC, DB |
 | **B5** | RPC: `create_invoice_draft_commercial/club`, `issue_invoice`, `mark_invoice_paid`, `cancel_invoice`, `create_credit_note`, `delete_invoice_draft` + view `invoices_list` (`security_invoker = on`) | ano | střední | CR, SEC, DB |
@@ -434,12 +469,12 @@ jedna společná řada, ruční evidence plateb, bez kopie do Drive.
 
 | # | Otázka | Doporučení |
 |---|---|---|
-| **Q1** | **Měsíční běh: poslední den, nebo 1. den následujícího?** Zadání říká poslední den, ale běh 31. 8. ve 2:00 **nezachytí rezervace z 31. srpna večer**. Dvě brány nezávisle doporučily 1. den následujícího | **1. den následujícího v 06:00.** Je to hodnota v `billing_settings`, takže změna je jednořádková — ale default by měl být ten, který neztrácí data |
+| **Q1** ✅ | **ROZHODNUTO PM 12. 8. 2026, zavedeno v A3: 1. den následujícího v 06:00** (`billing_settings.monthly_run_day = 1`, `monthly_run_hour = 6`). Klientova původní varianta „poslední den" zůstala vyjádřitelná jako `monthly_run_day = 0`, takže návrat k ní je UPDATE, ne migrace. Původní znění otázky: **Měsíční běh: poslední den, nebo 1. den následujícího?** Zadání říká poslední den, ale běh 31. 8. ve 2:00 **nezachytí rezervace z 31. srpna večer**. Dvě brány nezávisle doporučily 1. den následujícího | **1. den následujícího v 06:00.** Je to hodnota v `billing_settings`, takže změna je jednořádková — ale default by měl být ten, který neztrácí data |
 | **Q2** | **Instalovat `pg_cron`** na projekt `curling-demo`? Je to zásah do DB → podle CLAUDE.md záloha + souhlas PM | Ano. Alternativa (Netlify/GitHub Actions) přidává servisní klíč mimo Supabase a vyžaduje navíc opravu N5 |
 | **Q3** | **Účtuje hala storno poplatky? Dává slevy?** Obojí je teď jedno slovo ve schématu (`reservation_id` nullable, slevový řádek), potom migrace nad ostrými daty | Připravit obojí i při odpovědi „ne" — je to zadarmo |
-| **Q4** | **Fakturují se nepotvrzené rezervace členů?** Dnes do „Kdo dluží" spadnou. Drží led, takže logika pro fakturaci je — ale klub dostane fakturu za něco, co jeho zástupce neschválil | Fakturovat, ale na obrazovce rozlišit. **Jediná defaultovaná otázka, kde špatná odpověď znamená chybně vystavené doklady** — zeptat se dřív než na ostatní |
+| **Q4** ✅ | **ROZHODNUTO PM 12. 8. 2026, zavedeno v A3: fakturují se JEN schválené** (`billing_settings.invoice_only_approved = true`). Pozor, je to OPAK doporučení níže — to zůstává jen jako zápis úvahy. Původní znění otázky: **Fakturují se nepotvrzené rezervace členů?** Dnes do „Kdo dluží" spadnou. Drží led, takže logika pro fakturaci je — ale klub dostane fakturu za něco, co jeho zástupce neschválil | Fakturovat, ale na obrazovce rozlišit. **Jediná defaultovaná otázka, kde špatná odpověď znamená chybně vystavené doklady** — zeptat se dřív než na ostatní |
 | **Q5** | **Význam „hybridní" v názvu souboru** (`001_hybridní_curling_220826`) | Nejspíš `{pořadí}_{název akce}_{datum}`, kde „hybridní curling" je jeden dvouslovný **název akce** (je to reálná varianta hry) a `curling` je jen fallback. Stojí za to se zeptat přesně takhle |
-| **Q6** | **Formát čísla faktury musí dát ≤ 10 číslic** (limit variabilního symbolu) a být jednoznačný napříč řadami | `RRRRNNNN` vyhovuje. Kdyby klient chtěl oddělené řady, navrhnout `RRRR{1\|2}NNN` — 9 číslic, jednoznačné |
+| **Q6** | **Formát čísla faktury musí dát ≤ 10 číslic** (limit variabilního symbolu) a být jednoznačný napříč řadami | `RRRRNNNN` vyhovuje. Kdyby klient chtěl oddělené řady, navrhnout `RRRR{1\|2}NNN` — 8 číslic, jednoznačné |
 | **Q7** | **Agreguje se DPH po řádcích, nebo z mezisoučtu za sazbu?** Kanonické pravidlo R3 řeší poslední fázi, tuhle otázku ne — a přitom **rozhoduje o odvedené dani**. Změřeno na 40 000 modelových dokladech po 8 řádcích: obě varianty se liší u **54,5 %** dokladů (až 0,03 Kč na dani) a u **0,6 %** se liší i částka k úhradě o celou korunu | **Rozhodnout před B2, ať se to nemusí migrovat nad ostrými doklady.** Doporučení k potvrzení účetní: daň počítat **z agregovaného základu za každou sazbu zvlášť** (`vat_amount = round(Σ vat_base za sazbu × sazba, 2)`), s invariantem `Σ vat_base = subtotal`. Rekapitulace po sazbách je náležitost daňového dokladu, takže rozpad podle sazeb potřebujeme tak jako tak — a R2 počítá s **dvěma režimy na jedné hale**. `rounding_amount` stojí **mimo základ daně** |
 
 > **Q7 není technické rozhodnutí.** Nesmí ho udělat CC ani PM od stolu — ať ho potvrdí
