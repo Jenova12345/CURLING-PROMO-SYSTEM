@@ -9,6 +9,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSettings, type OpeningHours } from '@/hooks/useSettings';
 import { parseSazba } from '@/lib/money';
+import { BillingSettingsCard } from '@/components/settings/BillingSettingsCard';
 
 const DAYS = [['1', 'Pondělí'], ['2', 'Úterý'], ['3', 'Středa'], ['4', 'Čtvrtek'], ['5', 'Pátek'], ['6', 'Sobota'], ['7', 'Neděle']];
 
@@ -135,6 +136,8 @@ const Settings = () => {
               <Button onClick={saveRates} disabled={isSaving}>Uložit ceník</Button>
             </CardContent>
           </Card>
+
+          <BillingSettingsCard />
 
           <Card>
             <CardHeader><CardTitle>Otevírací doba</CardTitle><CardDescription>Určuje rozsah časové osy v kalendáři.</CardDescription></CardHeader>

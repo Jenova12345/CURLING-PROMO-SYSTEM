@@ -64,7 +64,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         .eq('user_id', userId)
         .single();
       
-      console.log('[AuthContext] Profile fetch result:', { profileData, profileError });
+      // Schválně se neloguje celý `profileData` — je v něm `bank_account`,
+      // takže by si každý uživatel při každém přihlášení vypsal do konzole
+      // vlastní číslo účtu. Pro ladění stačí vědět, že profil dorazil.
+      console.log('[AuthContext] Profile fetch result:', { nalezen: !!profileData, profileError });
       
       if (profileData) {
         setProfile(profileData);

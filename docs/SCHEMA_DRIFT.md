@@ -194,7 +194,7 @@ s uživatelským vstupem v dotazu ji zpřístupní — a nic by to nezachytilo.
 **Návrh:** `REVOKE TRUNCATE, DELETE ON settings, subjects, audit_log, reservations
 FROM anon, authenticated;` a `REVOKE ALL ON settings, subjects FROM anon;`
 
-### 8f) `profiles.bank_account` čte každý přihlášený · **→ backlog Etapy 2**
+### 8f) `profiles.bank_account` čte každý přihlášený · **→ A5**
 
 **Zaevidováno 12. 8. 2026** (bezpečnostní brána A3). Politika
 `Anyone authenticated can read profiles USING (true)` plus plné sloupcové granty
@@ -205,9 +205,13 @@ znamenají, že si běžný člen přečte přes REST **cizí bankovní účty a
 ```
 
 Je to starší dluh, ne A3 — ale je absurdní chránit IBAN haly na úroveň „nikdo kromě
-admina", zatímco čísla účtů brigádníků jsou na jeden GET. Není to v rozsahu A5 (ten je
-o peněžních tabulkách fakturace), takže **samostatný úkol do backlogu Etapy 2**;
-rozhodnutí, kdo smí vidět jaká pole profilu, patří PM.
+admina", zatímco čísla účtů brigádníků jsou na jeden GET.
+
+**Rozhodnutí PM (12. 8. 2026), řeší A5:** citlivá pole profilu vidí **jen vlastník
+a admin**, nikdo jiný. Neplatí to jen pro `bank_account` — stejnou logikou projít
+i ostatní citlivá pole (telefon, adresa, datum narození, rodné číslo, pokud tam je).
+Součástí musí být ověření, že tím nepadne žádná legitimní cesta: výplaty jsou
+admin-only, takže by nemělo, ale chce to potvrdit útokem i průchodem UI.
 
 ### 8e) Korekce hodin nemá horní mez ani povinný důvod · **→ A5**
 

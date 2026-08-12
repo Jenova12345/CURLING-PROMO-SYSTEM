@@ -379,6 +379,77 @@ BEGIN
     format('v public.settings nepřibyl žádný sloupec (nové: %s)', array_to_string(_navic, ', ')));
 END $$;
 
+-- -----------------------------------------------------------------------------
+-- 6) CHECKy na peněžní pole (A4) — databáze je poslední slovo, ne formulář
+--
+-- Všechny kontroly IBANu (mod-97, křížová kontrola s číslem účtu, potvrzení
+-- adminem) žijí ve formuláři. Fáze C a D ale poběží pod `service_role`, která
+-- formulářem neprojde a RLS i granty obchází — pro ni je tohle jediná obrana.
+-- -----------------------------------------------------------------------------
+DO $$
+BEGIN
+  PERFORM pg_temp.ocekavej_chybu(
+    $q$UPDATE public.billing_settings SET bank_iban = 'CZ9999999999999999999999'$q$,
+    'billing_settings_bank_iban', 'IBAN s nesedícími kontrolními číslicemi odmítnut');
+
+  PERFORM pg_temp.ocekavej_chybu(
+    $q$UPDATE public.billing_settings SET bank_iban = 'CZ340800000019200014539'$q$,
+    'billing_settings_bank_iban', '23znakový IBAN odmítnut (samotné mod-97 by ho pustilo)');
+
+  PERFORM pg_temp.ocekavej_chybu(
+    $q$UPDATE public.billing_settings SET bank_account = '1/9999'$q$,
+    'billing_settings_bank_account', 'číslo účtu mimo český tvar odmítnuto');
+
+  PERFORM pg_temp.ocekavej_chybu(
+    $q$UPDATE public.billing_settings SET bank_account = 'asdf'$q$,
+    'billing_settings_bank_account', 'nesmyslné číslo účtu odmítnuto');
+
+  PERFORM pg_temp.ocekavej_chybu(
+    $q$UPDATE public.billing_settings SET supplier_ico = '123'$q$,
+    'billing_settings_supplier_ico', 'IČO s jiným než osmi číslicemi odmítnuto');
+
+  -- A co projít MÁ
+  UPDATE public.billing_settings SET bank_iban = 'CZ6508000000192000145399',
+                                     bank_account = '19-2000145399/0800',
+                                     supplier_ico = '27074358';
+  PERFORM pg_temp.tvrd(
+    (SELECT bank_iban FROM public.billing_settings) = 'CZ6508000000192000145399',
+    'platný IBAN, číslo účtu i IČO projdou');
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 6b) SQL a JS musí dávat TOTÉŽ
+--
+-- `public.iban_je_platny` a `overIban` v src/lib/iban.ts jsou dvě implementace
+-- téhož pravidla. Kdyby se rozešly, formulář by pustil IBAN, který databáze
+-- odmítne (nebo hůř: naopak). Hodnoty níž jsou schválně tytéž jako v iban.test.ts.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _r record;
+BEGIN
+  FOR _r IN
+    SELECT * FROM (VALUES
+      ('CZ6508000000192000145399', true,  'referenční český IBAN'),
+      ('CZ65 0800 0000 1920 0014 5399', true, 'IBAN s mezerami'),
+      ('CZ0308000000355609555113', true,  'IBAN s vedoucí nulou v kontrolních číslicích'),
+      ('GB82WEST12345698765432',   true,  'britský vzorový IBAN'),
+      ('DE89370400440532013000',   true,  'německý vzorový IBAN'),
+      ('CZ6508000000192000145398', false, 'český IBAN s překlepem'),
+      ('CZ340800000019200014539',  false, '23 znaků'),
+      ('CZ41080000001920001453997', false, '25 znaků'),
+      ('CZ72ABCDEFGHIJ0800000019', false, 'písmena v českém BBANu'),
+      ('CZ790',                    false, 'příliš krátké'),
+      ('GB82WEST12345698765433',   false, 'britský IBAN s překlepem')
+    ) AS t(iban, ocekavano, popis)
+  LOOP
+    PERFORM pg_temp.tvrd(
+      public.iban_je_platny(_r.iban) = _r.ocekavano,
+      format('iban_je_platny: %s → %s', _r.popis, _r.ocekavano));
+  END LOOP;
+
+  PERFORM pg_temp.tvrd(public.iban_je_platny(NULL), 'prázdný IBAN projde (pole je nepovinné)');
+END $$;
+
 DO $$ BEGIN RAISE NOTICE '=== VŠECHNY TESTY PROŠLY ==='; END $$;
 
 ROLLBACK;
