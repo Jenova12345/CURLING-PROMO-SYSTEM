@@ -431,6 +431,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "invoice_items_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_list"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "invoice_items_reservation_id_fkey"
             columns: ["reservation_id"]
             isOneToOne: false
@@ -1045,6 +1052,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "reservations_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_list"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "reservations_sheet_id_fkey"
             columns: ["sheet_id"]
             isOneToOne: false
@@ -1490,6 +1504,57 @@ export type Database = {
       }
     }
     Views: {
+      billing_health: {
+        Row: {
+          posledni_vystaveni: string | null
+          rozesle_castky: number | null
+          rozesle_soucty: number | null
+          spatna_cisla: number | null
+          stare_koncepty: number | null
+          vyfakturovane_zrusene: number | null
+          zamek_bez_radku: number | null
+        }
+        Relationships: []
+      }
+      invoices_list: {
+        Row: {
+          cislo: string | null
+          created_at: string | null
+          datum_splatnosti: string | null
+          datum_vystaveni: string | null
+          id: string | null
+          issued_at: string | null
+          kind: Database["public"]["Enums"]["invoice_kind"] | null
+          obdobi_do: string | null
+          obdobi_od: string | null
+          odberatel: string | null
+          pdf_path: string | null
+          po_splatnosti: boolean | null
+          polozek: number | null
+          status: Database["public"]["Enums"]["invoice_status"] | null
+          subject_id: string | null
+          subtotal: number | null
+          total: number | null
+          total_rounded: number | null
+          variabilni_symbol: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "invoices_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects_rates"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles_public: {
         Row: {
           bank_account: string | null
@@ -1807,6 +1872,21 @@ export type Database = {
     }
     Functions: {
       approve_reservation: { Args: { p_reservation_id: string }; Returns: Json }
+      billing_reconcile: {
+        Args: { _do: string; _od: string }
+        Returns: {
+          dluzi: number
+          fakturovano: number
+          k_fakturaci: number
+          neschvalene: number
+          rezervaci: number
+          rozdil: number
+          subject_id: string
+          subjekt: string
+          v_konceptu: number
+          ve_stornu: number
+        }[]
+      }
       booking_priority: {
         Args: { _type: Database["public"]["Enums"]["event_type"] }
         Returns: number
@@ -1872,6 +1952,30 @@ export type Database = {
         }
         Returns: Json
       }
+      create_invoice_draft_club: {
+        Args: { _obdobi_do: string; _obdobi_od: string; _subject_id: string }
+        Returns: string
+      }
+      create_invoice_draft_commercial: {
+        Args: { _event_id: string }
+        Returns: string
+      }
+      delete_invoice_draft: { Args: { _invoice_id: string }; Returns: number }
+      fakturovatelne_rezervace: {
+        Args: { _do: string; _od: string; _subject_id: string }
+        Returns: {
+          approved_at: string
+          castka: number
+          end_at: string
+          event_title: string
+          hodiny: number
+          id: string
+          invoice_id: string
+          sazba: number
+          sheet_name: string
+          start_at: string
+        }[]
+      }
       find_subject_by_ico: {
         Args: { p_ico: string }
         Returns: {
@@ -1897,6 +2001,7 @@ export type Database = {
       iban_je_platny: { Args: { _iban: string }; Returns: boolean }
       is_subject_member: { Args: { _subject: string }; Returns: boolean }
       is_subject_rep: { Args: { _subject: string }; Returns: boolean }
+      issue_invoice: { Args: { _invoice_id: string }; Returns: Json }
       move_booking: {
         Args: {
           p_end: string
@@ -1905,6 +2010,16 @@ export type Database = {
           p_start: string
         }
         Returns: Json
+      }
+      nevyfakturovane_akce: {
+        Args: { _obdobi_do: string; _obdobi_od: string; _subject_id: string }
+        Returns: {
+          castka: number
+          den: string
+          event_id: string
+          nazev: string
+          rezervaci: number
+        }[]
       }
       next_invoice_number: {
         Args: { _rada: string; _rok: number }
@@ -1921,6 +2036,13 @@ export type Database = {
           _user: string
         }
         Returns: string
+      }
+      obdobi_hranice: {
+        Args: { _do: string; _od: string }
+        Returns: {
+          konec: string
+          zacatek: string
+        }[]
       }
       reservation_priority: {
         Args: {

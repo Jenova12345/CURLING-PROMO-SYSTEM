@@ -40,8 +40,12 @@ export interface InvoiceDraft {
   periodTo: Date;
 }
 
-/** Ochrana proti rozbití stránky uživatelským textem (názvy akcí, adresy). */
-function esc(value: unknown): string {
+/**
+ * Ochrana proti rozbití stránky uživatelským textem (názvy akcí, adresy).
+ * Exportované, protože týž doklad tiskne i `invoicePrint.ts` — dvě kopie
+ * escapovací funkce jsou přesně ten způsob, jak jedna z nich časem zaostane.
+ */
+export function esc(value: unknown): string {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')

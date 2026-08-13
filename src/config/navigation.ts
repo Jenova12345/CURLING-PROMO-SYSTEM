@@ -6,6 +6,7 @@ import {
   MessageCircle, 
   Wallet,
   Coins,
+  FileText,
   Building2,
   Settings,
   User,
@@ -61,6 +62,12 @@ export const NAV_ITEMS: NavItem[] = [
     path: '/dues',
     label: 'Kdo dluží',
     icon: Coins,
+    roles: ['admin']
+  },
+  {
+    path: '/invoices',
+    label: 'Faktury',
+    icon: FileText,
     roles: ['admin']
   },
   {
