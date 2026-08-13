@@ -51,7 +51,7 @@
 -- kontrolní součet by pak seděl nula proti nule a ohlásil úspěch.
 --
 -- VRATNOST:
---   DROP VIEW IF EXISTS public.billing_health;
+--   DROP FUNCTION IF EXISTS public.billing_health();
 --   DROP FUNCTION IF EXISTS public.billing_reconcile(date, date);
 -- =============================================================================
 
@@ -180,7 +180,7 @@ REVOKE ALL ON FUNCTION public.billing_reconcile(date, date) FROM public, anon, s
 GRANT EXECUTE ON FUNCTION public.billing_reconcile(date, date) TO authenticated;
 
 COMMENT ON FUNCTION public.billing_reconcile(date, date) IS
-  'Kontrolní součet Etapy 2: dluzi = fakturovano + v_konceptu + ve_stornu + k_fakturaci + neschvalene. Sloupec `rozdil` musí být 0 — cokoli jiného je vada. Porovnává `total` (přesné), nikdy `total_rounded`. POZOR: „rozdil = 0" NEZNAMENÁ „všechno sedí" — vyfakturovanou rezervaci, která se pak zrušila, tahle rovnice nevidí (vypadne z obou stran). Tu třídu hlídá billing_health.vyfakturovane_zrusene.';
+  'Kontrolní součet Etapy 2: dluzi = fakturovano + v_konceptu + ve_stornu + k_fakturaci + neschvalene. Sloupec `rozdil` musí být 0 — cokoli jiného je vada. Porovnává `total` (přesné), nikdy `total_rounded`. POZOR: „rozdil = 0" NEZNAMENÁ „všechno sedí" — vyfakturovanou rezervaci, která se pak zrušila, tahle rovnice nevidí (vypadne z obou stran). Tu třídu hlídá billing_health().vyfakturovane_zrusene.';
 
 -- -----------------------------------------------------------------------------
 -- `billing_health` — mrtvý muž pro věci, které kontrolní součet za období nevidí
@@ -188,12 +188,45 @@ COMMENT ON FUNCTION public.billing_reconcile(date, date) IS
 -- Kontrolní součet se ptá „sedí tohle období?". Tenhle pohled se ptá „není
 -- někde něco shnilého?" napříč vším — a odpovídá čísly, která mají být nulová.
 --
--- `security_invoker = on`: pohled ukazuje peníze, takže musí platit RLS volajícího
--- (`invoices_select_admin`). S `off` by ho přečetl každý přihlášený, což je přesně
--- díra, kterou měl drift 8f u `profiles_public`.
+-- PROČ FUNKCE, A NE POHLED: první verze byla pohled se `security_invoker = on`,
+-- aby platila RLS volajícího. Jenže tím se práva ověřují i na ZÁKLADNÍ tabulky —
+-- a `authenticated` nemá po A5 sloupcový SELECT na `reservations.invoice_id`
+-- (spolu se sazbou, hodinami a částkami). Výsledek: pohled si nepřečetl ani
+-- admin, skončil na „permission denied for table reservations". Nevšimlo si toho
+-- nic, protože kontrolní blok téhle migrace i testy běží pod `postgres`, kde
+-- granty neplatí — mrtvý muž byl nasazený tak, že na něj jeho publikum nedosáhlo.
+--
+-- Druhá možnost byla dograntovat `authenticated` sloupcový SELECT, ale to otevírá
+-- zpátky A5. Správně je tedy `SECURITY DEFINER` s kontrolou role na začátku,
+-- přesně jako `billing_reconcile` vedle.
 -- -----------------------------------------------------------------------------
 DROP VIEW IF EXISTS public.billing_health;
-CREATE VIEW public.billing_health WITH (security_invoker = on) AS
+DROP FUNCTION IF EXISTS public.billing_health();
+
+CREATE OR REPLACE FUNCTION public.billing_health()
+RETURNS TABLE (
+  rozesle_castky        bigint,
+  zamek_bez_radku       bigint,
+  vyfakturovane_zrusene bigint,
+  spatna_cisla          bigint,
+  rozesle_soucty        bigint,
+  stare_koncepty        bigint,
+  posledni_vystaveni    timestamptz
+)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  -- Táž podmínka jako u `billing_reconcile`: výjimka jen pro běh pod databázovou
+  -- rolí (pg_cron ve fázi D), ne pro chybějící `sub` v tokenu.
+  IF NOT (auth.uid() IS NULL AND session_user IN ('postgres', 'supabase_admin'))
+     AND NOT has_role(auth.uid(), 'admin') THEN
+    RAISE EXCEPTION 'Stav fakturace vidí jen správce haly.';
+  END IF;
+
+  RETURN QUERY
   SELECT
     -- Rezervace, jejíž částka se rozešla s řádkem už vystaveného dokladu.
     -- Tohle je nález N1 v přímém přenosu: doklad tvrdí jedno, rezervace druhé.
@@ -247,14 +280,13 @@ CREATE VIEW public.billing_health WITH (security_invoker = on) AS
 
     -- Poslední vystavený doklad — nejlevnější „tiká to vůbec?" pro fázi D.
     (SELECT max(issued_at) FROM public.invoices WHERE status <> 'koncept') AS posledni_vystaveni;
+END;
+$$;
 
--- `authenticated` patří do REVOKE ze stejného důvodu jako u `invoices_list`:
--- výchozí práva Supabase dávají na nový objekt plné `arwdDxtm`. Hlídá to
--- security_hardening_test.sql (drift 8d).
-REVOKE ALL ON public.billing_health FROM anon, authenticated, public, service_role;
-GRANT SELECT ON public.billing_health TO authenticated;
+REVOKE ALL ON FUNCTION public.billing_health() FROM public, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.billing_health() TO authenticated;
 
-COMMENT ON VIEW public.billing_health IS
+COMMENT ON FUNCTION public.billing_health() IS
   'Mrtvý muž fakturace: všechny počty musí být 0. rozesle_castky = nález N1 (rezervace se po vyfakturování změnila), zamek_bez_radku = rozpor mezi zámkem a pravdou (R1), vyfakturovane_zrusene = zrušená rezervace na vystaveném dokladu (čeká na dobropis) — tuhle třídu billing_reconcile nevidí.';
 
 -- -----------------------------------------------------------------------------
@@ -263,7 +295,7 @@ COMMENT ON VIEW public.billing_health IS
 DO $$
 DECLARE _h record;
 BEGIN
-  SELECT * INTO _h FROM public.billing_health;
+  SELECT * INTO _h FROM public.billing_health();
   IF _h.rozesle_castky <> 0 OR _h.zamek_bez_radku <> 0 OR _h.vyfakturovane_zrusene <> 0
      OR _h.spatna_cisla <> 0 OR _h.rozesle_soucty <> 0 THEN
     RAISE EXCEPTION 'B6: fakturační data nejsou v pořádku hned po nasazení (%).', row_to_json(_h);

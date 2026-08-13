@@ -232,6 +232,17 @@ const Dues = () => {
               </TableBody>
             </Table>
           )}
+          {/* Bez tohohle je rozdíl mezi číslem u tlačítka a částkou na konceptu
+              nevysvětlitelný: tenhle přehled ukazuje VŠECHNY zpoplatněné rezervace
+              období, kdežto faktura bere jen schválené a dosud nevyfakturované.
+              Přesnou částku má proto až koncept — a od toho je krok „zkontroluj". */}
+          {summary.length > 0 && (
+            <p className="mt-3 text-xs text-muted-foreground">
+              Částky výš jsou za všechny zpoplatněné rezervace období. Na fakturu jdou
+              jen ty <b>schválené</b> a dosud nevyfakturované, takže koncept může být nižší —
+              přesnou částku uvidíš na něm.
+            </p>
+          )}
         </CardContent>
       </Card>
 

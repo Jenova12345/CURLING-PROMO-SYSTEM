@@ -199,8 +199,13 @@ BEGIN
 
   PERFORM pg_temp.tvrd(_f.status = 'vystaveno', 'doklad je vystavený');
   PERFORM pg_temp.tvrd(_f.cislo ~ '^\d{8}$', format('číslo má tvar RRRRNNNN (%s)', _f.cislo));
-  PERFORM pg_temp.tvrd(left(_f.cislo, 4) = EXTRACT(year FROM current_date)::text,
-    'číslo začíná aktuálním rokem');
+  -- Pražský rok, ne UTC: 1. ledna v 00:30 pražského času je `current_date` pořád
+  -- 31. prosince, takže by doklad dostal loňské číslo.
+  PERFORM pg_temp.tvrd(
+    left(_f.cislo, 4) = EXTRACT(year FROM (now() AT TIME ZONE 'Europe/Prague')::date)::text,
+    'číslo začíná aktuálním rokem podle pražského času');
+  PERFORM pg_temp.tvrd(_f.datum_vystaveni = (now() AT TIME ZONE 'Europe/Prague')::date,
+    'datum vystavení je pražský den');
   PERFORM pg_temp.tvrd(_f.variabilni_symbol = regexp_replace(_f.cislo, '\D', '', 'g'),
     'variabilní symbol je číslo bez nečíselných znaků');
   PERFORM pg_temp.tvrd(length(_f.variabilni_symbol) <= 10,
@@ -338,7 +343,7 @@ BEGIN
   SELECT hodnota::uuid INTO _sub FROM _stav WHERE klic = 'subject';
   SELECT id INTO _rez FROM public.reservations WHERE invoice_id = _inv ORDER BY start_at LIMIT 1;
 
-  SELECT * INTO _h FROM public.billing_health;
+  SELECT * INTO _h FROM public.billing_health();
   PERFORM pg_temp.tvrd(_h.rozesle_castky = 0 AND _h.zamek_bez_radku = 0
                        AND _h.spatna_cisla = 0 AND _h.rozesle_soucty = 0,
     'billing_health je před zásahem čistý');
@@ -348,7 +353,7 @@ BEGIN
      SET corrected_hours = 3, correction_reason = 'Test rozejití po vyfakturování'
    WHERE id = _rez;
 
-  SELECT * INTO _h FROM public.billing_health;
+  SELECT * INTO _h FROM public.billing_health();
   PERFORM pg_temp.tvrd(_h.rozesle_castky = 1,
     'billing_health ohlásí rezervaci, která se po vyfakturování změnila (nález N1)');
 
@@ -358,7 +363,7 @@ BEGIN
 
   -- Vrátit zpět, ať následující tvrzení neměří rozbitý stav.
   UPDATE public.reservations SET corrected_hours = NULL, correction_reason = NULL WHERE id = _rez;
-  SELECT * INTO _h FROM public.billing_health;
+  SELECT * INTO _h FROM public.billing_health();
   PERFORM pg_temp.tvrd(_h.rozesle_castky = 0, 'po vrácení korekce je billing_health zase čistý');
 END $$;
 
@@ -388,14 +393,14 @@ BEGIN
   PERFORM pg_temp.tvrd(COALESCE(_r.rozdil, 0) = 0,
     'kontrolní součet tuhle třídu NEVIDÍ (proto se na něj nesmí spoléhat samotný)');
 
-  SELECT * INTO _h FROM public.billing_health;
+  SELECT * INTO _h FROM public.billing_health();
   PERFORM pg_temp.tvrd(_h.vyfakturovane_zrusene = 1,
     'billing_health ohlásí zrušenou rezervaci na vystaveném dokladu (čeká na dobropis)');
 
   UPDATE public.reservations
      SET status = 'confirmed', cancelled_at = NULL, cancel_reason = NULL
    WHERE id = _rez;
-  SELECT * INTO _h FROM public.billing_health;
+  SELECT * INTO _h FROM public.billing_health();
   PERFORM pg_temp.tvrd(_h.vyfakturovane_zrusene = 0, 'po obnovení rezervace je mrtvý muž zase zticha');
 END $$;
 
@@ -632,6 +637,10 @@ BEGIN
     'SELECT * FROM public.billing_reconcile(''2026-07-01'', ''2026-07-31'')',
     'jen správce', 'člen nevidí kontrolní součet');
 
+  PERFORM pg_temp.ocekavej_chybu(
+    'SELECT * FROM public.billing_health()',
+    'jen správce', 'člen nevidí stav fakturace');
+
   -- Čtení faktur drží RLS, ne jen RPC.
   PERFORM pg_temp.tvrd((SELECT count(*) FROM public.invoices) = 0,
     'člen nevidí ani jednu fakturu (RLS invoices_select_admin)');
@@ -670,6 +679,23 @@ BEGIN
     'billing_reconcile váže cronovou výjimku na session_user, ne jen na prázdné auth.uid()');
 END $$;
 
+-- `billing_health` MUSÍ zůstat funkce, ne pohled. Jako pohled se
+-- `security_invoker = on` ověřovala práva i na základní tabulky — a `authenticated`
+-- nemá po A5 sloupcový SELECT na `reservations.invoice_id`, takže si mrtvého muže
+-- nepřečetl ani admin („permission denied for table reservations"). Nevšimlo si
+-- toho nic, protože kontrolní blok migrace i tenhle soubor běží pod `postgres`,
+-- kde granty neplatí. Tvrzení je tu proto, aby se to nevrátilo zpátky.
+DO $$
+BEGIN
+  PERFORM pg_temp.tvrd(
+    EXISTS (SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace
+             AND proname = 'billing_health' AND prosecdef),
+    'billing_health je SECURITY DEFINER funkce');
+  PERFORM pg_temp.tvrd(
+    NOT EXISTS (SELECT 1 FROM pg_views WHERE schemaname = 'public' AND viewname = 'billing_health'),
+    'billing_health NENÍ pohled (jako pohled si ho nepřečetl ani admin)');
+END $$;
+
 -- Servisní klíč nesmí obejít admina: `service_role` ignoruje RLS, takže kdyby
 -- na fakturační RPC dosáhl, vystaví doklad kdokoli s tím klíčem.
 DO $$
@@ -680,7 +706,8 @@ BEGIN
    WHERE p.pronamespace = 'public'::regnamespace
      AND p.proname IN ('create_invoice_draft_club', 'create_invoice_draft_commercial',
                        'issue_invoice', 'delete_invoice_draft', 'billing_reconcile',
-                       'fakturovatelne_rezervace', 'next_invoice_number')
+                       'fakturovatelne_rezervace', 'next_invoice_number', 'billing_health',
+                       'obdobi_hranice')
      AND (has_function_privilege('anon', p.oid, 'EXECUTE')
           OR has_function_privilege('service_role', p.oid, 'EXECUTE'));
   PERFORM pg_temp.tvrd(_chybne IS NULL,

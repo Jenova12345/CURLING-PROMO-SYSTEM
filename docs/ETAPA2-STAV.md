@@ -231,6 +231,23 @@ Věci, které se v týhle codebase tvářily jinak, než jsou:
   a jen reference. Používej `npm run typecheck` (`tsc -b`).
 - **`npm run lint` je červený už na HEADu** (66 errors z Etapy 1). Jako brána
   nefunguje — nový error od šumu nikdo nerozezná.
+- **`SET LOCAL ROLE authenticated` NESTAČÍ na guardy, které se ptají na `session_user`.**
+  Mění `current_user`, ale `session_user` zůstává `postgres` — takže test spadne do
+  větve pro cron a tvrdí otevřeno tam, kde je zavřeno. Je to patro pod pravidlem 8
+  v CLAUDE.md a chytilo to i mě: oprava `billing_reconcile` vypadala pod
+  `psql -U postgres` pořád jako díra. Věrný kanál je přihlásit se jako
+  `authenticator` (tak se připojuje PostgREST):
+  ```
+  docker exec -e PGPASSWORD=postgres -i supabase_db_<project> \
+    psql -h 127.0.0.1 -U authenticator -d postgres
+  ```
+  Týmž způsobem se ukázalo, že pohled `billing_health` si jako pohled nepřečetl
+  ani admin — pod `postgres` byl zelený.
+
+- **`current_date` v databázi je UTC**, ne pražský. Projeví se to jednou za rok:
+  1. ledna v 00:30 pražského času dostane doklad loňský rok v čísle. Fakturační
+  kód proto počítá `(now() AT TIME ZONE 'Europe/Prague')::date`.
+
 - **`supabase/config.toml` neurčuje cíl `db push`.** Ten se bere z nalinkovaného
   projektu (`supabase/.temp/linked-project.json`). Soubor `project-ref` tenhle CLI
   nezakládá.

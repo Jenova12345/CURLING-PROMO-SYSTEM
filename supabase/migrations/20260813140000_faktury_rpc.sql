@@ -132,10 +132,15 @@ CREATE OR REPLACE FUNCTION public.obdobi_hranice(_od date, _do date)
 RETURNS TABLE (zacatek timestamptz, konec timestamptz)
 LANGUAGE sql
 IMMUTABLE
+SET search_path = public
 AS $$
   SELECT (_od::timestamp            AT TIME ZONE 'Europe/Prague'),
          ((_do + 1)::timestamp      AT TIME ZONE 'Europe/Prague');
 $$;
+
+-- Neuniká přes ni nic (čistá datová aritmetika, není SECURITY DEFINER), ale
+-- zůstat jako jediná funkce PR s EXECUTE pro `anon` a `service_role` nemá důvod.
+REVOKE ALL ON FUNCTION public.obdobi_hranice(date, date) FROM anon, authenticated, public, service_role;
 
 COMMENT ON FUNCTION public.obdobi_hranice(date, date) IS
   'Období faktury (obě data VČETNĚ) na půlotevřený interval [zacatek, konec) v pražském čase.';
@@ -448,6 +453,14 @@ BEGIN
      )
    GROUP BY e.id, e.title
    ORDER BY 3, 2;
+
+EXCEPTION
+  -- Tentýž důvod jako u `delete_invoice_draft`: čte se přes `reservations`, ale
+  -- funkce je SECURITY DEFINER a R11 platí plošně, ne jen tam, kde je dnes vidět
+  -- konkrétní cesta.
+  WHEN check_violation OR not_null_violation THEN
+    RAISE EXCEPTION 'Podklady k fakturaci se nepodařilo sestavit.'
+      USING ERRCODE = '22023';
 END;
 $$;
 
@@ -484,6 +497,7 @@ DECLARE
   _cislo    text;
   _rada     text;
   _rok      integer;
+  _dnes     date;
   _chybi    text[] := ARRAY[]::text[];
   _splatnost date;
 BEGIN
@@ -539,7 +553,14 @@ BEGIN
   END IF;
 
   -- Číslo až tady, ne u konceptu: smazaný koncept by jinak udělal v řadě díru.
-  _rok  := EXTRACT(year FROM current_date)::integer;
+  --
+  -- POZOR NA `current_date`: databáze běží v UTC, takže 1. ledna v 00:30 pražského
+  -- času je `current_date` pořád 31. prosince. Doklad by dostal LOŇSKÝ rok v čísle
+  -- a včerejší datum vystavení — chyba, která se stane jednou za rok, projeví se
+  -- na číselné řadě a odhalí se v únoru. Zbytek modulu počítá pražsky
+  -- (`obdobi_hranice`), tak ať i tohle.
+  _dnes := (now() AT TIME ZONE 'Europe/Prague')::date;
+  _rok  := EXTRACT(year FROM _dnes)::integer;
 
   -- ODDĚLENÉ ŘADY NEJSOU IMPLEMENTOVANÉ a tenhle blok to říká nahlas, místo aby
   -- je předstíral. Přepínač `separate_series` sám o sobě dělá jen to, že se
@@ -555,14 +576,14 @@ BEGIN
   END IF;
   _rada := 'spolecna';
   _cislo := public.next_invoice_number(_rada, _rok);
-  _splatnost := current_date + COALESCE(_bs.due_days, 14);
+  _splatnost := _dnes + COALESCE(_bs.due_days, 14);
 
   UPDATE public.invoices SET
       status            = 'vystaveno',
       cislo             = _cislo,
       -- Variabilní symbol = číslo bez nečíselných znaků (spec, bod 4).
       variabilni_symbol = regexp_replace(_cislo, '\D', '', 'g'),
-      datum_vystaveni   = current_date,
+      datum_vystaveni   = _dnes,
       datum_splatnosti  = _splatnost,
       issued_at         = now(),
       issued_by         = _uid,
@@ -597,7 +618,7 @@ EXCEPTION
   -- takže při porušení constraintu by PostgREST poslal klientovi celý řádek
   -- i s IBANem a číslem účtu.
   WHEN check_violation OR unique_violation OR not_null_violation
-       OR numeric_value_out_of_range THEN
+       OR numeric_value_out_of_range OR foreign_key_violation THEN
     RAISE EXCEPTION 'Doklad se nepodařilo vystavit — údaje neodpovídají pravidlům dokladu.'
       USING ERRCODE = '22023',
             HINT = 'Zkontroluj fakturační nastavení a údaje odběratele.';
@@ -647,6 +668,17 @@ BEGIN
   DELETE FROM public.invoices WHERE id = _invoice_id;
 
   RETURN _uvolneno;
+
+EXCEPTION
+  -- Dnes tady spouštěč nevidím, ale R11 je pravidlo, ne výjimka: funkce sahá na
+  -- `invoices`, tedy na řádek se snapshotem dodavatele včetně IBANu, a uvnitř
+  -- SECURITY DEFINER neplatí RLS — Postgres by ho při porušení constraintu vysypal
+  -- do DETAILu a PostgREST poslal klientovi.
+  WHEN check_violation OR unique_violation OR not_null_violation
+       OR foreign_key_violation THEN
+    RAISE EXCEPTION 'Koncept se nepodařilo zahodit.'
+      USING ERRCODE = '22023',
+            HINT = 'Zkontroluj, jestli na něm nevisí něco, co se nedá uvolnit.';
 END;
 $$;
 
@@ -680,7 +712,10 @@ CREATE VIEW public.invoices_list WITH (security_invoker = on) AS
          (SELECT count(*) FROM public.invoice_items it WHERE it.invoice_id = i.id) AS polozek,
          -- „Po splatnosti" je odvozený stav (spec, bod 9), ne sloupec — jinak by
          -- ho někdo musel v databázi denně přepisovat.
-         (i.status = 'vystaveno' AND i.datum_splatnosti < current_date) AS po_splatnosti,
+         -- Pražský den, ne `current_date`: databáze běží v UTC, takže by se doklad
+         -- na hraně splatnosti tvářil po splatnosti o dvě hodiny dřív.
+         (i.status = 'vystaveno'
+          AND i.datum_splatnosti < (now() AT TIME ZONE 'Europe/Prague')::date) AS po_splatnosti,
          i.created_at,
          i.issued_at
     FROM public.invoices i

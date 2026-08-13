@@ -1504,18 +1504,6 @@ export type Database = {
       }
     }
     Views: {
-      billing_health: {
-        Row: {
-          posledni_vystaveni: string | null
-          rozesle_castky: number | null
-          rozesle_soucty: number | null
-          spatna_cisla: number | null
-          stare_koncepty: number | null
-          vyfakturovane_zrusene: number | null
-          zamek_bez_radku: number | null
-        }
-        Relationships: []
-      }
       invoices_list: {
         Row: {
           cislo: string | null
@@ -1872,6 +1860,18 @@ export type Database = {
     }
     Functions: {
       approve_reservation: { Args: { p_reservation_id: string }; Returns: Json }
+      billing_health: {
+        Args: never
+        Returns: {
+          posledni_vystaveni: string
+          rozesle_castky: number
+          rozesle_soucty: number
+          spatna_cisla: number
+          stare_koncepty: number
+          vyfakturovane_zrusene: number
+          zamek_bez_radku: number
+        }[]
+      }
       billing_reconcile: {
         Args: { _do: string; _od: string }
         Returns: {
