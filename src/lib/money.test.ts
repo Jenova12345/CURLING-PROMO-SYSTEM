@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  SAZBA_MAX,
+  SAZBA_STROP,
   fmtHodin,
   fmtKc,
   fmtSazba,
@@ -472,12 +472,20 @@ describe('parseSazba — sazba z formulářového pole', () => {
     expect(parseSazba('1 250').chyba).toContain('oddělovač');
   });
 
-  it('odmítne hodnotu, kterou by databáze neuložila', () => {
-    // Sloupce jsou numeric(10,2). Bez téhle meze by uživatel dostal syrové
-    // „numeric field overflow" — přesně tu chybu, které má validace předcházet.
-    expect(parseSazba(String(SAZBA_MAX)).hodnota).toBe(SAZBA_MAX);
-    expect(parseSazba(String(SAZBA_MAX + 1)).chyba).toContain('mimo rozsah');
-    expect(parseSazba('100000000').chyba).toContain('mimo rozsah');
+  it('drží strop sazby 50 000 Kč/h', () => {
+    // Strop je produktové rozhodnutí PM (drift 8g), ne mez datového typu.
+    // Zrcadlí CHECK `reservations_rate_per_hour_strop` a spol. — kdyby se obě
+    // strany rozešly, formulář by pustil hodnotu, kterou databáze odmítne
+    // syrovou hláškou o porušení constraintu.
+    expect(SAZBA_STROP).toBe(50_000);
+    expect(parseSazba(String(SAZBA_STROP)).hodnota).toBe(SAZBA_STROP);
+    expect(parseSazba(String(SAZBA_STROP + 1)).chyba).toContain('50 000');
+    expect(parseSazba('100000000').chyba).toContain('50 000');
+    // Reálné sazby (600–1 500 Kč/h) i překlep o řád nad nimi musí projít —
+    // strop má chytat nesmysly, ne ceník.
+    for (const vstup of ['600', '1500', '15000']) {
+      expect(parseSazba(vstup).chyba).toBeUndefined();
+    }
   });
 
   it('nepustí sub-haléřové hodnoty jako „celé koruny"', () => {
@@ -499,12 +507,13 @@ describe('parseSazba — sazba z formulářového pole', () => {
   it('SMLOUVA: co projde validací, uloží databáze beze změny', () => {
     // Vlastnostní test, ne pár ukázek: přes široký vzorek různých tvarů vstupu
     // musí platit, že bez `chyba` je hodnota celé kladné číslo v rozsahu
-    // numeric(10,2). Zrcadlí CHECK `settings_sazby_cele_koruny` a spol.
+    // numeric(10,2) a nepřesahuje strop sazby. Zrcadlí CHECKy z A2 a ze stropu
+    // sazby (`settings_*_cele_koruny`, `*_strop`).
     const vstupy: string[] = [];
     for (let i = 0; i < 400; i++) {
       vstupy.push(String(i), `${i},00`, `${i}.5`, `${i},001`, `${i}e2`, ` ${i} `, `-${i}`);
     }
-    vstupy.push('', '   ', 'abc', '0x10', '1 250', String(SAZBA_MAX), String(SAZBA_MAX + 1));
+    vstupy.push('', '   ', 'abc', '0x10', '1 250', String(SAZBA_STROP), String(SAZBA_STROP + 1));
 
     let prijatych = 0;
     for (const vstup of vstupy) {
@@ -518,7 +527,7 @@ describe('parseSazba — sazba z formulářového pole', () => {
       prijatych++;
       expect(Number.isInteger(v.hodnota)).toBe(true);
       expect(v.hodnota).toBeGreaterThan(0);
-      expect(v.hodnota).toBeLessThanOrEqual(SAZBA_MAX);
+      expect(v.hodnota).toBeLessThanOrEqual(SAZBA_STROP);
       expect(v.hodnota).toBe(roundCzk(v.hodnota));
     }
     expect(prijatych).toBeGreaterThan(0); // ať test neprojde naprázdno

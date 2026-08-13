@@ -181,8 +181,19 @@ export type VysledekSazby = { hodnota: number | null; chyba?: string };
  * v rozsahu, který databáze uloží beze změny.** Volající se na to smí spolehnout.
  */
 
-/** Horní mez sazby. Sloupce jsou `numeric(10,2)`, tedy |x| < 10^8. */
-export const SAZBA_MAX = 99_999_999;
+/**
+ * Strop sazby: 50 000 Kč/h (rozhodnutí PM 13. 8. 2026, drift 8g).
+ *
+ * NENÍ to mez datového typu — `numeric(10,2)` unese 10^8. Je to produktové
+ * rozhodnutí: dnešní sazby jsou 600–1 500 Kč/h, takže třicetinásobek nejdražší
+ * reálné sazby zachytí překlep o řád (150 000 neprojde) a provozní rezervu
+ * nechává velkorysou.
+ *
+ * Zrcadlí CHECK `reservations_rate_per_hour_strop` a spol.
+ * (`supabase/migrations/20260813120000_strop_sazby.sql`) — když se změní jedno,
+ * musí se změnit i druhé, jinak formulář pustí hodnotu, kterou databáze odmítne.
+ */
+export const SAZBA_STROP = 50_000;
 
 // Vlastní tvar místo holého `Number()`. To je totiž mnohem velkorysejší, než
 // se u sazby hodí: `Number('0x10')` je 16 a `Number('1e3')` je 1000, což by
@@ -210,10 +221,15 @@ export function parseSazba(vstup: string): VysledekSazby {
   if (!Number.isInteger(cislo)) {
     return { hodnota: null, chyba: 'Sazba se zadává v celých korunách, bez haléřů.' };
   }
-  if (cislo > SAZBA_MAX) {
-    // Bez téhle meze by uživatel dostal syrové „numeric field overflow" z Postgresu,
-    // což je přesně ta chyba, které má tahle funkce předcházet.
-    return { hodnota: null, chyba: `Sazba je mimo rozsah (nejvýš ${SAZBA_MAX} Kč).` };
+  if (cislo > SAZBA_STROP) {
+    // Hláška schválně mluví o překlepu, ne o „rozsahu": kdo sem narazí, nepřekročil
+    // mez datového typu — nejspíš přidal nulu navíc. Text drží stejnou linku jako
+    // hláška z databáze (`check_reservation_money`), aby si obě strany odpovídaly.
+    //
+    // Formátování bez `toLocaleString`: to tiskne úzkou nezlomitelnou mezeru jako
+    // oddělovač tisíců, kterou by uživatel zkopíroval zpátky do pole — a `parseSazba`
+    // ji sama odmítá jako „číslo s mezerou". Mezera je tu proto obyčejná.
+    return { hodnota: null, chyba: 'Sazba je nejvýš 50 000 Kč/h. Vyšší číslo je skoro jistě překlep.' };
   }
   return { hodnota: cislo };
 }
