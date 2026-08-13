@@ -1,6 +1,6 @@
 # Etapa 2 — Fakturace · STAV
 
-**Aktualizováno:** 13. 8. 2026 · **Větev:** `dev` · **HEAD:** `87b1f78`
+**Aktualizováno:** 13. 8. 2026 (odpoledne) · **Větev:** `dev` · **HEAD:** `3a5119b`
 
 Předávací dokument. Kdo přebírá práci, ať čte tohle první — pak
 `docs/etapa2-fakturace-plan.md` (rozhodnutí R1–R11, otázky Q1–Q7)
@@ -37,6 +37,9 @@ v commit messages, které jsou pro tenhle projekt zásadní čtení.
 | A4 | `25a34d0` | UI Nastavení → Fakturace, dopočet IBANu (mod-11 + mod-97) |
 | A5 | `378002d` | Bezpečnostní zpevnění před fází B (drift 8b–8f) |
 | B1+B2 | `bd99848`, `87b1f78` | Základ dokladu: číselná řada, `invoices`, `invoice_items`, immutabilita |
+| Strop sazby | (viz git log) | Drift 8g uzavřen: 50 000 Kč/h na všech čtyřech zdrojích sazby |
+| B5+B6 | (viz git log) | RPC „faktura na klik" + **kontrolní součet** `billing_reconcile` |
+| E1-lite | (viz git log) | Stránka Faktury, tlačítko v „Kdo dluží", tisk dokladu |
 
 ### Co z toho stojí za zapamatování
 
@@ -60,7 +63,9 @@ supabase/tests/cenik_viditelnost_test.sql   kdo vidí sazby
 supabase/tests/billing_settings_test.sql    fakturační nastavení, audit
 supabase/tests/security_hardening_test.sql  A5 — plošné kontroly práv
 supabase/tests/rezervace_test.sql           původní rezervační sada (85 tvrzení)
-npx vitest run                              73 unit testů (money, iban)
+supabase/tests/strop_sazby_test.sql         strop 50 000 Kč/h (19 tvrzení)
+supabase/tests/fakturace_test.sql           B5+B6 — doklad a kontrolní součet (81 tvrzení)
+npx vitest run                              89 unit testů (money, iban, spayd)
 ```
 
 Spouštění SQL testů:
@@ -75,49 +80,64 @@ propustilo blokér.
 
 ## 2. Rozpracováno — co dělat dál, v tomhle pořadí
 
-### Nejdřív: strop sazby (rozhodnutí PM čeká na implementaci)
+### Hotovo v této session (13. 8. odpoledne)
 
-Drift **8g**: `rate_per_hour` nemá horní mez, takže je to jediný neomezený peněžní
-vstup v systému — `99999999 Kč/h` projde. **PM rozhodl: strop 50 000 Kč/h.**
-Rozhodnutí padlo, **kód ještě ne.** Vzor je hotový vedle (A5, korekce hodin):
-CHECK + srozumitelná hláška v `check_reservation_money`.
+**Strop sazby 50 000 Kč/h** — drift 8g uzavřen. CHECK je na **všech čtyřech
+zdrojích** sazby (`reservations.rate_per_hour`, `subjects.default_rate`, čtyři
+sloupce ceníku), ne jen na rezervaci: sazba se do rezervace dopočítává z ceníku,
+takže strop jen tam by šlo obejít zápisem do ceníku a projevilo by se to až
+o krok dál. Frontend má tutéž mez v `SAZBA_STROP` (`src/lib/money.ts`).
 
-### B5-subset + B6 — RPC a kontrolní součet
+**B5 + B6** — `20260813140000_faktury_rpc.sql`, `20260813160000_billing_reconcile.sql`:
+`create_invoice_draft_club` / `_commercial`, `issue_invoice`, `delete_invoice_draft`,
+`nevyfakturovane_akce`, `fakturovatelne_rezervace`, `obdobi_hranice`,
+pohled `invoices_list`; `billing_reconcile` + pohled `billing_health`.
 
-- `create_invoice_draft_club(subject_id, obdobi_od, obdobi_do)` — měsíční souhrn,
-  **řádek = jedna rezervace**
-- `create_invoice_draft_commercial(event_id)` — za akci
-- `issue_invoice(invoice_id)` — přidělí číslo atomicky, doplní snapshoty
-- `billing_reconcile(od, do)` — **kontrolní součet: suma faktur == „Kdo dluží"**
+**E1-lite** — stránka `/invoices` (seznam, detail, vystavit, zahodit koncept),
+tlačítko „Vygenerovat fakturu" v „Kdo dluží" (klub za období, firma přes dialog
+s akcemi), tisk dokladu `src/lib/invoicePrint.ts`.
 
-**B6 nevynechávat ani pod tlakem.** Je to jediný způsob, jak poznat, že modul
-počítá správně; bez něj je zbytek jen hezky vypadající obrazovka.
+**SPAYD** — `src/lib/spayd.ts` + testy. Řetězec QR platby ano, **obrázek zatím ne**
+(chybí QR enkodér, viz „Co zbývá").
 
-Zdroj dat: táž logika jako „Kdo dluží" (`reservations_billing`), ale **běh musí
-číst základní tabulky, ne ten view** — má v sobě `has_role(auth.uid(), 'admin')`
-a pod cronem/service_role vrátí nula řádků (nález N4). Fakturují se **jen schválené
-rezervace** (`billing_settings.invoice_only_approved`).
+#### Co si z toho zapamatovat
 
-Ceny se berou ze snapshotu na rezervaci (`rate_per_hour`, `corrected_amount ?? amount`),
-nikdy se nepočítají znovu z ceníku.
+**Kontrolní součet je rozpad, ne rovnost.** Platí
+`dluzi = fakturovano + v_konceptu + k_fakturaci + neschvalene`, a sloupec `rozdil`
+musí být 0. Prostá rovnost „faktury == dluží" nastane až v okamžiku, kdy je
+vyfakturované všechno — rozpad na čtyři sloupce říká i **proč** se to zrovna nerovná.
 
-**Nutná mechanika, na kterou se přijde jinak až za běhu:** do vystavené faktury
-nejde vložit položku (guard to blokuje). RPC musí jít cestou *založ koncept →
-naplň položky → jedním UPDATE nastav `status` + `cislo` + `datum_vystaveni`*.
-Ten poslední UPDATE projde jen proto, že `OLD.status = 'koncept'`.
+**Obě strany rovnice se schválně počítají z jiného místa:** fakturovaná částka
+z uloženého `invoice_items.line_total`, dluh z aktuální částky rezervace. Kdyby
+braly ze stejného, sedělo by to vždycky a nezjistilo nic — takhle to odhalí i
+nález N1 (dodatečnou změnu už vyfakturované rezervace). Test to ověřuje tak, že
+změnu **provede** a čeká rozdíl 1 000 Kč.
 
-Zápis do `reservations.invoice_id` jde jen z RPC — guard ho jinak odmítne i adminovi.
-RPC si musí nastavit `app.trusted_booking`, jako to dělají rezervační funkce.
+**Mechanika, na kterou by se jinak přišlo až za běhu** (a je zadrátovaná v RPC):
+do vystavené faktury nejde vložit položku, takže cesta musí být *založ koncept →
+naplň položky → jedním UPDATE nastav stav, číslo a datum*. Ten UPDATE projde jen
+proto, že `OLD.status = 'koncept'`. Zápis do `reservations.invoice_id` guard
+odmítne i adminovi, proto si RPC nastavují `app.trusted_booking`.
 
-### E1-lite — stránka Faktury
+**Snapshot dodavatele se dělá až při vystavení**, ne u konceptu — doklad je obraz
+stavu v okamžiku vystavení. Ověřeno testem: změna nastavení po vystavení už
+doklad nepřepíše.
 
-Seznam + detail + tlačítko „Vygenerovat fakturu" u subjektu a v „Kdo dluží".
+**Demo má předvyplněné fakturační údaje** (`supabase/demo/99_finalize_demo.sql`),
+protože bez nich se `issue_invoice` správně zastaví na „chybí IČO dodavatele" a
+cesta k dokladu se nedá proklikat. Jsou zjevně vymyšlené (IČO 12345678) a plní se
+**jen v demo skriptu**, ne v seedu a ne v migraci.
 
-### C-subset — PDF s QR (SPAYD)
+### Co zbývá
 
-`pdf-lib` v Edge funkci, font se musí subsetovat (Noto Sans, diakritika).
-**Fallback, kdyby došel čas:** doklad na obrazovce k tisku do PDF — základ existuje
-v `src/lib/invoiceDraft.ts` a už dnes používá správnou peněžní politiku.
+**QR platba na dokladu.** `spayd.ts` umí řetězec, chybí z něj udělat obrázek —
+a v repu není QR enkodér. Buď nová (drobná) frontendová závislost, nebo vlastní
+enkodér, nebo QR až se serverovým PDF (C4). **Rozhodnutí PM.**
+
+**C-subset (PDF přes `pdf-lib` v Edge funkci)** zůstává neudělaný; fallback
+„tisk z obrazovky" funguje a používá snapshot z faktury, ne `BRAND`.
+
+**Dobropisy, storno, evidence plateb, automatika** — vědomě odložené (viz níž).
 
 ### Odloženo (vědomě, rozhodnutí PM)
 
@@ -172,6 +192,23 @@ Podmínky, které platí:
 1. **Nejdřív čerstvá záloha.**
 2. **Až v nové session po handoffu**, ne v té, která psala tenhle dokument.
 3. Pořadí migrací se musí dodržet (A2 → A2b → A3 → A4 → A5 → B1+B2).
+
+#### Záloha pořízena 13. 8. 2026 → `backups/2026-08-13-demo/`
+
+Data (250 řádků), auditní stopa, `schema.json` a výpis práv. Složka `backups/`
+je v `.gitignore` (jsou tam čísla účtů), takže v repu ji nikdo nenajde — je na disku.
+
+Dvě zjištění z ní, kvůli kterým je reset bezpečný a dají se doložit:
+
+- **Nejnovější záznam v celé demo databázi je z 5. 8. 2026 10:15 UTC**, tedy
+  z posledního běhu `demo_setup.sql`. Za osm dní do dema nikdo nic nezadal, takže
+  reset nemaže žádnou lidskou práci.
+- **Všech 5 účtů je seedových `@test.local`.** Žádný účet, který by si někdo
+  založil sám a přišel by o profil a roli.
+
+Zároveň je v záloze vidět, co nasazení opraví: `anon` i `authenticated` měly na
+demu ještě plná práva `arwdDxtm` na `audit_log` a `reservations` (včetně TRUNCATE,
+na který se RLS nevztahuje) — to odebírá až A5.
 
 Pozor: `build-demo-sql.sh` začíná resetem schématu. **Jakmile na demu vzniknou
 ostré faktury, tenhle postup přestane být použitelný** a musí ho nahradit

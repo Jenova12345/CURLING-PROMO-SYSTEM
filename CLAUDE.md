@@ -98,8 +98,9 @@ Když se součty rozejdou, změna neprochází — bez ohledu na to, jak dobře 
 
 ## Kde právě jsme (aktualizováno 13. 8. 2026)
 
-**Etapa 2 — fakturační modul.** Fáze A je hotová (A1–A5), rozdělaná je fáze B
-(hotové B1+B2 — základ dokladu).
+**Etapa 2 — fakturační modul.** Fáze A je hotová (A1–A5), z fáze B je hotové
+B1+B2 (základ dokladu) a B5+B6 (RPC „faktura na klik" a **kontrolní součet**),
+plus strop sazby (drift 8g) a E1-lite (stránka Faktury). Zbývá QR a serverové PDF.
 
 > **Než začneš cokoli dělat, přečti `docs/ETAPA2-STAV.md`.**
 > Je to předávací dokument: co je hotové s commit hashi, co se dělá dál a v jakém
