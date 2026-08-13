@@ -88,6 +88,13 @@ sloupce ceníku), ne jen na rezervaci: sazba se do rezervace dopočítává z ce
 takže strop jen tam by šlo obejít zápisem do ceníku a projevilo by se to až
 o krok dál. Frontend má tutéž mez v `SAZBA_STROP` (`src/lib/money.ts`).
 
+**Mimochodem tím zmizela díra s `NaN`** a stojí za to o ní vědět, ať ji někdo při
+případném revertu nevrátí zpátky: v Postgresu je `'NaN'::numeric >= 0` **true**
+a `'NaN' <> round('NaN')` **false**, takže `NaN` prošla úplně všemi peněžními
+kontrolami z A2 i A5 a uložila by se jako sazba — a `amount` by pak byl `NaN`
+u každého dopočtu. Chytí ji až porovnání se stropem. Hlídá to vlastní tvrzení
+v `supabase/tests/strop_sazby_test.sql`.
+
 **B5 + B6** — `20260813140000_faktury_rpc.sql`, `20260813160000_billing_reconcile.sql`:
 `create_invoice_draft_club` / `_commercial`, `issue_invoice`, `delete_invoice_draft`,
 `nevyfakturovane_akce`, `fakturovatelne_rezervace`, `obdobi_hranice`,
@@ -156,7 +163,7 @@ agregace DPH (Q7).
 | Číslo faktury | `RRRRNNNN`, jedna společná řada, prefix souborů `curling`, splatnost 14 dní |
 | Automatika | `automation_enabled = false`, `auto_issue = false` (režim náběhu: první měsíc jen koncepty) |
 | Korekce hodin | **Tvrdý strop 24 h**, NEvázaný na délku rezervace — musí zůstat možné naúčtovat víc, než bylo rezervováno (klub zůstal o půl hodiny déle). Povinný `correction_reason` |
-| Sazba | **Strop 50 000 Kč/h** — ⚠️ rozhodnuto, ale **ještě neimplementováno** (drift 8g) |
+| Sazba | **Strop 50 000 Kč/h** — ✅ implementováno 13. 8. 2026 na všech čtyřech zdrojích sazby (drift 8g uzavřen) |
 | R11 | Každá `SECURITY DEFINER` funkce nad `billing_settings` musí dusit chyby constraintů — jinak PostgREST pošle klientovi celý řádek i s IBANem. **Platné pravidlo pro fázi B** |
 | Commitování | Commit po každém PR, který prošel bránami. Push a merge zůstávají na vyžádání |
 

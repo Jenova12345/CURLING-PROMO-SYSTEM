@@ -204,6 +204,41 @@ BEGIN
     'RPC při odmítnutí nevysype obsah řádku');
 END $$;
 
+-- `p_rate` neberou jen `create_booking`, ale i série a úprava rezervace. Bez nich
+-- by test hlídal jednu ze tří dveří — a ty zbylé dvě vedou do stejné místnosti.
+DO $$
+DECLARE _sheet uuid; _subjekt uuid; _rez uuid;
+BEGIN
+  SELECT id INTO _sheet FROM public.sheets ORDER BY name LIMIT 1;
+  SELECT id INTO _subjekt FROM public.subjects WHERE deleted_at IS NULL ORDER BY name LIMIT 1;
+
+  PERFORM pg_temp.ocekavej_chybu(format(
+    'SELECT public.create_booking_series(ARRAY[%L]::uuid[], ''training'', ''Test série'', '
+    '(TIMESTAMP ''2031-06-09 10:00'' AT TIME ZONE ''Europe/Prague''), '
+    '(TIMESTAMP ''2031-06-09 11:00'' AT TIME ZONE ''Europe/Prague''), '
+    'ARRAY[1]::int[], DATE ''2031-06-23'', %L, NULL, ''{}''::jsonb, 99999999)', _sheet, _subjekt),
+    'nejvýš 50 000', 'série rezervací nepustí sazbu nad stropem');
+
+  -- Úprava existující rezervace: sazbu mění `update_booking`, ne přímý zápis.
+  SELECT id INTO _rez FROM public.reservations WHERE deleted_at IS NULL ORDER BY start_at LIMIT 1;
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.update_booking(%L, NULL, NULL, 99999999)', _rez),
+    'nejvýš 50 000', 'úprava rezervace nepustí sazbu nad stropem');
+END $$;
+
+-- NaN je zvláštní případ, který strop zavřel mimochodem: `NaN >= 0` je
+-- v Postgresu TRUE a `NaN <> round(NaN)` je FALSE, takže prošla všemi peněžními
+-- kontrolami z A2 i A5. Chytí ji až porovnání se stropem (`NaN > 50000` je true).
+-- Kdyby někdo strop revertoval, tahle díra se otevře znovu — proto vlastní tvrzení.
+DO $$
+DECLARE _rez uuid;
+BEGIN
+  SELECT id INTO _rez FROM public.reservations WHERE deleted_at IS NULL ORDER BY start_at LIMIT 1;
+  PERFORM pg_temp.ocekavej_chybu(
+    format('UPDATE public.reservations SET rate_per_hour = ''NaN'' WHERE id = %L', _rez),
+    'nejvýš 50 000', 'NaN jako sazba neprojde (A2 ani A5 ji nechytily)');
+END $$;
+
 -- Rezervace se stropovou sazbou naopak vzniknout musí — kdyby strop blokoval
 -- i platný vstup, byl by to výpadek provozu, ne pojistka.
 DO $$
@@ -235,8 +270,13 @@ DECLARE _def text;
 BEGIN
   SELECT pg_get_constraintdef(oid) INTO _def
     FROM pg_constraint WHERE conname = 'reservations_rate_per_hour_strop';
-  PERFORM pg_temp.tvrd(position('50000' in _def) > 0,
-    format('CHECK drží hodnotu 50 000 (SAZBA_STROP v money.ts musí být stejná): %s', _def));
+  -- Podřetězcem to testovat NEJDE: „500000" obsahuje „50000", takže
+  -- desetinásobně špatný strop by prošel — a přišpendlit to číslo je jediný
+  -- důvod, proč tahle sekce existuje. Porovnává se proto celý operátor s mezí.
+  PERFORM pg_temp.tvrd(position('<= (50000)::numeric' in _def) > 0,
+    format('CHECK drží PŘESNĚ 50 000 (SAZBA_STROP v money.ts musí být stejný): %s', _def));
+  PERFORM pg_temp.tvrd(position('500000' in _def) = 0,
+    'v CHECKu není o řád vyšší číslo');
 END $$;
 
 ROLLBACK;

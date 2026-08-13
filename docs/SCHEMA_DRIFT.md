@@ -231,7 +231,7 @@ korekce může být bez zdůvodnění.
 Až vznikne UI pro korekce, přidat i `parseKorekce` v `money.ts` (dnes se
 `corrected_hours` z frontendu jen čte).
 
-### 8g) `rate_per_hour` nemá horní mez · **rozhodnutí pro PM**
+### 8g) ~~`rate_per_hour` nemá horní mez~~ — VYŘEŠENO 13. 8. 2026 (strop 50 000 Kč/h)
 
 **Zaevidováno 12. 8. 2026** (bezpečnostní brána A5).
 
@@ -251,6 +251,28 @@ v korekci, který A5 zavřela.
 **Proč to A5 neudělala sama:** hodnota stropu je produktové rozhodnutí, ne technikálie —
 stejně jako u korekce, kde ho určil PM. Vzor je připravený (CHECK + srozumitelná
 hláška v `check_reservation_money`), chybí jen číslo. Sazby jsou dnes 600–1500 Kč/h.
+
+**Opraveno** migrací `20260813120000_strop_sazby.sql` po rozhodnutí PM (strop
+50 000 Kč/h). CHECK dostaly **všechny čtyři zdroje** sazby, ne jen `reservations`:
+sazba se tam dopočítává z ceníku a ze `subjects.default_rate`, takže strop jen na
+rezervaci by šlo obejít zápisem do ceníku. Hlídá to `supabase/tests/strop_sazby_test.sql`
+(19 tvrzení, včetně cest přes `create_booking`, `create_booking_series` a `update_booking`).
+
+Dvě věci, které se u toho ukázaly a patří sem, ne do commit message:
+
+- **Strop mimochodem zavřel `NaN`.** `'NaN'::numeric >= 0` je true a
+  `'NaN' <> round('NaN')` je false, takže `NaN` prošla všemi peněžními kontrolami
+  A2 i A5. Chytí ji až porovnání se stropem.
+- **Nad 10^8 mluví Postgres anglicky.** `p_rate := 1e10` skončí na
+  `numeric field overflow`, protože koerce na `numeric(10,2)` proběhne dřív, než
+  trigger dostane slovo. Není to regrese (chovalo se to tak vždycky) a frontend
+  to nepustí, ale záruka „hranice API mluví česky" má tady díru. Zavřelo by ji
+  ověření `p_rate` uvnitř RPC před INSERTem.
+
+Na fakturační vrstvě strop **není** a zatím být nemusí: `invoice_items.sazba` má
+jen `>= 0`, ale jediný, kdo do ní zapisuje, jsou RPC z B5 — a ty berou sazbu
+i částku **ze snapshotu rezervace**, nikdy od volajícího. Kdo tam bude přidávat
+parametr, musí to rozhodnutí zopakovat, jinak se strop na dokladu obejde.
 
 ### 8h) Výchozí práva `supabase_admin` migrace nezmění · **na vědomí**
 

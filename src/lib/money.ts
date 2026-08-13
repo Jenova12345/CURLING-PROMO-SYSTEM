@@ -229,7 +229,10 @@ export function parseSazba(vstup: string): VysledekSazby {
     // Formátování bez `toLocaleString`: to tiskne úzkou nezlomitelnou mezeru jako
     // oddělovač tisíců, kterou by uživatel zkopíroval zpátky do pole — a `parseSazba`
     // ji sama odmítá jako „číslo s mezerou". Mezera je tu proto obyčejná.
-    return { hodnota: null, chyba: 'Sazba je nejvýš 50 000 Kč/h. Vyšší číslo je skoro jistě překlep.' };
+    // Mez se do textu skládá Z KONSTANTY, ne opisuje: hláška s natvrdo napsaným
+    // „50 000" by po změně `SAZBA_STROP` tiše lhala.
+    const mez = String(SAZBA_STROP).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    return { hodnota: null, chyba: `Sazba je nejvýš ${mez} Kč/h. Vyšší číslo je skoro jistě překlep.` };
   }
   return { hodnota: cislo };
 }

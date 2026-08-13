@@ -13,6 +13,13 @@
 -- peněžní vstup v systému. Překlep o řád v sazbě dělá tutéž fakturu na miliony
 -- jako překlep v korekci, který A5 zavřela.
 --
+-- ZAVŘE TO I `NaN`, A TO NEBYLO ZÁMĚREM — ať to někdo při revertu nevrátí zpátky:
+-- v Postgresu je `'NaN'::numeric >= 0` **true** a `'NaN' <> round('NaN')` **false**,
+-- takže `NaN` prošla úplně všemi peněžními kontrolami z A2 i A5 a uložila by se
+-- jako sazba (a `amount` by pak byl `NaN` u každého dopočtu). Chytí ji až
+-- porovnání se stropem: `NaN > 50000` je true (trigger) a `NaN <= 50000` je
+-- false (CHECK). Hlídá to vlastní tvrzení v testu.
+--
 -- HODNOTA STROPU JE PRODUKTOVÉ ROZHODNUTÍ, ne technikálie — proto ho A5 neudělala
 -- sama a čekalo se na PM. Dnešní sazby jsou 600–1 500 Kč/h, takže 50 000 je
 -- třicetinásobek nejdražší reálné sazby: na překlep o řád (15 000 by prošlo,
