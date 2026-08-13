@@ -11,11 +11,11 @@
 --
 -- ROVNICE, KTERÁ MUSÍ PLATIT VŽDYCKY:
 --
---     dluzi = fakturovano + v_konceptu + k_fakturaci + neschvalene
+--     dluzi = fakturovano + v_konceptu + ve_stornu + k_fakturaci + neschvalene
 --
 -- Prosté „faktury == dluží" totiž platí až v okamžiku, kdy je vyfakturované
--- všechno. Rozpad na čtyři sloupce říká i to, PROČ se to zrovna nerovná —
--- a rozdíl mimo tyhle čtyři důvody je skutečná vada. Právě proto se počítá
+-- všechno. Rozpad na pět sloupců říká i to, PROČ se to zrovna nerovná —
+-- a rozdíl mimo těchhle pět důvodů je skutečná vada. Právě proto se počítá
 -- `rozdil`: nula znamená „sedí to", cokoli jiného je nález.
 --
 -- ČTYŘI ROZHODNUTÍ, KTERÁ V TOM JSOU ZADRÁTOVANÁ:
@@ -33,9 +33,12 @@
 --    ze stejného místa, kontrolní součet by seděl vždycky a nezjistil by nic.
 --    Takhle odhalí i nález N1 — dodatečnou změnu už vyfakturované rezervace.
 --
--- 4) **Koncepty se do „vyfakturováno" nepočítají**, ale nemizí — mají vlastní
---    sloupec. Koncept doklad ještě není (nemá číslo), ale rezervace už drží,
---    takže bez toho sloupce by se jevily jako ztracené peníze.
+-- 4) **Koncepty ani stornované doklady se do „vyfakturováno" nepočítají**, ale
+--    nemizí — mají vlastní sloupce. Koncept doklad ještě není (nemá číslo) a
+--    storno jím být přestal, ale rezervace v obou případech drží zámek
+--    `invoice_id`, takže bez těch sloupců by se jevily jako ztracené peníze.
+--    U storna je to navíc trvalý stav (plné storno teprve zámek uvolní),
+--    takže bez vlastního sloupce by rovnice nesedla už napořád.
 --
 -- CO ROVNICE NEVIDÍ (a proto to hlídá `billing_health`): vyfakturovanou rezervaci,
 -- která se potom zrušila. Vypadne z „dluží" i z „fakturováno" naráz, takže
@@ -52,6 +55,12 @@
 --   DROP FUNCTION IF EXISTS public.billing_reconcile(date, date);
 -- =============================================================================
 
+-- `CREATE OR REPLACE` neumí změnit návratový typ, a tahle funkce ho už jednou
+-- změnila (přibyl sloupec `ve_stornu` po code review). Bez `DROP` by se migrace
+-- na databázi se starší verzí zastavila na „cannot change return type"; granty
+-- se dole nastavují znovu, takže se dropem nic neztratí.
+DROP FUNCTION IF EXISTS public.billing_reconcile(date, date);
+
 CREATE OR REPLACE FUNCTION public.billing_reconcile(_od date, _do date)
 RETURNS TABLE (
   subject_id   uuid,
@@ -60,6 +69,11 @@ RETURNS TABLE (
   fakturovano  numeric,
   -- Σ řádků konceptů — rezervace jsou zabrané, doklad ještě nevznikl.
   v_konceptu   numeric,
+  -- Σ řádků stornovaných dokladů. Vlastní sloupec schválně: rezervace na
+  -- stornované faktuře drží zámek `invoice_id`, takže není ani „k fakturaci",
+  -- ani vyfakturovaná — bez tohohle sloupce by rovnice nesedla NAPOŘÁD a
+  -- akceptační brána by to četla jako vadu modulu.
+  ve_stornu    numeric,
   -- Σ částek rezervací, které čekají na fakturaci.
   k_fakturaci  numeric,
   -- Σ částek rezervací, které se podle nastavení fakturovat nesmí (Q4: jen schválené).
@@ -139,18 +153,20 @@ BEGIN
   doklady AS (
     SELECT radky.subject_id,
            sum(radky.line_total) FILTER (WHERE radky.status IN ('vystaveno', 'zaplaceno')) AS fakturovano,
-           sum(radky.line_total) FILTER (WHERE radky.status = 'koncept')                   AS v_konceptu
+           sum(radky.line_total) FILTER (WHERE radky.status = 'koncept')                   AS v_konceptu,
+           sum(radky.line_total) FILTER (WHERE radky.status = 'stornovano')                AS ve_stornu
       FROM radky GROUP BY radky.subject_id
   )
   SELECT s.subject_id,
          sub.name,
          COALESCE(d.fakturovano, 0),
          COALESCE(d.v_konceptu, 0),
+         COALESCE(d.ve_stornu, 0),
          COALESCE(s.k_fakturaci, 0),
          COALESCE(s.neschvalene, 0),
          COALESCE(s.dluzi, 0),
          COALESCE(s.dluzi, 0)
-           - (COALESCE(d.fakturovano, 0) + COALESCE(d.v_konceptu, 0)
+           - (COALESCE(d.fakturovano, 0) + COALESCE(d.v_konceptu, 0) + COALESCE(d.ve_stornu, 0)
               + COALESCE(s.k_fakturaci, 0) + COALESCE(s.neschvalene, 0)),
          s.rezervaci
     FROM souhrn s
@@ -164,7 +180,7 @@ REVOKE ALL ON FUNCTION public.billing_reconcile(date, date) FROM public, anon, s
 GRANT EXECUTE ON FUNCTION public.billing_reconcile(date, date) TO authenticated;
 
 COMMENT ON FUNCTION public.billing_reconcile(date, date) IS
-  'Kontrolní součet Etapy 2: dluzi = fakturovano + v_konceptu + k_fakturaci + neschvalene. Sloupec `rozdil` musí být 0 — cokoli jiného je vada. Porovnává `total` (přesné), nikdy `total_rounded`. POZOR: „rozdil = 0" NEZNAMENÁ „všechno sedí" — vyfakturovanou rezervaci, která se pak zrušila, tahle rovnice nevidí (vypadne z obou stran). Tu třídu hlídá billing_health.vyfakturovane_zrusene.';
+  'Kontrolní součet Etapy 2: dluzi = fakturovano + v_konceptu + ve_stornu + k_fakturaci + neschvalene. Sloupec `rozdil` musí být 0 — cokoli jiného je vada. Porovnává `total` (přesné), nikdy `total_rounded`. POZOR: „rozdil = 0" NEZNAMENÁ „všechno sedí" — vyfakturovanou rezervaci, která se pak zrušila, tahle rovnice nevidí (vypadne z obou stran). Tu třídu hlídá billing_health.vyfakturovane_zrusene.';
 
 -- -----------------------------------------------------------------------------
 -- `billing_health` — mrtvý muž pro věci, které kontrolní součet za období nevidí

@@ -62,9 +62,10 @@
 -- `invoice_only_approved` je rozhodnutí PM k otázce Q4 (fakturují se JEN
 -- schválené rezervace) a bydlí v `billing_settings`, ne v kódu — změna je UPDATE.
 --
--- POZOR na `security_invoker = off` (výchozí): funkce je SECURITY DEFINER, takže
--- vidí na všechny rezervace. Práva si musí ověřit každý volající sám; proto je
--- odebraná všem kromě `authenticated` a každá RPC začíná kontrolou role.
+-- POZOR: funkce je SECURITY DEFINER, takže vidí na všechny rezervace bez ohledu
+-- na RLS. Volat ji smí JEN jiná SECURITY DEFINER funkce — proto je EXECUTE
+-- odebrané úplně všem, `authenticated` včetně, a práva si ověřuje každá RPC
+-- zvlášť na svém začátku. (V `types.ts` se objeví jako volatelné RPC; není.)
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.fakturovatelne_rezervace(
   _subject_id uuid,
@@ -277,6 +278,7 @@ DECLARE
   _do         date;
   _pocet      integer;
   _bez_ceny   integer;
+  _jen_schvalene boolean;
 BEGIN
   IF NOT has_role(_uid, 'admin') THEN
     RAISE EXCEPTION 'Faktury vystavuje jen správce haly.';
@@ -308,10 +310,15 @@ BEGIN
     RAISE EXCEPTION 'Akce má rezervace pro víc odběratelů — fakturu vystav ručně po subjektech.';
   END IF;
 
+  SELECT COALESCE(bs.invoice_only_approved, true) INTO _jen_schvalene
+    FROM public.billing_settings bs LIMIT 1;
+  _jen_schvalene := COALESCE(_jen_schvalene, true);
+
   SELECT count(*) INTO _bez_ceny
     FROM public.reservations r
    WHERE r.event_id = _event_id AND r.status = 'confirmed' AND r.deleted_at IS NULL
      AND r.subject_id IS NOT NULL AND r.invoice_id IS NULL
+     AND (NOT _jen_schvalene OR r.approved_at IS NOT NULL)
      AND (r.rate_per_hour IS NULL OR COALESCE(r.corrected_hours, r.hours) IS NULL);
   IF _bez_ceny > 0 THEN
     RAISE EXCEPTION 'Akce obsahuje % rezervací bez sazby nebo bez hodin — doklad by byl neúplný.', _bez_ceny
@@ -333,6 +340,10 @@ BEGIN
        AND r.deleted_at IS NULL
        AND r.subject_id IS NOT NULL
        AND r.invoice_id IS NULL
+       -- Rozhodnutí PM k Q4 platí na OBOU cestách. Dřív ho ctila jen klubová,
+       -- takže by komerční akce vyfakturovala i neschválenou rezervaci — a rozdíl
+       -- by se objevil až v kontrolním součtu jako nevysvětlitelný.
+       AND (NOT _jen_schvalene OR r.approved_at IS NOT NULL)
     RETURNING r.id, r.start_at, r.end_at, r.sheet_id,
               COALESCE(r.corrected_hours, r.hours)   AS hodiny,
               r.rate_per_hour                        AS sazba,
@@ -395,13 +406,24 @@ STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
-DECLARE _od timestamptz; _do timestamptz;
+DECLARE _od timestamptz; _do timestamptz; _jen_schvalene boolean;
 BEGIN
   IF NOT has_role(auth.uid(), 'admin') THEN
     RAISE EXCEPTION 'Podklady k fakturaci vidí jen správce haly.';
   END IF;
   SELECT zacatek, konec INTO _od, _do FROM public.obdobi_hranice(_obdobi_od, _obdobi_do);
+  SELECT COALESCE(bs.invoice_only_approved, true) INTO _jen_schvalene
+    FROM public.billing_settings bs LIMIT 1;
+  _jen_schvalene := COALESCE(_jen_schvalene, true);
 
+  -- OBDOBÍ VYBÍRÁ AKCE, ALE NEOŘEZÁVÁ ČÁSTKU.
+  --
+  -- `create_invoice_draft_commercial` fakturuje CELOU akci (spec 2A: 1 doklad =
+  -- 1 akce) a datum v ní nefiguruje. Kdyby náhled sčítal jen rezervace spadlé do
+  -- zobrazeného období, akce přes přelom měsíce by v dialogu ukázala „1 rezervace,
+  -- 3 400 Kč" a vystavila by doklad na dvě položky a 6 800 Kč — admin by odklikl
+  -- číslo, které nikdy neviděl. Podmnožinu `WHERE` proto mají obě funkce
+  -- TOTOŽNOU; období se uplatní jen na výběr akcí přes `EXISTS`.
   RETURN QUERY
   SELECT e.id,
          e.title,
@@ -414,8 +436,16 @@ BEGIN
      AND r.invoice_id IS NULL
      AND r.status = 'confirmed'
      AND r.deleted_at IS NULL
-     AND r.start_at >= _od
-     AND r.start_at <  _do
+     AND (NOT _jen_schvalene OR r.approved_at IS NOT NULL)
+     AND EXISTS (
+       SELECT 1 FROM public.reservations r2
+        WHERE r2.event_id = e.id
+          AND r2.invoice_id IS NULL
+          AND r2.status = 'confirmed'
+          AND r2.deleted_at IS NULL
+          AND r2.start_at >= _od
+          AND r2.start_at <  _do
+     )
    GROUP BY e.id, e.title
    ORDER BY 3, 2;
 END;
@@ -510,8 +540,20 @@ BEGIN
 
   -- Číslo až tady, ne u konceptu: smazaný koncept by jinak udělal v řadě díru.
   _rok  := EXTRACT(year FROM current_date)::integer;
-  _rada := CASE WHEN COALESCE(_bs.separate_series, false)
-                THEN _f.kind::text ELSE 'spolecna' END;
+
+  -- ODDĚLENÉ ŘADY NEJSOU IMPLEMENTOVANÉ a tenhle blok to říká nahlas, místo aby
+  -- je předstíral. Přepínač `separate_series` sám o sobě dělá jen to, že se
+  -- pořadí bere z jiného řádku počítadla — jenže `next_invoice_number` počítá
+  -- nejvyšší použité pořadí přes VŠECHNY faktury roku a vydává vždycky tvar
+  -- `RRRRNNNN`. Zapnutá volba by tedy vyrobila jednu prokládanou řadu ve formátu,
+  -- který CHECK `billing_settings_series_format` pro tenhle režim ani nepovoluje
+  -- (žádá `RRRRSNNN`). Rozhodnutí PM (Q6) zní „jedna společná řada", takže
+  -- správná reakce je zastavit se, ne vystavit doklad se špatným číslem.
+  IF COALESCE(_bs.separate_series, false) THEN
+    RAISE EXCEPTION 'Oddělené číselné řady zatím nejsou implementované.'
+      USING HINT = 'V Nastavení → Fakturace nech „jedna společná řada" (rozhodnutí PM k otázce Q6).';
+  END IF;
+  _rada := 'spolecna';
   _cislo := public.next_invoice_number(_rada, _rok);
   _splatnost := current_date + COALESCE(_bs.due_days, 14);
 

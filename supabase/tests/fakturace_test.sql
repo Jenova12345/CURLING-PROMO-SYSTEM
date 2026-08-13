@@ -400,6 +400,95 @@ BEGIN
 END $$;
 
 -- -----------------------------------------------------------------------------
+-- 7c) Stornovaný doklad nesmí rozbít rovnici napořád
+--
+-- Rezervace na stornované faktuře drží zámek `invoice_id`, takže není ani
+-- „k fakturaci", ani vyfakturovaná. Bez vlastního sloupce by u toho subjektu
+-- rovnice nesedla už navždy — a akceptační brána by to četla jako vadu modulu,
+-- ne jako stav dokladu. (Storno RPC ještě není; stav se tu nastavuje přímo,
+-- což guard u vystavené faktury povoluje — `status` je v jeho whitelistu.)
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _inv uuid; _sub uuid; _r record;
+BEGIN
+  SELECT hodnota::uuid INTO _inv FROM _stav WHERE klic = 'invoice';
+  SELECT hodnota::uuid INTO _sub FROM _stav WHERE klic = 'subject';
+
+  UPDATE public.invoices SET status = 'stornovano' WHERE id = _inv;
+
+  SELECT * INTO _r FROM public.billing_reconcile('2026-07-01', '2026-07-31') WHERE subject_id = _sub;
+  PERFORM pg_temp.tvrd(_r.ve_stornu > 0, 'storno je vidět ve vlastním sloupci ve_stornu');
+  PERFORM pg_temp.tvrd(_r.fakturovano = 0, 'stornovaný doklad se nepočítá jako vyfakturováno');
+  PERFORM pg_temp.tvrd(_r.rozdil = 0,
+    format('rovnice sedí i se stornovaným dokladem (rozdíl %s)', _r.rozdil));
+
+  UPDATE public.invoices SET status = 'vystaveno' WHERE id = _inv;
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 7d) Oddělené číselné řady: raději chyba než doklad se špatným číslem
+--
+-- Přepínač `separate_series` sám o sobě nic nezmění — `next_invoice_number`
+-- počítá nejvyšší použité pořadí přes všechny faktury roku a vydává vždycky
+-- `RRRRNNNN`. Zapnutá volba by tedy vyrobila jednu prokládanou řadu ve formátu,
+-- který pro tenhle režim ani není povolený. Rozhodnutí PM (Q6) zní „jedna
+-- společná řada", takže správná reakce je zastavit se.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _sub uuid; _inv uuid;
+BEGIN
+  SELECT id INTO _sub FROM public.subjects WHERE name = 'Curling Ostrava';
+  _inv := public.create_invoice_draft_club(_sub, '2026-07-01', '2026-07-31');
+
+  UPDATE public.billing_settings SET separate_series = true, number_format = 'RRRRSNNN';
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.issue_invoice(%L)', _inv),
+    'nejsou implementované', 'se zapnutými oddělenými řadami se doklad nevystaví');
+
+  UPDATE public.billing_settings SET separate_series = false, number_format = 'RRRRNNNN';
+  PERFORM public.delete_invoice_draft(_inv);
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 7e) Náhled akcí ukazuje TOTÉŽ, co pak faktura zabere
+--
+-- Akce přes přelom měsíce: dialog v „Kdo dluží" nesmí ukázat jen tu část, která
+-- spadla do zobrazeného období, protože `create_invoice_draft_commercial`
+-- fakturuje celou akci. Admin by jinak odklikl číslo, které nikdy neviděl.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _akce uuid; _firma uuid; _nahled record; _inv uuid; _skutecnost numeric;
+BEGIN
+  SELECT e.id, r.subject_id INTO _akce, _firma
+    FROM public.events e
+    JOIN public.reservations r ON r.event_id = e.id
+   WHERE e.event_type = 'commercial' AND r.status = 'confirmed'
+     AND r.deleted_at IS NULL AND r.subject_id IS NOT NULL AND r.invoice_id IS NULL
+   ORDER BY r.start_at LIMIT 1;
+  IF _akce IS NULL THEN
+    RAISE NOTICE 'PŘESKOČENO: v seedu nezbyla nevyfakturovaná komerční akce';
+    RETURN;
+  END IF;
+
+  -- Náhled za JEDEN DEN akce (schválně užší období, než akce zabírá).
+  SELECT * INTO _nahled FROM public.nevyfakturovane_akce(
+    _firma,
+    (SELECT min((r.start_at AT TIME ZONE 'Europe/Prague')::date)
+       FROM public.reservations r WHERE r.event_id = _akce),
+    (SELECT min((r.start_at AT TIME ZONE 'Europe/Prague')::date)
+       FROM public.reservations r WHERE r.event_id = _akce)
+  ) WHERE event_id = _akce;
+  PERFORM pg_temp.tvrd(_nahled IS NOT NULL, 'náhled akci najde i podle jediného dne');
+
+  _inv := public.create_invoice_draft_commercial(_akce);
+  SELECT subtotal INTO _skutecnost FROM public.invoices WHERE id = _inv;
+
+  PERFORM pg_temp.tvrd(_nahled.castka = _skutecnost,
+    format('náhled (%s Kč) sedí na to, co faktura opravdu zabrala (%s Kč)', _nahled.castka, _skutecnost));
+  PERFORM public.delete_invoice_draft(_inv);
+END $$;
+
+-- -----------------------------------------------------------------------------
 -- 8) Zahození konceptu odemkne rezervace
 --
 -- Běží pod databázovou rolí schválně: tvrzení tady je o DATECH (uvolnil se zámek?),
