@@ -69,6 +69,21 @@ jdou jako další migrace nad baseline, ne přepisem historie.
    v pracovním stromu „než bude celek hotový" — necommitnutá práce má stejnou
    expozici na pád session jako nezaverzovaný dokument. Jeden PR = jeden commit,
    hned jak projde. (Push a merge zůstávají na vyžádání, tohle je o commitu.)
+7. **Dlouhé SQL funkce nikdy nepřepisuj ručně.** `CREATE OR REPLACE FUNCTION`
+   vyžaduje celé tělo, takže je vygeneruj z `pg_get_functiondef` živého schématu
+   a vlož do nich jen ten zásah, který děláš — pak ověř diffem, že nic nezmizelo.
+   Přepis z paměti už jednou utnul půlku bezpečnostního guardu (commit `87b1f78`).
+8. **Testy práv piš pod `SET LOCAL ROLE authenticated`.** Jako `postgres` projde
+   všechno (obchází granty i RLS), takže test tvrdí zavřeno o dveřích, vedle
+   kterých je otevřené okno. Dvakrát to takhle propustilo blokér.
+
+## Čemu v tomhle repu nevěřit
+
+- **`npx tsc --noEmit` netypuje nic** — kořenový `tsconfig.json` má `"files": []`
+  a jen reference na podprojekty. Používej **`npm run typecheck`** (`tsc -b`).
+- **`npm run lint` je červený už na HEADu** (66 errors z Etapy 1), takže jako brána
+  nefunguje — nový error od šumu nikdo nerozezná.
+- Úplný seznam takových pastí je v `docs/ETAPA2-STAV.md`, kapitola 5.
 
 ## Pravidlo pro Etapu 2 (fakturace) — povinné
 
@@ -81,16 +96,30 @@ tří gatů.** Platí i pro drobné úpravy — u peněz není „malá změna".
 
 Když se součty rozejdou, změna neprochází — bez ohledu na to, jak dobře vypadá kód.
 
+## Kde právě jsme (aktualizováno 13. 8. 2026)
+
+**Etapa 2 — fakturační modul.** Fáze A je hotová (A1–A5), rozdělaná je fáze B
+(hotové B1+B2 — základ dokladu).
+
+> **Než začneš cokoli dělat, přečti `docs/ETAPA2-STAV.md`.**
+> Je to předávací dokument: co je hotové s commit hashi, co se dělá dál a v jakém
+> pořadí, jaká rozhodnutí PM platí, stav dema a seznam věcí, které se v téhle
+> codebase tváří jinak, než jsou.
+>
+> Pak `docs/etapa2-fakturace-plan.md` (rozhodnutí R1–R11, otázky Q1–Q7)
+> a `docs/etapa2-fakturace-spec.md` (zadání od klienta).
+
+Aktuální cíl: **ruční „faktura na klik"** — jedna svislá funkční věc na demo,
+v režimu neplátce DPH. Bez automatiky, dobropisů a evidence plateb.
+
 ## Roadmapa (fáze)
 
-- **Fáze 0 — Převzetí kódu (teď):** naklonovat repo, rozjet lokálně, napojit Supabase MCP
-  (read-only), opustit Lovable.
-- **Fáze 1 — Zmapování:** projít appku + datový model, sepsat co existuje, schéma do migrací,
-  nastavit zálohy + soft-delete.
-- **Fáze 2 — Návrh rezervace ledu:** model (plátna, sloty, rezervace, typy, zákazníci s IČO,
-  ceník), role a přístup, ARES, fakturace, audit.
-- **Fáze 3 — Implementace rezervace ledu.**
-- **Fáze 4 — Testy, zálohy, nasazení.**
+- **Fáze 0 — Převzetí kódu:** ✅ hotovo.
+- **Fáze 1 — Zmapování:** ✅ hotovo (schéma v migracích, drift v `docs/SCHEMA_DRIFT.md`).
+- **Fáze 2 — Návrh rezervace ledu:** ✅ hotovo.
+- **Fáze 3 — Implementace rezervace ledu:** ✅ hotovo (Etapa 1).
+- **Fáze 4 — Testy, zálohy, nasazení:** průběžně.
+- **Etapa 2 — fakturace:** ⏳ probíhá, viz `docs/ETAPA2-STAV.md`.
 
 ## Požadavky na rezervační systém (od zákazníka)
 
