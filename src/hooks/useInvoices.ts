@@ -24,7 +24,7 @@ export const useInvoices = () => {
   const { user, isAdmin } = useAuth();
   const qc = useQueryClient();
 
-  const { data: invoices = [], isLoading } = useQuery({
+  const { data: invoices = [], isLoading, error } = useQuery({
     queryKey: ['invoices'],
     queryFn: async () => {
       const { data, error } = await supabase
@@ -97,6 +97,9 @@ export const useInvoices = () => {
   return {
     invoices,
     isLoading,
+    // Chyba se MUSÍ dostat ven: `useQuery` ji jinak spolkne do `data = []` a
+    // stránka pak výpadek sítě nebo zavřenou RLS ukáže jako „zatím tu nic není".
+    error: error as Error | null,
     createClubDraft: createClubDraft.mutateAsync,
     createCommercialDraft: createCommercialDraft.mutateAsync,
     issue: issue.mutateAsync,

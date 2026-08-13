@@ -1863,7 +1863,9 @@ export type Database = {
       billing_health: {
         Args: never
         Returns: {
+          polozky_mimo_obdobi: number
           posledni_vystaveni: string
+          radky_bez_rezervace: number
           rozesle_castky: number
           rozesle_soucty: number
           spatna_cisla: number

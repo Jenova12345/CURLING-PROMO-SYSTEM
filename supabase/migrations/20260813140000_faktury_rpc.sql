@@ -48,6 +48,9 @@
 --   DROP FUNCTION IF EXISTS public.issue_invoice(uuid);
 --   DROP FUNCTION IF EXISTS public.delete_invoice_draft(uuid);
 --   DROP FUNCTION IF EXISTS public.fakturovatelne_rezervace(uuid, timestamptz, timestamptz);
+--   DROP FUNCTION IF EXISTS public.obdobi_hranice(date, date);
+-- POZOR NA POŘADÍ: `obdobi_hranice` volá i `billing_reconcile` z B6, takže B6 se
+-- musí revertovat DŘÍV než tahle migrace — jinak zůstane kontrolní součet bez ní.
 -- Data se nemění, takže revert nic neztrácí — kromě konceptů, které mezitím
 -- vznikly (ty ale drží zámky na rezervacích, viz `delete_invoice_draft`).
 -- =============================================================================
@@ -165,6 +168,7 @@ DECLARE
   _do       timestamptz;
   _pocet    integer;
   _bez_ceny integer;
+  _ukazky   text;
 BEGIN
   IF NOT has_role(_uid, 'admin') THEN
     RAISE EXCEPTION 'Faktury vystavuje jen správce haly.';
@@ -172,8 +176,10 @@ BEGIN
   IF _obdobi_od IS NULL OR _obdobi_do IS NULL OR _obdobi_do < _obdobi_od THEN
     RAISE EXCEPTION 'Neplatné období faktury (od % do %).', _obdobi_od, _obdobi_do;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM public.subjects WHERE id = _subject_id) THEN
-    RAISE EXCEPTION 'Subjekt neexistuje.';
+  -- `deleted_at` schválně: fakturovat za skrytý subjekt je skoro jistě omyl.
+  -- (Doklad na už vystavené faktuře zůstane čitelný — snapshot odběratele je na ní.)
+  IF NOT EXISTS (SELECT 1 FROM public.subjects WHERE id = _subject_id AND deleted_at IS NULL) THEN
+    RAISE EXCEPTION 'Subjekt neexistuje nebo je skrytý.';
   END IF;
 
   SELECT zacatek, konec INTO _od, _do FROM public.obdobi_hranice(_obdobi_od, _obdobi_do);
@@ -181,12 +187,20 @@ BEGIN
   -- Rezervace bez sazby by se do dokladu nedostala (`sazba` je NOT NULL) a tiše
   -- by z faktury vypadla — což je přesně ten rozdíl, který má kontrolní součet
   -- odhalit. Radši nevystavit nic než vystavit neúplné.
-  SELECT count(*) INTO _bez_ceny
+  -- Kontroluje se i NULA, ne jen NULL: A2 pouští `corrected_hours = 0` a odepsat
+  -- klubu hodinu na nulu („nedorazili, neúčtujeme") je přirozený postup. Položka
+  -- by pak narazila na `invoice_items_hodiny_kladne` a celá měsíční faktura by
+  -- spadla na neutrální hlášku z EXCEPTION bloku — admin by neměl jak zjistit,
+  -- KTERÁ rezervace za to může. Hláška proto rovnou jmenuje termíny.
+  SELECT count(*), string_agg(to_char(f.start_at AT TIME ZONE 'Europe/Prague', 'DD.MM.YYYY HH24:MI'), ', '
+                              ORDER BY f.start_at)
+    INTO _bez_ceny, _ukazky
     FROM public.fakturovatelne_rezervace(_subject_id, _od, _do) f
-   WHERE f.invoice_id IS NULL AND (f.sazba IS NULL OR f.hodiny IS NULL);
+   WHERE f.invoice_id IS NULL
+     AND (f.sazba IS NULL OR f.hodiny IS NULL OR f.hodiny <= 0);
   IF _bez_ceny > 0 THEN
-    RAISE EXCEPTION 'Období obsahuje % rezervací bez sazby nebo bez hodin — doklad by byl neúplný.', _bez_ceny
-      USING HINT = 'Doplň sazbu u rezervace (nebo ceník) a založ fakturu znovu.';
+    RAISE EXCEPTION 'Období obsahuje % rezervací bez sazby nebo s nulovými hodinami (%).', _bez_ceny, _ukazky
+      USING HINT = 'Nulovou korekci zruš, nebo rezervaci stornuj — na doklad nulový řádek nepatří.';
   END IF;
 
   INSERT INTO public.invoices (kind, status, subject_id, obdobi_od, obdobi_do, created_by, updated_by)
@@ -201,8 +215,24 @@ BEGIN
     UPDATE public.reservations r
        SET invoice_id  = _invoice,
            invoiced_at = now()
-     WHERE r.id IN (SELECT f.id FROM public.fakturovatelne_rezervace(_subject_id, _od, _do) f
-                     WHERE f.invoice_id IS NULL)
+     -- `ORDER BY id FOR UPDATE` v poddotazu: obě fakturační RPC musí zamykat řádky
+     -- ve STEJNÉM pořadí. Bez toho jely každá po jiném plánu (klub přes function
+     -- scan, komerce přes index na `event_id`) a při souběhu o tytéž rezervace
+     -- vznikl deadlock — reprodukovatelně. Data se nerozbila, ale poražený dostal
+     -- holou postgresovou hlášku; ve fázi D (běh vedle ručního kliknutí) by to
+     -- trefovalo pravidelně.
+     WHERE r.id IN (
+       SELECT r2.id FROM public.reservations r2
+        WHERE r2.id IN (SELECT f.id FROM public.fakturovatelne_rezervace(_subject_id, _od, _do) f
+                         WHERE f.invoice_id IS NULL)
+        ORDER BY r2.id
+        FOR UPDATE
+     )
+       -- NOSNÁ PODMÍNKA, NE DUPLICITA. V READ COMMITTED se po čekání na zámek
+       -- přehodnocuje jen kvalifikace nad NOVOU verzí cílového řádku; podmínka
+       -- schovaná uvnitř funkce se vyhodnocuje proti PŮVODNÍMU snapshotu příkazu,
+       -- tedy proti stavu před cizím COMMITem. Kdo tenhle řádek uklidí jako
+       -- nadbytečný, otevře dvojí fakturaci.
        AND r.invoice_id IS NULL          -- ← vlastní atomický claim (R1)
     RETURNING r.id, r.start_at, r.end_at, r.sheet_id, r.event_id,
               COALESCE(r.corrected_hours, r.hours)   AS hodiny,
@@ -245,6 +275,11 @@ BEGIN
   RETURN _invoice;
 
 EXCEPTION
+  -- Deadlock je dostupnostní věc, ne účetní: data zůstanou v pořádku, ale
+  -- poražený by jinak dostal holou postgresovou hlášku. Ať aspoň ví, co má udělat.
+  WHEN deadlock_detected THEN
+    RAISE EXCEPTION 'Fakturu právě zakládá někdo jiný — zkus to prosím znovu.'
+      USING ERRCODE = '40P01';
   -- Uvnitř SECURITY DEFINER neplatí RLS, takže Postgres do chyby doplní
   -- „Failing row contains (…)" s celým řádkem — a PostgREST ho u RPC pošle
   -- klientovi. U faktury je v tom řádku snapshot dodavatele i s IBANem
@@ -340,15 +375,22 @@ BEGIN
     UPDATE public.reservations r
        SET invoice_id  = _invoice,
            invoiced_at = now()
-     WHERE r.event_id = _event_id
-       AND r.status = 'confirmed'
-       AND r.deleted_at IS NULL
-       AND r.subject_id IS NOT NULL
-       AND r.invoice_id IS NULL
-       -- Rozhodnutí PM k Q4 platí na OBOU cestách. Dřív ho ctila jen klubová,
-       -- takže by komerční akce vyfakturovala i neschválenou rezervaci — a rozdíl
-       -- by se objevil až v kontrolním součtu jako nevysvětlitelný.
-       AND (NOT _jen_schvalene OR r.approved_at IS NOT NULL)
+     -- Totéž pořadí zámků jako u klubové cesty, ze stejného důvodu (deadlock).
+     WHERE r.id IN (
+       SELECT r2.id FROM public.reservations r2
+        WHERE r2.event_id = _event_id
+          AND r2.status = 'confirmed'
+          AND r2.deleted_at IS NULL
+          AND r2.subject_id IS NOT NULL
+          AND r2.invoice_id IS NULL
+          -- Rozhodnutí PM k Q4 platí na OBOU cestách. Dřív ho ctila jen klubová,
+          -- takže by komerční akce vyfakturovala i neschválenou rezervaci — a rozdíl
+          -- by se objevil až v kontrolním součtu jako nevysvětlitelný.
+          AND (NOT _jen_schvalene OR r2.approved_at IS NOT NULL)
+        ORDER BY r2.id
+        FOR UPDATE
+     )
+       AND r.invoice_id IS NULL          -- ← nosná podmínka, viz klubová cesta
     RETURNING r.id, r.start_at, r.end_at, r.sheet_id,
               COALESCE(r.corrected_hours, r.hours)   AS hodiny,
               r.rate_per_hour                        AS sazba,
@@ -381,6 +423,9 @@ BEGIN
   RETURN _invoice;
 
 EXCEPTION
+  WHEN deadlock_detected THEN
+    RAISE EXCEPTION 'Fakturu právě zakládá někdo jiný — zkus to prosím znovu.'
+      USING ERRCODE = '40P01';
   WHEN check_violation OR unique_violation OR not_null_violation
        OR numeric_value_out_of_range OR foreign_key_violation THEN
     RAISE EXCEPTION 'Fakturu se nepodařilo sestavit — data rezervací neodpovídají pravidlům dokladu.'
@@ -452,6 +497,31 @@ BEGIN
           AND r2.start_at <  _do
      )
    GROUP BY e.id, e.title
+
+  UNION ALL
+
+  -- REZERVACE BEZ AKCE. Bez tohohle řádku byly nevyfakturovatelné vůbec:
+  -- UI posílá každý nekulubový subjekt do dialogu akcí a ten je (přes INNER JOIN
+  -- na `events`) neviděl. Peníze pak zůstaly v `k_fakturaci` navždy a `rozdil`
+  -- byl přitom nula — přesně ta třída tichého rozdílu, kvůli které kontrolní
+  -- součet existuje. `event_id IS NULL` říká volajícímu „na tohle použij
+  -- souhrnnou fakturu za období", ne „za akci".
+  SELECT NULL::uuid,
+         'Rezervace bez akce',
+         min((r.start_at AT TIME ZONE 'Europe/Prague')::date),
+         count(*),
+         sum(COALESCE(r.corrected_amount, r.amount))
+    FROM public.reservations r
+   WHERE r.subject_id = _subject_id
+     AND r.event_id IS NULL
+     AND r.invoice_id IS NULL
+     AND r.status = 'confirmed'
+     AND r.deleted_at IS NULL
+     AND (NOT _jen_schvalene OR r.approved_at IS NOT NULL)
+     AND r.start_at >= _od
+     AND r.start_at <  _do
+  HAVING count(*) > 0
+
    ORDER BY 3, 2;
 
 EXCEPTION
@@ -500,6 +570,8 @@ DECLARE
   _dnes     date;
   _chybi    text[] := ARRAY[]::text[];
   _splatnost date;
+  _zrusenych integer;
+  _ukazky    text;
 BEGIN
   IF NOT has_role(_uid, 'admin') THEN
     RAISE EXCEPTION 'Faktury vystavuje jen správce haly.';
@@ -546,10 +618,44 @@ BEGIN
   IF _sub.type = 'commercial' AND nullif(btrim(coalesce(_sub.ico, '')), '') IS NULL THEN
     _chybi := array_append(_chybi, 'IČO odběratele (firmy)');
   END IF;
+  -- Sídlo odběratele je náležitost dokladu (spec, bod 3) u klubu i u firmy.
+  IF nullif(btrim(coalesce(_sub.address, '')), '') IS NULL THEN
+    _chybi := array_append(_chybi, 'sídlo odběratele');
+  END IF;
+
+  -- REŽIM DPH: doklad umí zatím jen neplátce. Sloupce `vat_*` na položkách jsou
+  -- prázdné místo (čekají na otázku Q7 od účetní), takže v plátcovském režimu by
+  -- doklad vyšel bez vyčíslené daně A ZÁROVEŇ bez doložky — vypadal by jako
+  -- neplátcovský, aniž by to řekl. Radši nevystavit než vystavit doklad, který
+  -- o svém daňovém režimu mlčí.
+  IF COALESCE(_bs.vat_mode, 'neplatce') <> 'neplatce' THEN
+    RAISE EXCEPTION 'Doklad umí zatím jen režim neplátce DPH (nastaveno: %).', _bs.vat_mode
+      USING HINT = 'Plátcovský režim potřebuje dopočet DPH na položkách — čeká na rozhodnutí účetní (otázka Q7).';
+  END IF;
 
   IF array_length(_chybi, 1) > 0 THEN
     RAISE EXCEPTION 'Fakturu nelze vystavit — chybí: %.', array_to_string(_chybi, ', ')
       USING HINT = 'Doplň údaje v Nastavení → Fakturace, případně u odběratele (načtením z ARESu).';
+  END IF;
+
+  -- ZRUŠENÁ REZERVACE NA KONCEPTU. Klub odvolá termín, který zrovna visí na
+  -- konceptu — běžná posloupnost, ne exotika. Bez téhle kontroly se doklad
+  -- vystaví, stane se neměnným, a `billing_health.vyfakturovane_zrusene` se ozve
+  -- AŽ POTOM: hlásí přesně ve chvíli, kdy se s tím už nedá nic dělat, protože
+  -- storno ani dobropis v tomhle rozsahu nejsou. Detekce po činu je u nevratného
+  -- kroku k ničemu — tady musí stát prevence.
+  SELECT count(*), string_agg(to_char(r.start_at AT TIME ZONE 'Europe/Prague', 'DD.MM.YYYY HH24:MI'), ', '
+                              ORDER BY r.start_at)
+    INTO _zrusenych, _ukazky
+    FROM public.invoice_items it
+    JOIN public.reservations r ON r.id = it.reservation_id
+   WHERE it.invoice_id = _invoice_id
+     AND (r.deleted_at IS NOT NULL OR r.status <> 'confirmed');
+
+  IF _zrusenych > 0 THEN
+    RAISE EXCEPTION 'Na konceptu je % zrušených rezervací (%) — doklad by účtoval led, který se nekonal.',
+      _zrusenych, _ukazky
+      USING HINT = 'Zahoď koncept a založ ho znovu; zrušené rezervace už do něj nespadnou.';
   END IF;
 
   -- Číslo až tady, ne u konceptu: smazaný koncept by jinak udělal v řadě díru.

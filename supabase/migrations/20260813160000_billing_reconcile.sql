@@ -133,7 +133,15 @@ BEGIN
     -- Řádky dokladů patřící rezervacím v období. `LEFT JOIN` schválně NE:
     -- řádek bez rezervace (sleva, storno poplatek) do porovnání s „Kdo dluží"
     -- nepatří, protože na druhé straně rovnice žádnou rezervaci nemá.
-    SELECT rez.subject_id,
+    -- (Že je pak nepočítá vůbec nikdo, hlídá `billing_health.radky_bez_rezervace`.)
+    --
+    -- SESKUPUJE SE PODLE `i.subject_id`, ne podle subjektu rezervace. Admin smí
+    -- rezervaci přepsat subjekt i po vyfakturování (guard mu brání jen v `invoice_id`),
+    -- a pak se peníze na dokladu a dnešní příslušnost rezervace rozejdou. S
+    -- `rez.subject_id` vyšla rovnice OBĚMA klubům: jednomu se „vyfakturovalo" to,
+    -- co má na dokladu druhý, a `rozdil` byl u obou nula. Doklad ví, komu je
+    -- vystavený — tak ať rozhoduje on.
+    SELECT i.subject_id,
            i.status,
            it.line_total
       FROM rez
@@ -208,6 +216,8 @@ RETURNS TABLE (
   rozesle_castky        bigint,
   zamek_bez_radku       bigint,
   vyfakturovane_zrusene bigint,
+  radky_bez_rezervace   bigint,
+  polozky_mimo_obdobi   bigint,
   spatna_cisla          bigint,
   rozesle_soucty        bigint,
   stare_koncepty        bigint,
@@ -262,6 +272,24 @@ BEGIN
        JOIN public.reservations r ON r.id = it.reservation_id
       WHERE r.deleted_at IS NOT NULL OR r.status <> 'confirmed') AS vyfakturovane_zrusene,
 
+    -- Řádek dokladu, který nevisí na žádné rezervaci (sleva, storno poplatek,
+    -- budoucí dobropis). Z porovnání s „Kdo dluží" je vyloučený schválně — na
+    -- druhé straně rovnice nemá protějšek — jenže tím ho nepočítá vůbec nikdo.
+    -- Dnes ho nemá kdo založit; až přijde E2 nebo dobropisy, tohle počítadlo
+    -- řekne, že akceptační kritérium přestalo pokrývat část dokladu.
+    (SELECT count(*) FROM public.invoice_items it
+       JOIN public.invoices i ON i.id = it.invoice_id AND i.status <> 'stornovano'
+      WHERE it.reservation_id IS NULL) AS radky_bez_rezervace,
+
+    -- Položka mimo období, na které doklad zní. Peněžně to sedí v obou obdobích
+    -- (rovnice porovnává řádky proti rezervacím, hlavičku nečte), ale doklad pak
+    -- tvrdí „srpen" a účtuje červencový led. Trefí se do toho přesun rezervace
+    -- přes hranici měsíce a měsíční ZIP export (E3), který staví na hlavičce.
+    (SELECT count(*) FROM public.invoice_items it
+       JOIN public.invoices i ON i.id = it.invoice_id AND i.status <> 'stornovano'
+      WHERE it.datum IS NOT NULL
+        AND (it.datum < i.obdobi_od OR it.datum > i.obdobi_do)) AS polozky_mimo_obdobi,
+
     -- Vystavený doklad bez čísla nebo koncept s číslem: obojí by znamenalo díru
     -- nebo duplicitu v číselné řadě. CHECK to nepustí, tohle je kontrola kontroly.
     (SELECT count(*) FROM public.invoices
@@ -297,6 +325,7 @@ DECLARE _h record;
 BEGIN
   SELECT * INTO _h FROM public.billing_health();
   IF _h.rozesle_castky <> 0 OR _h.zamek_bez_radku <> 0 OR _h.vyfakturovane_zrusene <> 0
+     OR _h.radky_bez_rezervace <> 0 OR _h.polozky_mimo_obdobi <> 0
      OR _h.spatna_cisla <> 0 OR _h.rozesle_soucty <> 0 THEN
     RAISE EXCEPTION 'B6: fakturační data nejsou v pořádku hned po nasazení (%).', row_to_json(_h);
   END IF;

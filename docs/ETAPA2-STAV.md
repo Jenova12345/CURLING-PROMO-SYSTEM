@@ -135,6 +135,23 @@ protože bez nich se `issue_invoice` správně zastaví na „chybí IČO dodava
 cesta k dokladu se nedá proklikat. Jsou zjevně vymyšlené (IČO 12345678) a plní se
 **jen v demo skriptu**, ne v seedu a ne v migraci.
 
+#### Co kontrolní součet NEVIDÍ (a proto to hlídá `billing_health()`)
+
+Rovnice porovnává řádky dokladů proti rezervacím. Čtyři třídy rozporu jí projdou
+s `rozdil = 0`, takže „sedí to" je jen půlka odpovědi:
+
+| Co | Počítadlo |
+|---|---|
+| vyfakturovaná rezervace, která se pak zrušila | `vyfakturovane_zrusene` |
+| rezervace se po vyfakturování změnila (N1) | `rozesle_castky` |
+| řádek dokladu bez rezervace (sleva, dobropis, E2) | `radky_bez_rezervace` |
+| položka mimo období, na které doklad zní | `polozky_mimo_obdobi` |
+
+**`billing_health()` je funkce, ne pohled**, a je to podstatné: jako pohled se
+`security_invoker = on` ověřovala práva i na základní tabulky, kde `authenticated`
+po A5 nemá sloupcový SELECT — mrtvého muže si nepřečetl ani admin. Zelené to bylo
+jen proto, že kontroly běží pod `postgres`.
+
 ### Co zbývá
 
 **QR platba na dokladu.** `spayd.ts` umí řetězec, chybí z něj udělat obrázek —

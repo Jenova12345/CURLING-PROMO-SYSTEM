@@ -22,8 +22,12 @@ import { denZDb } from '@/lib/datum';
 
 type View = 'day' | 'week' | 'month';
 
-/** Akce čekající na fakturu u komerčního odběratele (spec 2A: 1 doklad = 1 akce). */
-type NevyfakturovanaAkce = { event_id: string; nazev: string; den: string; rezervaci: number; castka: number };
+/**
+ * Co u komerčního odběratele čeká na fakturu. `event_id = null` je zvláštní řádek
+ * „rezervace bez akce" — ty se fakturují souhrnně za období, ne za akci, a bez
+ * něj byly nevyfakturovatelné vůbec (dialog je přes akce neviděl).
+ */
+type NevyfakturovanaAkce = { event_id: string | null; nazev: string; den: string; rezervaci: number; castka: number };
 
 const Dues = () => {
   const { isAdmin } = useAuth();
@@ -31,6 +35,7 @@ const Dues = () => {
   const navigate = useNavigate();
   const { createClubDraft, createCommercialDraft, isBusy } = useInvoices();
   const [akce, setAkce] = useState<{ subjectId: string; name: string; polozky: NevyfakturovanaAkce[] } | null>(null);
+  const [nacitamAkce, setNacitamAkce] = useState<string | null>(null);
   const [view, setView] = useState<View>('month');
   const [currentDate, setCurrentDate] = useState(() => startOfDay(new Date()));
 
@@ -120,9 +125,13 @@ const Dues = () => {
   // Komerční odběratel se fakturuje po akcích, ne za období — proto nabídka.
   const nabidniAkce = async (subjectId: string, subjectName: string) => {
     const { from, to } = obdobi();
+    // Vlastní indikace načítání: `isBusy` z useInvoices tenhle dotaz nekryje,
+    // takže by tlačítko na pomalé síti vypadalo mrtvě.
+    setNacitamAkce(subjectId);
     const { data, error } = await supabase.rpc('nevyfakturovane_akce', {
       _subject_id: subjectId, _obdobi_od: from, _obdobi_do: to,
     });
+    setNacitamAkce(null);
     if (error) {
       toast({ title: 'Nepovedlo se', description: error.message, variant: 'destructive' });
       return;
@@ -135,9 +144,14 @@ const Dues = () => {
     setAkce({ subjectId, name: subjectName, polozky });
   };
 
-  const vygenerujZaAkci = async (eventId: string) => {
+  const vygenerujZaAkci = async (eventId: string | null) => {
+    if (!akce) return;
     try {
-      await createCommercialDraft(eventId);
+      // `event_id = null` znamená „rezervace bez akce" — ty se fakturují souhrnně
+      // za období, ne za akci (jinak by na ně nebylo jak dosáhnout).
+      const { from, to } = obdobi();
+      if (eventId === null) await createClubDraft({ subjectId: akce.subjectId, from, to });
+      else await createCommercialDraft(eventId);
       setAkce(null);
       toast({ title: 'Koncept faktury založen', description: 'Zkontroluj ho a vystav na stránce Faktury.' });
       navigate('/invoices');
@@ -206,7 +220,7 @@ const Dues = () => {
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
                         <Button
-                          size="sm" disabled={isBusy}
+                          size="sm" disabled={isBusy || nacitamAkce === r.subjectId}
                           aria-label={`Vygenerovat fakturu — ${r.name}`}
                           onClick={() => r.type === 'club'
                             ? vygenerujKlubovou(r.subjectId, r.name)
@@ -253,11 +267,12 @@ const Dues = () => {
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
             Komerční odběratel se fakturuje po akcích: jedna akce = jeden doklad.
-            Vyber, za kterou akci se má koncept založit.
+            Vyber, za kterou akci se má koncept založit. Řádek „rezervace bez akce"
+            je souhrnná faktura za zobrazené období.
           </p>
           <div className="space-y-2">
             {akce?.polozky.map((a) => (
-              <div key={a.event_id} className="flex items-center justify-between gap-3 rounded-md border p-3">
+              <div key={a.event_id ?? 'bez-akce'} className="flex items-center justify-between gap-3 rounded-md border p-3">
                 <div>
                   <div className="font-medium">{a.nazev}</div>
                   <div className="text-xs text-muted-foreground">

@@ -494,6 +494,121 @@ BEGIN
 END $$;
 
 -- -----------------------------------------------------------------------------
+-- 7f) Prevence před nevratným krokem: zrušená rezervace na konceptu
+--
+-- Klub odvolá termín, který visí na konceptu — běžná posloupnost. Bez kontroly
+-- se doklad vystaví, stane se neměnným, a `billing_health` se ozve AŽ POTOM;
+-- u nevratného kroku je detekce po činu k ničemu, protože storno ani dobropis
+-- v tomhle rozsahu nejsou.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _sub uuid; _inv uuid; _rez uuid; _h record;
+BEGIN
+  SELECT id INTO _sub FROM public.subjects WHERE name = 'TJ Poruba';
+  _inv := public.create_invoice_draft_club(_sub, '2026-07-01', '2026-08-31');
+  SELECT id INTO _rez FROM public.reservations WHERE invoice_id = _inv ORDER BY start_at LIMIT 1;
+
+  UPDATE public.reservations SET status = 'cancelled', cancelled_at = now(),
+         cancel_reason = 'Test zrušení na konceptu' WHERE id = _rez;
+
+  SELECT * INTO _h FROM public.billing_health();
+  PERFORM pg_temp.tvrd(_h.vyfakturovane_zrusene = 0,
+    'mrtvý muž koncepty nesleduje — proto to musí zachytit vystavení');
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.issue_invoice(%L)', _inv),
+    'zrušených rezervací', 'koncept se zrušenou rezervací se nevystaví');
+
+  UPDATE public.reservations SET status = 'confirmed', cancelled_at = NULL,
+         cancel_reason = NULL WHERE id = _rez;
+  PERFORM public.delete_invoice_draft(_inv);
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 7g) Rovnice se řídí dokladem, ne dnešní příslušností rezervace
+--
+-- Admin smí u rezervace přepsat subjekt i po vyfakturování (guard mu brání jen
+-- v `invoice_id`). Když se řádky seskupovaly podle subjektu REZERVACE, vyšla
+-- rovnice OBĚMA klubům: jednomu se „vyfakturovalo" to, co má na dokladu druhý,
+-- a `rozdil` byl u obou nula.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _inv uuid; _rez uuid; _puvodni uuid; _jiny uuid; _r record; _spatnych int;
+BEGIN
+  SELECT hodnota::uuid INTO _inv FROM _stav WHERE klic = 'invoice';
+  SELECT id, subject_id INTO _rez, _puvodni
+    FROM public.reservations WHERE invoice_id = _inv ORDER BY start_at LIMIT 1;
+  SELECT id INTO _jiny FROM public.subjects
+   WHERE id <> _puvodni AND type = 'club' AND deleted_at IS NULL ORDER BY name LIMIT 1;
+
+  UPDATE public.reservations SET subject_id = _jiny WHERE id = _rez;
+
+  SELECT count(*) INTO _spatnych
+    FROM public.billing_reconcile('2026-07-01', '2026-07-31') WHERE rozdil <> 0;
+  PERFORM pg_temp.tvrd(_spatnych > 0,
+    'přesun vyfakturované rezervace pod jiný subjekt kontrolní součet ROZBIJE (a má)');
+
+  SELECT * INTO _r FROM public.billing_reconcile('2026-07-01', '2026-07-31')
+   WHERE subject_id = _jiny;
+  PERFORM pg_temp.tvrd(COALESCE(_r.fakturovano, 0) = 0,
+    'novému subjektu se nepřipíše cizí doklad jako vyfakturovaný');
+
+  UPDATE public.reservations SET subject_id = _puvodni WHERE id = _rez;
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 7h) Korekce na nulu nesmí shodit celý měsíc bez vysvětlení
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _sub uuid; _rez uuid;
+BEGIN
+  SELECT id INTO _sub FROM public.subjects WHERE name = 'HC Ostrava';
+  SELECT id INTO _rez FROM public.reservations
+   WHERE subject_id = _sub AND invoice_id IS NULL AND status = 'confirmed' AND deleted_at IS NULL
+   ORDER BY start_at LIMIT 1;
+
+  UPDATE public.reservations SET corrected_hours = 0, correction_reason = 'Nedorazili'
+   WHERE id = _rez;
+
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.create_invoice_draft_club(%L, ''2026-01-01'', ''2026-12-31'')', _sub),
+    'nulovými hodinami', 'nulová korekce fakturu zastaví a hláška jmenuje termín');
+
+  UPDATE public.reservations SET corrected_hours = NULL, correction_reason = NULL WHERE id = _rez;
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 7i) Firemní rezervace bez akce musí jít vyfakturovat
+--
+-- UI posílá každý nekulubový subjekt do dialogu akcí. Když ten dialog stál na
+-- INNER JOINu s `events`, rezervace bez akce v něm nebyly vidět — peníze zůstaly
+-- v `k_fakturaci` navždy a `rozdil` byl přitom nula.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _firma uuid; _bez_akce record; _celkem int;
+BEGIN
+  SELECT id INTO _firma FROM public.subjects WHERE name = 'Testovací Firma s.r.o.';
+  SELECT count(*) INTO _celkem FROM public.reservations
+   WHERE subject_id = _firma AND event_id IS NULL AND invoice_id IS NULL
+     AND status = 'confirmed' AND deleted_at IS NULL;
+
+  IF _celkem = 0 THEN
+    RAISE NOTICE 'PŘESKOČENO: firma nemá rezervaci bez akce';
+    RETURN;
+  END IF;
+
+  -- POZOR na `_rec IS NOT NULL`: v Postgresu to znamená „ŽÁDNÉ pole není NULL",
+  -- a `event_id` je u tohohle řádku NULL schválně — tvrzení by tedy selhalo
+  -- i nad korektním výsledkem. Testuje se proto přes `FOUND` a hodnotu.
+  SELECT * INTO _bez_akce FROM public.nevyfakturovane_akce(_firma, '2026-01-01', '2026-12-31')
+   WHERE event_id IS NULL;
+  PERFORM pg_temp.tvrd(FOUND,
+    'nabídka ukáže i rezervace bez akce (jinak by je nešlo vyfakturovat vůbec)');
+  PERFORM pg_temp.tvrd(_bez_akce.castka > 0, 'a s nenulovou částkou');
+  PERFORM pg_temp.tvrd(_bez_akce.rezervaci = _celkem,
+    format('a sedí na počet volných rezervací bez akce (%s)', _celkem));
+END $$;
+
+-- -----------------------------------------------------------------------------
 -- 8) Zahození konceptu odemkne rezervace
 --
 -- Běží pod databázovou rolí schválně: tvrzení tady je o DATECH (uvolnil se zámek?),

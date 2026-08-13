@@ -106,8 +106,8 @@ UPDATE public.settings SET club_default_rate = 500, commercial_default_rate = 10
 -- ne subjekt. Subjekty jsou jen zákazníci haly: kluby a firmy. „CK Ostravské kameny"
 -- je vymyšlený domácí klub pro demo; až Jakub řekne skutečný název, přepsat tady.
 INSERT INTO public.subjects (id, type, name, ico, dic, address, default_rate) VALUES
-  ('aaaa1111-0000-0000-0000-000000000001', 'club', 'CK Ostravské kameny', NULL, NULL, NULL, NULL),
-  ('aaaa1111-0000-0000-0000-000000000002', 'club', 'Curling Ostrava', NULL, NULL, NULL, 450),
+  ('aaaa1111-0000-0000-0000-000000000001', 'club', 'CK Ostravské kameny', NULL, NULL, 'Kamenná 12, 702 00 Ostrava', NULL),
+  ('aaaa1111-0000-0000-0000-000000000002', 'club', 'Curling Ostrava', NULL, NULL, 'Ledová 3, 700 30 Ostrava', 450),
   ('bbbb2222-0000-0000-0000-000000000001', 'commercial', 'Testovací Firma s.r.o.',
    '00000019', 'CZ00000019', 'Testovací 1, 700 30 Ostrava', NULL);
 
@@ -165,8 +165,8 @@ UPDATE public.settings SET club_default_rate = 600, commercial_default_rate = 15
 
 -- Další subjekty: 2 kluby + 1 komerční
 INSERT INTO public.subjects (id, type, name, ico, dic, address, default_rate) VALUES
-  ('aaaa1111-0000-0000-0000-000000000003', 'club', 'HC Ostrava', NULL, NULL, NULL, NULL),
-  ('aaaa1111-0000-0000-0000-000000000004', 'club', 'TJ Poruba', NULL, NULL, NULL, 550),
+  ('aaaa1111-0000-0000-0000-000000000003', 'club', 'HC Ostrava', NULL, NULL, 'Hokejová 1, 702 00 Ostrava', NULL),
+  ('aaaa1111-0000-0000-0000-000000000004', 'club', 'TJ Poruba', NULL, NULL, 'Sportovní 8, 708 00 Ostrava-Poruba', 550),
   ('bbbb2222-0000-0000-0000-000000000002', 'commercial', 'Demo Firma s.r.o.', '12345678', 'CZ12345678', 'Hlavní 1, 700 30 Ostrava', NULL);
 
 -- Týden klubových rezervací na obou dráhách (sazbu dopočítá trigger z ceníku/subjektu)

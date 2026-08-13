@@ -42,7 +42,7 @@ const StavBadge = ({ stav, poSplatnosti }: { stav: string; poSplatnosti: boolean
 const Invoices = () => {
   const { isAdmin } = useAuth();
   const { toast } = useToast();
-  const { invoices, isLoading, issue, deleteDraft, isBusy } = useInvoices();
+  const { invoices, isLoading, error, issue, deleteDraft, isBusy } = useInvoices();
   const [detailId, setDetailId] = useState<string | null>(null);
   const { data: detail, isLoading: detailLoading } = useInvoiceDetail(detailId);
 
@@ -60,7 +60,15 @@ const Invoices = () => {
 
   // Berou ID, ne celý řádek: detail dialogu má jinou strukturu než řádek seznamu
   // a přetypovávat kvůli tomu neúplný objekt na `InvoiceListRow` je lež kompilátoru.
-  const vystav = async (id: string) => {
+  const vystav = async (id: string, popis?: string) => {
+    // Vystavení je NEVRATNÉ: spálí číslo v řadě, doklad je od té chvíle neměnný
+    // a storno ani dobropis v tomhle rozsahu nejsou. Jediná cesta zpět vede přes
+    // `app.invoice_repair` z psql. Jeden překlik na špatném řádku proto stojí
+    // za jedno potvrzení.
+    if (!window.confirm(
+      `Vystavit fakturu${popis ? ` — ${popis}` : ''}?\n\n`
+      + 'Doklad dostane číslo a už nepůjde změnit ani smazat.'
+    )) return;
     try {
       const v = await issue(id);
       toast({
@@ -198,6 +206,11 @@ const Invoices = () => {
         <CardContent>
           {isLoading ? (
             <div className="text-muted-foreground">Načítám…</div>
+          ) : error ? (
+            <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>Faktury se nepodařilo načíst: {error.message}</span>
+            </div>
           ) : invoices.length === 0 ? (
             <div className="text-muted-foreground text-sm">
               Zatím tu není žádná faktura. Vygeneruj ji v „Kdo dluží" tlačítkem u subjektu.
@@ -225,8 +238,11 @@ const Invoices = () => {
                     <TableCell className="font-medium">{f.cislo ?? '—'}</TableCell>
                     <TableCell>
                       {f.odberatel}
+                      {/* `kind` je typ DOKLADU (souhrnná za období vs. za akci),
+                          ne typ odběratele — firma může dostat obojí. Štítek
+                          „Klub / Komerční" by u souhrnné faktury firmě lhal. */}
                       <Badge variant="outline" className="ml-2">
-                        {f.kind === 'klub' ? 'Klub' : 'Komerční'}
+                        {f.kind === 'klub' ? 'Souhrnná' : 'Za akci'}
                       </Badge>
                     </TableCell>
                     <TableCell className="whitespace-nowrap">{den(f.obdobi_od)} – {den(f.obdobi_do)}</TableCell>
@@ -238,7 +254,7 @@ const Invoices = () => {
                       <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
                         {f.status === 'koncept' && (
                           <>
-                            <Button size="sm" disabled={isBusy} onClick={() => vystav(f.id!)}>
+                            <Button size="sm" disabled={isBusy} onClick={() => vystav(f.id!, `${f.odberatel} · ${fmtKc(Number(f.total_rounded ?? 0))}`)}>
                               <Check className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Vystavit
                             </Button>
                             <Button
@@ -353,7 +369,10 @@ const Invoices = () => {
                   <>
                     <Button
                       disabled={isBusy}
-                      onClick={() => vystav(detail.invoice.id)}
+                      onClick={() => vystav(
+                        detail.invoice.id,
+                        `${detail.invoice.odberatel_nazev ?? ''} · ${fmtKc(Number(detail.invoice.total_rounded))}`,
+                      )}
                     >
                       <Check className="mr-1 h-4 w-4" aria-hidden="true" /> Vystavit fakturu
                     </Button>
