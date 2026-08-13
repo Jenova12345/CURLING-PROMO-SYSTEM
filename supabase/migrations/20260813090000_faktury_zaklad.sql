@@ -345,39 +345,51 @@ COMMENT ON COLUMN public.reservations.invoice_id IS
 -- a komentář v booking_core.sql:89 to říká výslovně: kdo přidá sloupec, musí ho
 -- do výčtu doplnit. Tahle migrace ty sloupce přidává, takže to je její práce.
 CREATE OR REPLACE FUNCTION public.guard_reservation_rep_changes()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path TO 'public'
-AS $guard$
+ RETURNS trigger
+ LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public'
+AS $$
 DECLARE
+  -- Co smí ne-admin přímým zápisem vůbec změnit. Whitelist schválně: při blacklistu
+  -- by každý nově přidaný sloupec byl automaticky povolený (a přesně tak se sem
+  -- třikrát po sobě vloudilo falšování auditu).
   _allowed CONSTANT text[] := ARRAY[
     'note', 'status',
     'approved_at', 'approved_by',
     'cancelled_at', 'cancelled_by', 'cancel_reason',
-    'updated_at', 'updated_by'
+    'updated_at', 'updated_by'          -- doplňuje pozdější trigger, klientská hodnota se přepíše
   ];
   _changed text[];
   _forbidden text;
 BEGIN
+  -- Migrace, seed a servisní zásahy pod databázovou rolí. `session_user` schválně:
+  -- uvnitř SECURITY DEFINER je current_user vždy vlastník funkce, takže by tahle
+  -- podmínka nerozlišila vůbec nic. PostgREST se připojuje jako `authenticator`,
+  -- takže nepřihlášený klient sem nespadne.
+  -- Serverové skripty pod service_role ať používají RPC funkce, ne přímý zápis.
   IF auth.uid() IS NULL AND session_user IN ('postgres', 'supabase_admin') THEN
     RETURN NEW;
   END IF;
 
+  -- Servisní klíč (service_role) se sem dostane bez přihlášeného uživatele přes
+  -- PostgREST. Zápis mu nepovolíme — obešel by kontrolu kolizí i schvalování —
+  -- ale ať hláška rovnou řekne kudy, jinak to vypadá jako chyba oprávnění uživatele.
   IF auth.uid() IS NULL AND session_user = 'authenticator' THEN
     RAISE EXCEPTION 'Servisní zápis do rezervací jde jen přes RPC (create_booking, move_booking, cancel_booking, …)';
   END IF;
 
+  -- Zápis z důvěryhodných RPC funkcí (public.create_booking a spol.), které samy ověřují
+  -- práva, kolize a priority. GUC je transakčně lokální; přes PostgREST ho klient nenastaví
+  -- a RPC funkce ho po svých zápisech samy vypínají, aby zvýšené oprávnění neplatilo
+  -- pro zbytek transakce.
   IF current_setting('app.trusted_booking', true) = 'on' THEN
     RETURN NEW;
   END IF;
 
-  -- ZÁMEK FAKTURACE stojí NAD adminskou výjimkou.
-  --
-  -- Admin má u rezervací jinak volnou ruku a je to tak správně. Tohle je ale
-  -- účetní vazba, ne provozní údaj: odpojit rezervaci od vystavené (a tím neměnné)
-  -- faktury znamená, že se naúčtuje podruhé. Uvolnit ji smí jen storno nebo plný
-  -- dobropis, tedy RPC — a ta si nastaví `app.trusted_booking`.
+  -- ZÁMEK FAKTURACE stojí NAD adminskou výjimkou (doplněno v B1+B2).
+  -- Admin má u rezervací jinak volnou ruku a je to správně. Tohle je ale účetní
+  -- vazba: odpojit rezervaci od vystavené (a tím neměnné) faktury znamená, že se
+  -- naúčtuje podruhé. Uvolnit ji smí jen storno nebo dobropis, tedy RPC — a ty si
+  -- nastaví `app.trusted_booking`, takže sem vůbec nedojdou.
   IF TG_OP = 'UPDATE'
      AND (NEW.invoice_id IS DISTINCT FROM OLD.invoice_id
           OR NEW.invoiced_at IS DISTINCT FROM OLD.invoiced_at) THEN
@@ -386,26 +398,33 @@ BEGIN
   END IF;
 
   IF has_role(auth.uid(), 'admin') THEN
-    RETURN NEW;
+    RETURN NEW;  -- admin: bez omezení
   END IF;
 
   IF TG_OP = 'INSERT' THEN
-    NEW.created_at        := now();
+    -- Zástupce i člen zakládají jen čistě klubovou rezervaci. Od klienta se přebírá
+    -- pouze dráha, subjekt, čas a poznámka — všechno ostatní se tady přepisuje.
+    -- (Kdo sem bude přidávat sloupec, musí ho v tomhle výčtu ošetřit; úpravy hlídá
+    -- whitelist v UPDATE větvi níž.)
+    NEW.created_at        := now();   -- rezervaci nelze zpětně datovat
     NEW.updated_at        := now();
     NEW.created_by        := auth.uid();
     NEW.status            := 'confirmed';
     NEW.deleted_at        := NULL;
     NEW.event_id          := NULL;
-    NEW.rate_per_hour     := NULL;
+    NEW.rate_per_hour     := NULL;   -- sazbu dopočítá pricing z ceníku
     NEW.corrected_hours   := NULL;
     NEW.corrected_amount  := NULL;
     NEW.correction_reason := NULL;
     NEW.cancelled_at      := NULL;
     NEW.cancelled_by      := NULL;
     NEW.cancel_reason     := NULL;
-    NEW.series_id         := NULL;
-    NEW.invoice_id        := NULL;   -- ← doplněno v B1+B2
-    NEW.invoiced_at       := NULL;   -- ←
+    NEW.series_id         := NULL;   -- sérii zakládá jen create_booking_series (hlídá si subjekt)
+    -- ← doplněno v B1+B2. Bez toho si ne-admin nastavil fakturační zámek sám
+    --   a jeho rezervace navždy vypadla z fakturačního běhu.
+    NEW.invoice_id        := NULL;
+    NEW.invoiced_at       := NULL;
+    -- Zástupce klubu rezervuje rovnou platně, člen čeká na potvrzení zástupcem.
     IF public.is_subject_rep(NEW.subject_id) THEN
       NEW.approved_at := now();
       NEW.approved_by := auth.uid();
@@ -416,25 +435,74 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  -- UPDATE: přístup k řádku hlídá RLS (rep = celý klub, člen = jen created_by = self).
   IF NOT public.is_subject_member(OLD.subject_id) THEN
     RAISE EXCEPTION 'Nemáte právo měnit tuto rezervaci';
   END IF;
 
+  -- Které sloupce se vlastně mění
   SELECT array_agg(n.key) INTO _changed
     FROM jsonb_each(to_jsonb(NEW)) n
     JOIN jsonb_each(to_jsonb(OLD)) o ON o.key = n.key
    WHERE n.value IS DISTINCT FROM o.value;
+  _changed := COALESCE(_changed, '{}');
 
-  SELECT c INTO _forbidden FROM unnest(COALESCE(_changed, ARRAY[]::text[])) c
-   WHERE c <> ALL (_allowed) LIMIT 1;
+  -- Čas a dráha jdou měnit VÝHRADNĚ přes public.move_booking. Přímý zápis by minul
+  -- kontrolu kolizí, pravidlo „akce na dvou drahách se posouvá celá" i srovnání času
+  -- navázané akce — a směny brigádníků by pak ukazovaly na jiný den.
+  IF _changed && ARRAY['sheet_id', 'start_at', 'end_at'] THEN
+    RAISE EXCEPTION 'Čas a dráhu měňte přesunem rezervace, ne přímým zápisem';
+  END IF;
 
+  -- Cokoli mimo whitelist (sazba, subjekt, autor, korekce, vazby, soft-delete…)
+  SELECT c INTO _forbidden FROM unnest(_changed) c WHERE c <> ALL (_allowed) LIMIT 1;
   IF _forbidden IS NOT NULL THEN
     RAISE EXCEPTION 'Pole „%" smí měnit jen správce', _forbidden;
   END IF;
 
+  -- --- potvrzení rezervace ---------------------------------------------------
+  IF (_changed && ARRAY['approved_at', 'approved_by'])
+     AND NOT public.is_subject_rep(OLD.subject_id) THEN
+    RAISE EXCEPTION 'Rezervaci může potvrdit jen zástupce klubu';
+  END IF;
+  IF NEW.approved_by IS DISTINCT FROM OLD.approved_by
+     AND NEW.approved_by IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'Autora potvrzení nelze podvrhnout';   -- ani jménem někoho jiného
+  END IF;
+  IF NEW.approved_at IS DISTINCT FROM OLD.approved_at THEN
+    IF NEW.approved_at IS NULL THEN
+      RAISE EXCEPTION 'Potvrzení může odebrat jen správce';  -- vynulováním by zmizela stopa
+    END IF;
+    NEW.approved_at := now();                                -- a nelze ho zpětně datovat
+  END IF;
+
+  -- --- storno ----------------------------------------------------------------
+  IF NEW.cancelled_by IS DISTINCT FROM OLD.cancelled_by
+     AND NEW.cancelled_by IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'Autora storna nelze podvrhnout';
+  END IF;
+  IF NEW.cancelled_at IS DISTINCT FROM OLD.cancelled_at THEN
+    IF NEW.cancelled_at IS NULL THEN
+      RAISE EXCEPTION 'Razítko storna nelze smazat';
+    END IF;
+    NEW.cancelled_at := now();
+  END IF;
+  -- Důvod storna patří tomu, kdo rušil — jinak by si klub přepsal „přebito komerční akcí"
+  -- na vlastní verzi příběhu.
+  IF NEW.cancel_reason IS DISTINCT FROM OLD.cancel_reason
+     AND OLD.cancelled_by IS NOT NULL
+     AND OLD.cancelled_by IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'Důvod storna smí měnit jen ten, kdo rezervaci zrušil';
+  END IF;
+  -- Storno je jednosměrné: „od-stornovat" (a nechat u toho staré razítko, kdo rušil)
+  -- smí jen správce. Ne-admin ať založí novou rezervaci.
+  IF OLD.status = 'cancelled' AND NEW.status = 'confirmed' THEN
+    RAISE EXCEPTION 'Stornovanou rezervaci může obnovit jen správce — založte novou.';
+  END IF;
+
   RETURN NEW;
 END;
-$guard$;
+$$;
 
 -- -----------------------------------------------------------------------------
 -- 6) Immutabilita vystaveného dokladu (rozhodnutí R8)
