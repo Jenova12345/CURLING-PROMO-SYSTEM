@@ -352,6 +352,309 @@ export type Database = {
         }
         Relationships: []
       }
+      invoice_counter: {
+        Row: {
+          posledni: number
+          rada: string
+          rok: number
+        }
+        Insert: {
+          posledni?: number
+          rada: string
+          rok: number
+        }
+        Update: {
+          posledni?: number
+          rada?: string
+          rok?: number
+        }
+        Relationships: []
+      }
+      invoice_items: {
+        Row: {
+          cas_do: string | null
+          cas_od: string | null
+          created_at: string
+          datum: string | null
+          hodiny: number
+          id: string
+          invoice_id: string
+          line_total: number
+          popis: string
+          poradi: number
+          reservation_id: string | null
+          sazba: number
+          vat_amount: number | null
+          vat_base: number | null
+          vat_rate: number | null
+        }
+        Insert: {
+          cas_do?: string | null
+          cas_od?: string | null
+          created_at?: string
+          datum?: string | null
+          hodiny: number
+          id?: string
+          invoice_id: string
+          line_total: number
+          popis: string
+          poradi?: number
+          reservation_id?: string | null
+          sazba: number
+          vat_amount?: number | null
+          vat_base?: number | null
+          vat_rate?: number | null
+        }
+        Update: {
+          cas_do?: string | null
+          cas_od?: string | null
+          created_at?: string
+          datum?: string | null
+          hodiny?: number
+          id?: string
+          invoice_id?: string
+          line_total?: number
+          popis?: string
+          poradi?: number
+          reservation_id?: string | null
+          sazba?: number
+          vat_amount?: number | null
+          vat_base?: number | null
+          vat_rate?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "invoice_items_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoice_items_reservation_id_fkey"
+            columns: ["reservation_id"]
+            isOneToOne: false
+            referencedRelation: "reservations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoice_items_reservation_id_fkey"
+            columns: ["reservation_id"]
+            isOneToOne: false
+            referencedRelation: "reservations_billing"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoice_items_reservation_id_fkey"
+            columns: ["reservation_id"]
+            isOneToOne: false
+            referencedRelation: "reservations_calendar"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      invoices: {
+        Row: {
+          cislo: string | null
+          created_at: string
+          created_by: string | null
+          datum_splatnosti: string | null
+          datum_vystaveni: string | null
+          dodavatel_adresa: string | null
+          dodavatel_dic: string | null
+          dodavatel_iban: string | null
+          dodavatel_ico: string | null
+          dodavatel_nazev: string | null
+          dodavatel_rejstrik: string | null
+          dodavatel_ucet: string | null
+          dodavatel_zprava: string | null
+          event_id: string | null
+          id: string
+          issued_at: string | null
+          issued_by: string | null
+          kind: Database["public"]["Enums"]["invoice_kind"]
+          obdobi_do: string
+          obdobi_od: string
+          odberatel_adresa: string | null
+          odberatel_dic: string | null
+          odberatel_ico: string | null
+          odberatel_nazev: string | null
+          pdf_path: string | null
+          pdf_sha256: string | null
+          rounding_amount: number
+          status: Database["public"]["Enums"]["invoice_status"]
+          subject_id: string
+          subtotal: number
+          total: number
+          total_rounded: number
+          updated_at: string
+          updated_by: string | null
+          variabilni_symbol: string | null
+          vat_mode: Database["public"]["Enums"]["vat_mode"]
+        }
+        Insert: {
+          cislo?: string | null
+          created_at?: string
+          created_by?: string | null
+          datum_splatnosti?: string | null
+          datum_vystaveni?: string | null
+          dodavatel_adresa?: string | null
+          dodavatel_dic?: string | null
+          dodavatel_iban?: string | null
+          dodavatel_ico?: string | null
+          dodavatel_nazev?: string | null
+          dodavatel_rejstrik?: string | null
+          dodavatel_ucet?: string | null
+          dodavatel_zprava?: string | null
+          event_id?: string | null
+          id?: string
+          issued_at?: string | null
+          issued_by?: string | null
+          kind: Database["public"]["Enums"]["invoice_kind"]
+          obdobi_do: string
+          obdobi_od: string
+          odberatel_adresa?: string | null
+          odberatel_dic?: string | null
+          odberatel_ico?: string | null
+          odberatel_nazev?: string | null
+          pdf_path?: string | null
+          pdf_sha256?: string | null
+          rounding_amount?: number
+          status?: Database["public"]["Enums"]["invoice_status"]
+          subject_id: string
+          subtotal?: number
+          total?: number
+          total_rounded?: number
+          updated_at?: string
+          updated_by?: string | null
+          variabilni_symbol?: string | null
+          vat_mode?: Database["public"]["Enums"]["vat_mode"]
+        }
+        Update: {
+          cislo?: string | null
+          created_at?: string
+          created_by?: string | null
+          datum_splatnosti?: string | null
+          datum_vystaveni?: string | null
+          dodavatel_adresa?: string | null
+          dodavatel_dic?: string | null
+          dodavatel_iban?: string | null
+          dodavatel_ico?: string | null
+          dodavatel_nazev?: string | null
+          dodavatel_rejstrik?: string | null
+          dodavatel_ucet?: string | null
+          dodavatel_zprava?: string | null
+          event_id?: string | null
+          id?: string
+          issued_at?: string | null
+          issued_by?: string | null
+          kind?: Database["public"]["Enums"]["invoice_kind"]
+          obdobi_do?: string
+          obdobi_od?: string
+          odberatel_adresa?: string | null
+          odberatel_dic?: string | null
+          odberatel_ico?: string | null
+          odberatel_nazev?: string | null
+          pdf_path?: string | null
+          pdf_sha256?: string | null
+          rounding_amount?: number
+          status?: Database["public"]["Enums"]["invoice_status"]
+          subject_id?: string
+          subtotal?: number
+          total?: number
+          total_rounded?: number
+          updated_at?: string
+          updated_by?: string | null
+          variabilni_symbol?: string | null
+          vat_mode?: Database["public"]["Enums"]["vat_mode"]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "invoices_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "invoices_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "invoices_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "invoices_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_issued_by_fkey"
+            columns: ["issued_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "invoices_issued_by_fkey"
+            columns: ["issued_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "invoices_issued_by_fkey"
+            columns: ["issued_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "invoices_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects_rates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "invoices_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "invoices_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
       notifications: {
         Row: {
           body: string | null
@@ -593,6 +896,8 @@ export type Database = {
           event_id: string | null
           hours: number | null
           id: string
+          invoice_id: string | null
+          invoiced_at: string | null
           note: string | null
           rate_per_hour: number | null
           series_id: string | null
@@ -620,6 +925,8 @@ export type Database = {
           event_id?: string | null
           hours?: number | null
           id?: string
+          invoice_id?: string | null
+          invoiced_at?: string | null
           note?: string | null
           rate_per_hour?: number | null
           series_id?: string | null
@@ -647,6 +954,8 @@ export type Database = {
           event_id?: string | null
           hours?: number | null
           id?: string
+          invoice_id?: string | null
+          invoiced_at?: string | null
           note?: string | null
           rate_per_hour?: number | null
           series_id?: string | null
@@ -726,6 +1035,13 @@ export type Database = {
             columns: ["event_id"]
             isOneToOne: false
             referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reservations_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
             referencedColumns: ["id"]
           },
           {
@@ -1189,7 +1505,7 @@ export type Database = {
           created_at?: string | null
           full_name?: string | null
           id?: string | null
-          phone?: string | null
+          phone?: never
           updated_at?: string | null
           user_id?: string | null
         }
@@ -1198,7 +1514,7 @@ export type Database = {
           created_at?: string | null
           full_name?: string | null
           id?: string | null
-          phone?: string | null
+          phone?: never
           updated_at?: string | null
           user_id?: string | null
         }
@@ -1210,8 +1526,8 @@ export type Database = {
           created_at: string | null
           full_name: string | null
           id: string | null
-          je_muj: boolean | null
           phone: string | null
+          smim_videt_udaje: boolean | null
           updated_at: string | null
           user_id: string | null
         }
@@ -1220,8 +1536,8 @@ export type Database = {
           created_at?: string | null
           full_name?: string | null
           id?: string | null
-          je_muj?: never
           phone?: never
+          smim_videt_udaje?: never
           updated_at?: string | null
           user_id?: string | null
         }
@@ -1230,8 +1546,8 @@ export type Database = {
           created_at?: string | null
           full_name?: string | null
           id?: string | null
-          je_muj?: never
           phone?: never
+          smim_videt_udaje?: never
           updated_at?: string | null
           user_id?: string | null
         }
@@ -1590,6 +1906,10 @@ export type Database = {
         }
         Returns: Json
       }
+      next_invoice_number: {
+        Args: { _rada: string; _rok: number }
+        Returns: string
+      }
       notify_user: {
         Args: {
           _body: string
@@ -1607,6 +1927,10 @@ export type Database = {
           _event_type: Database["public"]["Enums"]["event_type"]
           _subject_type: Database["public"]["Enums"]["subject_type"]
         }
+        Returns: number
+      }
+      set_invoice_counter: {
+        Args: { _hodnota: number; _rada: string; _rok: number }
         Returns: number
       }
       update_booking: {
@@ -1635,6 +1959,8 @@ export type Database = {
         | "maintenance"
         | "recruitment"
         | "tournament"
+      invoice_kind: "klub" | "komercni"
+      invoice_status: "koncept" | "vystaveno" | "zaplaceno" | "stornovano"
       reservation_status: "confirmed" | "cancelled"
       shift_status: "open" | "pending" | "claimed" | "completed" | "cancelled"
       subject_rep_level: "rep" | "member"
@@ -1787,6 +2113,8 @@ export const Constants = {
         "recruitment",
         "tournament",
       ],
+      invoice_kind: ["klub", "komercni"],
+      invoice_status: ["koncept", "vystaveno", "zaplaceno", "stornovano"],
       reservation_status: ["confirmed", "cancelled"],
       shift_status: ["open", "pending", "claimed", "completed", "cancelled"],
       subject_rep_level: ["rep", "member"],
