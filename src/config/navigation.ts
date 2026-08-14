@@ -60,7 +60,7 @@ export const NAV_ITEMS: NavItem[] = [
   },
   {
     path: '/dues',
-    label: 'Kdo dluží',
+    label: 'Přehled fakturace',
     icon: Coins,
     roles: ['admin']
   },

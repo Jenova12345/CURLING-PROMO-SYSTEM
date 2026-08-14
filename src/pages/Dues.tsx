@@ -17,6 +17,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { openInvoiceDraft } from '@/lib/invoiceDraft';
 import { fmtHodin as fmtH, fmtKc } from '@/lib/money';
 import { useInvoices } from '@/hooks/useInvoices';
+import { useBillingSettings } from '@/hooks/useBillingSettings';
 import { supabase } from '@/integrations/supabase/client';
 import { denZDb } from '@/lib/datum';
 
@@ -34,6 +35,13 @@ const Dues = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
   const { createClubDraft, createCommercialDraft, isBusy } = useInvoices();
+  // Podklad tiskne údaje haly z nastavení, ne z `BRAND` (riziko 5 v plánu):
+  // doklad má ukazovat, co je nastavené, ne co je zadrátované ve frontendu.
+  const {
+    settings: fakturacniUdaje,
+    isLoading: nacitamUdaje,
+    error: chybaUdaju,
+  } = useBillingSettings();
   const [akce, setAkce] = useState<{ subjectId: string; name: string; polozky: NevyfakturovanaAkce[] } | null>(null);
   const [nacitamAkce, setNacitamAkce] = useState<string | null>(null);
   const [view, setView] = useState<View>('month');
@@ -50,6 +58,18 @@ const Dues = () => {
   // Podklad k fakturaci pro jeden subjekt za zobrazené období — otevře se
   // v novém okně jako tisknutelná stránka („Uložit jako PDF"). Nic se neukládá.
   const vystavFakturu = (subjectId: string, subjectName: string) => {
+    // Bez tohohle se nevyplněné nastavení nedá odlišit od nenačteného: hook vrací
+    // `null` v obou případech, takže by podklad při výpadku sítě tiše spadl na
+    // DEMO účet a na dokladu by svítilo „v nastavení nic není" — což by nebyla
+    // pravda a admin by to hledal na špatném místě.
+    if (chybaUdaju) {
+      toast({
+        title: 'Fakturační údaje se nenačetly',
+        description: 'Podklad by vyšel s vymyšleným účtem. Zkus to prosím znovu.',
+        variant: 'destructive',
+      });
+      return;
+    }
     const radky = reservations.filter((r) => r.subject_id === subjectId);
     if (!radky.length) {
       toast({ title: 'Není co fakturovat', description: `${subjectName} nemá v tomto období žádnou rezervaci.` });
@@ -84,6 +104,7 @@ const Dues = () => {
       }),
       periodFrom: new Date(range.from),
       periodTo: addDays(new Date(range.to), -1),
+      billing: fakturacniUdaje,
     });
     if (!otevreno) {
       toast({
@@ -175,7 +196,7 @@ const Dues = () => {
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-6">
       <div>
-        <h1 className="text-2xl md:text-3xl font-bold flex items-center gap-2"><Wallet className="h-6 w-6" /> Kdo kolik dluží</h1>
+        <h1 className="text-2xl md:text-3xl font-bold flex items-center gap-2"><Wallet className="h-6 w-6" /> Přehled fakturace</h1>
         <p className="text-muted-foreground mt-1 text-sm md:text-base">Podklady k úhradě podle rezervovaných hodin. Interní (tréninky/údržba) se nepočítají.</p>
       </div>
 
@@ -232,7 +253,7 @@ const Dues = () => {
                             jakékoli období a nic v databázi nevytvoří, takže se hodí
                             na rychlou kontrolu i tam, kde fakturu vystavovat nechceme. */}
                         <Button
-                          variant="outline" size="sm"
+                          variant="outline" size="sm" disabled={nacitamUdaje}
                           aria-label={`Podklad k fakturaci — ${r.name}`}
                           onClick={() => vystavFakturu(r.subjectId, r.name)}
                         >

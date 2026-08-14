@@ -149,7 +149,7 @@ const Invoices = () => {
             <div className="flex items-center gap-2 rounded-md border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900">
               <Check className="h-4 w-4 shrink-0" aria-hidden="true" />
               <span>
-                Sedí to. Suma vystavených faktur odpovídá tomu, co ukazuje „Kdo dluží",
+                Sedí to. Suma vystavených faktur odpovídá tomu, co ukazuje „Přehled fakturace",
                 u všech {soucet.length} subjektů.
               </span>
             </div>
@@ -213,7 +213,8 @@ const Invoices = () => {
             </div>
           ) : invoices.length === 0 ? (
             <div className="text-muted-foreground text-sm">
-              Zatím tu není žádná faktura. Vygeneruj ji v „Kdo dluží" tlačítkem u subjektu.
+              Zatím tu není žádná faktura. Vygeneruj ji tlačítkem u subjektu
+              v „Přehledu fakturace" — tam jsou nevyfakturované hodiny.
             </div>
           ) : (
             <Table>
