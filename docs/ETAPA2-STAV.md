@@ -261,6 +261,14 @@ Věci, které se v týhle codebase tvářily jinak, než jsou:
   Týmž způsobem se ukázalo, že pohled `billing_health` si jako pohled nepřečetl
   ani admin — pod `postgres` byl zelený.
 
+- **Kontrola IBANu se v SQL a v JS liší u cizích účtů.** `overIban`
+  (`src/lib/iban.ts`) má tabulku délek podle země, `public.iban_je_platny` ne —
+  takže `SK401200000019874263` (správný mod-97, špatná délka) databáze uloží
+  a frontend ho odmítne použít pro QR. Není to tiché: doklad napíše, že QR
+  nevzniklo a proč. Rozdíl je přišpendlený v `supabase/tests/billing_settings_test.sql`
+  (sekce 6c). Až se bude srovnávat, patří to do NOVÉ migrace — ne do přepsání
+  `20260812180000`.
+
 - **`current_date` v databázi je UTC**, ne pražský. Projeví se to jednou za rok:
   1. ledna v 00:30 pražského času dostane doklad loňský rok v čísle. Fakturační
   kód proto počítá `(now() AT TIME ZONE 'Europe/Prague')::date`.

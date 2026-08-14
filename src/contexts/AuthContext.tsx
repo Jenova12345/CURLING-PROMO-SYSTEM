@@ -189,17 +189,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signOut = async () => {
     await supabase.auth.signOut();
-    // Vyprázdnit i cache dotazů. Bez toho zůstane `billing-settings` s IBANem
-    // a IČEM v paměti ještě několik minut po odhlášení: uživatelské id je sice
-    // součástí klíče, takže se to dalšímu uživateli NEZOBRAZÍ, ale data by
-    // přežila přihlašovací údaj, který je autorizoval. Komentář v
-    // `useBillingSettings` sliboval víc, než uid v klíči umí — tohle to dorovnává.
-    qc.clear();
+    // POŘADÍ JE ZÁMĚRNÉ: nejdřív se srovná stav, teprve pak se sahá na cache.
+    // `qc.clear()` je jediný cizí kód mezi odhlášením a resetem — kdyby vyhodil
+    // dřív, zůstal by uživatel v UI přihlášený nad mrtvou session a odhlásit by
+    // se už nedokázal, protože ta cesta padá na témže řádku.
     setUser(null);
     setSession(null);
     setProfile(null);
     setRole(null);
     setRoles([]);
+    try {
+      // Vyprázdnit i cache dotazů: `billing-settings` s IBANem a IČEM by jinak
+      // zůstalo v paměti ještě několik minut po odhlášení. Dalšímu uživateli se
+      // nezobrazí (uid je součástí klíče), ale data by přežila přihlašovací údaj,
+      // který je autorizoval. Dotazy jsou v tu chvíli už vypnuté (`enabled`
+      // závisí na `user`), takže se tím nic znovu nenačte.
+      qc.clear();
+    } catch {
+      /* odhlášení je důležitější než úklid cache — ta zmizí nejpozději s reloadem */
+    }
   };
 
   const hasAnyRole = useCallback((allowedRoles: string[]): boolean => {

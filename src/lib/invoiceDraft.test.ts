@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { overModulo11 } from './iban';
+import { overModulo11, parseCeskyUcet } from './iban';
 import { DEMO_IBAN, DEMO_UCET, sestavPodklad, type InvoiceDraft } from './invoiceDraft';
 
 // Podklad je to, co klient vidí jako první „fakturu". Testuje se hlavně to, co
@@ -137,7 +137,11 @@ describe('podklad — QR platba', () => {
     expect(BigInt(prevedeno) % 97n).toBe(1n);
     // Ruční opsání DEMO účtu banka odmítne — kontrola mod-11 ČNB ho nepustí.
     // Nezaměnitelnost tedy nestojí jen na varováních na stránce.
-    expect(overModulo11({ predcisli: '', cislo: '0000000000', kodBanky: '0800' }).ok).toBe(false);
+    // Odvozené z `DEMO_UCET`, ne opsané: jinak by test po změně konstanty dál
+    // zeleně tvrdil něco o starém čísle.
+    const rozlozeny = parseCeskyUcet(DEMO_UCET).ucet;
+    expect(rozlozeny).not.toBeNull();
+    expect(overModulo11(rozlozeny!).ok).toBe(false);
   });
 
   it('neplatný IBAN z nastavení QR nevykreslí, místo aby mířilo neznámo kam', () => {
@@ -147,6 +151,9 @@ describe('podklad — QR platba', () => {
       const html = sestavPodklad(podklad({ ...UDAJE, bank_iban: spatny }));
       expect(html).not.toContain('<svg');
       expect(html).toContain('Platební údaje');
+      // A ŘEKNE TO. Prázdné místo po QR je k nerozeznání od „QR tu nikdy nebylo",
+      // takže by admin neměl jak zjistit, že má v nastavení překlep.
+      expect(html).toContain('neprošel kontrolním součtem');
     }
   });
 

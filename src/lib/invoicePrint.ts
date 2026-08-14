@@ -93,6 +93,7 @@ function buildHtml(invoice: Invoice, items: InvoiceItem[]): string {
   //
   // Do QR jde `total_rounded`: zákazník platí zaokrouhlenou částku, ne přesný součet.
   let qr = '';
+  let qrChyba = '';
   if (invoice.dodavatel_iban) {
     try {
       qr = spaydQrSvg({
@@ -104,7 +105,12 @@ function buildHtml(invoice: Invoice, items: InvoiceItem[]): string {
         message: invoice.dodavatel_zprava,
       });
     } catch {
+      // Ticho by tady bylo horší než na podkladu: `invoices.dodavatel_iban` je
+      // snapshot bez CHECKu, takže vadná hodnota se do vystaveného (a tedy
+      // neměnného) dokladu dostat může — a chybějící QR by vypadalo jako záměr.
       qr = '';
+      qrChyba = 'QR platba se nevykreslila: IBAN na dokladu neprošel kontrolním součtem. '
+        + 'Zaplať podle čísla účtu a variabilního symbolu výš.';
     }
   }
 
@@ -143,6 +149,7 @@ function buildHtml(invoice: Invoice, items: InvoiceItem[]): string {
   .qr { text-align: center; }
   .qr svg { width: 30mm; height: 30mm; display: block; }
   .qr-popis { font-size: 10px; color: #64748b; margin-top: 2px; }
+  .qr-chyba { margin-top: 8px; padding: 6px 8px; border: 1px solid #b45309; border-radius: 4px; color: #b45309; font-weight: 600; }
   .platba h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #64748b; margin: 0 0 6px; }
   .dolozka { margin-top: 16px; font-weight: 600; }
   .patka { margin-top: 20px; color: #64748b; font-size: 11px; }
@@ -211,6 +218,7 @@ function buildHtml(invoice: Invoice, items: InvoiceItem[]): string {
       ${invoice.dodavatel_iban ? `<div>IBAN: <b>${esc(invoice.dodavatel_iban)}</b></div>` : ''}
       <div>Variabilní symbol: <b>${esc(invoice.variabilni_symbol ?? '—')}</b></div>
       ${invoice.dodavatel_zprava ? `<div>Zpráva pro příjemce: ${esc(invoice.dodavatel_zprava)}</div>` : ''}
+      ${qrChyba ? `<div class="qr-chyba">${esc(qrChyba)}</div>` : ''}
     </div>
     ${qr ? `<div class="qr">${qr}<div class="qr-popis">QR Platba</div></div>` : ''}
   </div>

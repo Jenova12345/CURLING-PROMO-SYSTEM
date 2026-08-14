@@ -64,6 +64,13 @@ export function buildSpayd(p: SpaydPlatba): string {
   if (!/^[A-Z]{2}\d{2}[A-Z0-9]{10,30}$/.test(iban)) {
     throw new Error('QR platbu nelze sestavit: IBAN nemá platný tvar.');
   }
+  // POŘADÍ TĚCHHLE DVOU KONTROL JE NOSNÉ: `normalizeIban` strhává jen `\s`,
+  // kdežto `overIban` si navíc poradí s celou rodinou neviditelných znaků
+  // (nulová mezera, měkký spojovník, BOM…). Je tedy SHOVÍVAVĚJŠÍ než normalizace
+  // před ním — a to je přesně tvar chyby, kdy se ověří vyčištěný řetězec a do QR
+  // jde špinavý. Drží to jen tím, že kontrola tvaru běží PRVNÍ a neviditelný znak
+  // do `[A-Z0-9]` nespadne. Kdo `overIban` posune nad regex, díru otevře.
+  //
   // TVAR NESTAČÍ — a je to přesně riziko 4 z plánu („špatný IBAN → QR posílá
   // peníze jinam, zjistí se po týdnech"). Skutečný IBAN s JEDNOU přepsanou
   // číslicí má správný tvar a projde regexem; zachytí ho až kontrolní součet

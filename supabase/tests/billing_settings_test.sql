@@ -450,6 +450,36 @@ BEGIN
   PERFORM pg_temp.tvrd(public.iban_je_platny(NULL), 'prázdný IBAN projde (pole je nepovinné)');
 END $$;
 
+-- -----------------------------------------------------------------------------
+-- 6c) ZNÁMÝ ROZDÍL SQL vs JS — cizí IBAN se správným součtem, ale špatnou délkou
+--
+-- Nadpis 6b říká „musí dávat TOTÉŽ", jenže mezi jeho případy žádný takový nebyl,
+-- takže to tvrzení nic nehlídalo. Rozdíl je skutečný a vypadá takhle:
+--
+--   SK401200000019874263   SQL = true    overIban (JS) = false
+--   DE863704004405320130   SQL = true    overIban (JS) = false
+--
+-- Mod-97 sedí, ale délka pro danou zemi ne. `overIban` má tabulku délek
+-- (`DELKY_IBANU` v src/lib/iban.ts), `iban_je_platny` ji nemá.
+--
+-- CO TO ZNAMENÁ V PROVOZU: databáze takový IBAN uloží a frontend ho pak odmítne
+-- použít pro QR platbu. Není to tichý rozpor — doklad od 14. 8. 2026 napíše,
+-- že QR nevzniklo a proč. Halu to potká jen u zahraničního účtu, proto se to
+-- neřeší migrací hned; až se bude, patří to do NOVÉ migrace, ne do přepsání
+-- 20260812180000.
+--
+-- Test rozdíl PŘIŠPENDLÍ, aby se nezměnil nepozorovaně ani jedním směrem.
+-- -----------------------------------------------------------------------------
+DO $$
+BEGIN
+  PERFORM pg_temp.tvrd(public.iban_je_platny('SK401200000019874263'),
+    'SQL zatím pouští cizí IBAN se správným součtem a špatnou délkou (JS ne)');
+  PERFORM pg_temp.tvrd(public.iban_je_platny('DE863704004405320130'),
+    'totéž pro německý tvar — rozdíl je v tabulce délek, ne v mod-97');
+  PERFORM pg_temp.tvrd(NOT public.iban_je_platny('CZ340800000019200014539'),
+    'u ČESKÝCH IBANů je délka ohlídaná na obou stranách');
+END $$;
+
 DO $$ BEGIN RAISE NOTICE '=== VŠECHNY TESTY PROŠLY ==='; END $$;
 
 ROLLBACK;

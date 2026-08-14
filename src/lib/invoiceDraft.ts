@@ -168,6 +168,7 @@ export function sestavPodklad({ subject, rows, periodFrom, periodTo, billing }: 
   const jeDemoUcet = nicNeniVyplneno;
 
   let qr = '';
+  let qrChyba = '';
   if (iban) {
     try {
       qr = spaydQrSvg({
@@ -185,7 +186,13 @@ export function sestavPodklad({ subject, rows, periodFrom, periodTo, billing }: 
       });
     } catch {
       // Neplatný IBAN z nastavení — radši bez QR než QR mířící neznámo kam.
+      // MLČET SE ALE NESMÍ: prázdné místo po QR je k nerozeznání od „QR tu
+      // nikdy nebylo", takže by admin neměl jak zjistit, že má v nastavení
+      // překlep. Databáze IBAN sice hlídá CHECKem, ale ten je shovívavější než
+      // `overIban` (nekontroluje délku podle země), takže se sem hodnota dostat MŮŽE.
       qr = '';
+      qrChyba = 'QR platba se nevykreslila: IBAN v nastavení neprošel kontrolním součtem. '
+        + 'Zkontroluj ho v Nastavení → Fakturace — nejspíš je v něm překlep.';
     }
   }
 
@@ -351,6 +358,7 @@ export function sestavPodklad({ subject, rows, periodFrom, periodTo, billing }: 
           QR platba se nevykreslila: v nastavení chybí IBAN. Doplň ho
           v Nastavení → Fakturace (dopočet z čísla účtu tam potvrdíš).
         </div>` : ''}
+        ${qrChyba ? `<div class="demo-ucet">${esc(qrChyba)}</div>` : ''}
       </div>
       ${qr ? `<div class="qr">${qr}<div class="qr-popis">QR${jeDemoUcet ? ' (DEMO)' : ''} — jen náhled</div></div>` : ''}
     </div>
