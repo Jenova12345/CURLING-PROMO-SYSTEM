@@ -615,7 +615,15 @@ END $$;
 -- že ho whitelist guardu výslovně pouští — a přesně tuhle past si B1+B2 samo
 -- předpovědělo („až přijde evidence plateb, musí se `_povolene` rozšířit ZÁROVEŇ
 -- s ADD COLUMN, jinak nepůjde zaplatit").
+--
+-- BĚŽÍ POD `authenticated`, A JE TO NOSNÉ. Jako `postgres` projdou granty i RLS,
+-- takže by tenhle blok svítil zeleně, i kdyby `GRANT EXECUTE … TO authenticated`
+-- na obou RPC chyběl — a funkce by přitom byla pro každého skutečného uživatele
+-- mrtvá. Je to pravidlo 8 z CLAUDE.md a poprvé jsem si ho tady sám porušil:
+-- původní verze tohohle bloku běžela pod superuživatelem a netvrdila o právech nic.
 -- -----------------------------------------------------------------------------
+SET LOCAL ROLE authenticated;
+SET LOCAL request.jwt.claims = '{"sub":"11111111-1111-1111-1111-111111111111"}';
 DO $$
 DECLARE _inv uuid; _f record; _r jsonb; _dnes date := (now() AT TIME ZONE 'Europe/Prague')::date;
 BEGIN
@@ -625,6 +633,13 @@ BEGIN
   SELECT * INTO _f FROM public.invoices WHERE id = _inv;
   PERFORM pg_temp.tvrd(_f.status = 'vystaveno' AND _f.datum_uhrady IS NULL,
     'vystavená faktura je nezaplacená a bez data úhrady');
+
+  -- Kdyby chyběl GRANT, spadne to tady na „permission denied for function" —
+  -- a přesně to je ta věta, kterou test pod `postgres` říct neuměl.
+  PERFORM pg_temp.tvrd(
+    has_function_privilege('authenticated', 'public.mark_invoice_paid(uuid, date)', 'EXECUTE')
+    AND has_function_privilege('authenticated', 'public.unmark_invoice_paid(uuid)', 'EXECUTE'),
+    'admin (role authenticated) má na obě RPC právo je zavolat');
 
   -- Datum v budoucnosti a datum před vystavením se nepustí.
   PERFORM pg_temp.ocekavej_chybu(
@@ -671,6 +686,12 @@ BEGIN
     'označená není', 'zrušit úhradu u nezaplacené faktury nejde');
 END $$;
 
+RESET ROLE;
+
+-- Od téhle chvíle zas `postgres`: následující bloky sahají na `invoices` přímým
+-- zápisem, což `authenticated` (správně) nesmí — R8, druhá vrstva. Tvrzení o
+-- právech má blok výš a sekce 9, tohle jsou tvrzení o CHECKech a o guardu.
+--
 -- Koncept a stornovaný doklad se neplatí.
 DO $$
 DECLARE _sub uuid; _koncept uuid; _inv uuid;
@@ -698,6 +719,13 @@ BEGIN
   PERFORM pg_temp.ocekavej_chybu(
     format('UPDATE public.invoices SET datum_uhrady = current_date WHERE id = %L', _inv),
     'invoices_uhrada_dle_stavu', 'datum úhrady bez stavu „zaplaceno" CHECK nepustí');
+
+  -- Razítko „kdo zaplatil" se nesmí dát vyrobit u nezaplaceného dokladu ani
+  -- odsud. Auditní údaj, který si jde vymyslet bez odporu, není auditní údaj.
+  PERFORM pg_temp.ocekavej_chybu(
+    format('UPDATE public.invoices SET paid_at = now(), paid_by = %L WHERE id = %L',
+           '55555555-5555-5555-5555-555555555555', _inv),
+    'invoices_uhrada_razitko', 'razítko úhrady bez data úhrady CHECK nepustí');
 END $$;
 
 -- Stornovat ZAPLACENÝ doklad musí jít, a úhrada u něj musí zůstat zapsaná.

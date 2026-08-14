@@ -34,3 +34,17 @@ export function denZDb(hodnota: string | null | undefined): Date | null {
   const datum = new Date(hodnota);
   return Number.isNaN(datum.getTime()) ? null : datum;
 }
+
+/**
+ * Dnešek v PRAŽSKÉM dni, ve tvaru pro `<input type="date">` (RRRR-MM-DD).
+ *
+ * Ne `new Date()` v prohlížeči: databáze rozhoduje o „dnešku" podle Evropy/Praha
+ * (`mark_invoice_paid`), takže admin v pásmu napřed by dostal předvyplněné
+ * „zítra" a server by mu ho odmítl. Není to bezpečnostní vada — server rozhoduje
+ * správně — ale slepá ulička pro člověka, který zrovna není doma.
+ *
+ * `sv-SE` schválně: je to jediná běžná locale, která formátuje rovnou jako
+ * RRRR-MM-DD, tedy přesně to, co `<input type="date">` chce.
+ */
+export const dnesPrahaProInput = (): string =>
+  new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Prague' }).format(new Date());

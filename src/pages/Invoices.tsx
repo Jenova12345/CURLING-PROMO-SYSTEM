@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/contexts/AuthContext';
-import { denZDb } from '@/lib/datum';
+import { denZDb, dnesPrahaProInput } from '@/lib/datum';
 import { useToast } from '@/components/ui/use-toast';
 import { useBillingReconcile, useInvoiceDetail, useInvoices } from '@/hooks/useInvoices';
 import { openInvoicePrint } from '@/lib/invoicePrint';
@@ -51,11 +51,7 @@ const StavBadge = ({ stav, poSplatnosti }: { stav: string; poSplatnosti: boolean
   return <Badge className="border-amber-300 bg-amber-100 text-amber-900 hover:bg-amber-100">Nezaplaceno</Badge>;
 };
 
-/** Dnešek ve tvaru pro `<input type="date">` — v místním čase, ne v UTC. */
-const dnesProInput = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
+
 
 const Invoices = () => {
   const { isAdmin } = useAuth();
@@ -63,7 +59,7 @@ const Invoices = () => {
   const { invoices, isLoading, error, issue, deleteDraft, markPaid, unmarkPaid, isBusy } = useInvoices();
   const [detailId, setDetailId] = useState<string | null>(null);
   const [platba, setPlatba] = useState<{ id: string; popis: string } | null>(null);
-  const [datumUhrady, setDatumUhrady] = useState(dnesProInput);
+  const [datumUhrady, setDatumUhrady] = useState(dnesPrahaProInput);
   const { data: detail, isLoading: detailLoading } = useInvoiceDetail(detailId);
 
   // Kontrolní součet za měsíc. Vlastní období, ne to z „Kdo dluží": tady se
@@ -116,7 +112,7 @@ const Invoices = () => {
   };
 
   const otevriPlatbu = (id: string, popis: string) => {
-    setDatumUhrady(dnesProInput());   // vždy dnešek, ať se nezdědí datum z minulé faktury
+    setDatumUhrady(dnesPrahaProInput());   // vždy dnešek, ať se nezdědí datum z minulé faktury
     setPlatba({ id, popis });
   };
 
@@ -358,7 +354,7 @@ const Invoices = () => {
               id="datum-uhrady"
               type="date"
               value={datumUhrady}
-              max={dnesProInput()}
+              max={dnesPrahaProInput()}
               onChange={(e) => setDatumUhrady(e.target.value)}
             />
             <p className="text-xs text-muted-foreground">

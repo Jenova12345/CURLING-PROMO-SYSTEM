@@ -61,9 +61,18 @@ COMMENT ON COLUMN public.invoices.datum_uhrady IS
 -- Stav a datum se nesmí rozejít: „zaplaceno" bez data by nešlo doložit a datum
 -- u nezaplacené faktury je rozpor. Constrainty se přidávají idempotentně, protože
 -- `scripts/build-demo-sql.sh` pouští migrace opakovaně.
+-- `DROP … IF EXISTS` + `ADD`, ne `IF NOT EXISTS`: druhý tvar constraint se změněnou
+-- definicí TIŠE NECHÁ BÝT. Přesně to mě dneska potkalo — lokální databáze měla
+-- starou verzi bez výjimky pro storno, migrace ohlásila úspěch a testy padaly nad
+-- pravidlem, které tam nebylo. Takhle opakovaný běh konverguje k tomu, co je v souboru.
+ALTER TABLE public.invoices
+  DROP CONSTRAINT IF EXISTS invoices_uhrada_dle_stavu,
+  DROP CONSTRAINT IF EXISTS invoices_uhrada_ne_pred_vystavenim,
+  DROP CONSTRAINT IF EXISTS invoices_uhrada_razitko;
+
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'invoices_uhrada_dle_stavu') THEN
+  IF true THEN
     -- STORNO JE VÝJIMKA, A JE TO SPRÁVNĚ. Kdyby constraint žádal prázdné datum
     -- u všeho kromě `zaplaceno`, nešlo by stornovat doklad, který už byl
     -- zaplacený — a to je právě ten případ, kdy je storno potřeba (peníze přišly,
@@ -80,11 +89,21 @@ BEGIN
 
   -- Zaplatit dřív, než byl doklad vystavený, nejde. Chytá to překlep v roce,
   -- který by jinak prošel bez povšimnutí (2025 místo 2026).
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'invoices_uhrada_ne_pred_vystavenim') THEN
+  IF true THEN
     ALTER TABLE public.invoices
       ADD CONSTRAINT invoices_uhrada_ne_pred_vystavenim
       CHECK (datum_uhrady IS NULL OR datum_vystaveni IS NULL OR datum_uhrady >= datum_vystaveni);
   END IF;
+
+  -- Razítko „kdo a kdy zapsal" musí být tam, kde je datum úhrady, a nikde jinde.
+  -- Bez tohohle šlo pod databázovou rolí zapsat `paid_at`/`paid_by` na NEZAPLACENOU
+  -- fakturu a vyrobit tak stopu „zaplatil X" u dokladu, který zaplacený není.
+  -- Přes RPC to nešlo, ale auditní údaj, který si může kdokoli s přístupem do DB
+  -- vymyslet bez odporu, není auditní údaj.
+  ALTER TABLE public.invoices
+    ADD CONSTRAINT invoices_uhrada_razitko
+    CHECK ((paid_at IS NULL) = (datum_uhrady IS NULL)
+       AND (paid_by IS NULL) = (datum_uhrady IS NULL));
 END $$;
 
 CREATE INDEX IF NOT EXISTS idx_invoices_nezaplacene
@@ -232,7 +251,7 @@ EXCEPTION
             HINT = 'Přihlas se znovu, případně ať správce profil doplní.';
   -- R11: uvnitř SECURITY DEFINER neplatí RLS, takže by Postgres do chyby doplnil
   -- celý řádek faktury i se snapshotem dodavatele včetně IBANu.
-  WHEN check_violation OR not_null_violation THEN
+  WHEN check_violation OR unique_violation OR not_null_violation THEN
     RAISE EXCEPTION 'Úhradu se nepodařilo zapsat — datum neodpovídá pravidlům dokladu.'
       USING ERRCODE = '22023',
             HINT = 'Datum úhrady musí být mezi vystavením dokladu a dneškem.';
@@ -275,7 +294,17 @@ BEGIN
    WHERE id = _invoice_id;
 
 EXCEPTION
-  WHEN check_violation OR not_null_violation THEN
+  -- Symetricky s `mark_invoice_paid`: `set_updated_fields` zapisuje
+  -- `updated_by = auth.uid()` s cizím klíčem na `profiles`, takže admin bez
+  -- profilu narazí i tady. Bez vlastní větve by dostal syrové `23503`.
+  WHEN foreign_key_violation THEN
+    RAISE EXCEPTION 'Účet, který úhradu ruší, nemá profil v systému.'
+      USING ERRCODE = '22023',
+            HINT = 'Přihlas se znovu, případně ať správce profil doplní.';
+  -- `unique_violation` sem R11 jmenuje výslovně. Dnes nedosažitelné (nad těmihle
+  -- sloupci žádný unikátní index není), ale E2 přinese id platby z výpisu — a to
+  -- unikátní bude.
+  WHEN check_violation OR unique_violation OR not_null_violation THEN
     RAISE EXCEPTION 'Označení úhrady se nepodařilo zrušit.'
       USING ERRCODE = '22023';
 END;
@@ -287,9 +316,11 @@ GRANT EXECUTE ON FUNCTION public.unmark_invoice_paid(uuid) TO authenticated;
 -- -----------------------------------------------------------------------------
 -- 4) Pohled pro seznam — doplnit datum úhrady
 --
--- `po_splatnosti` zůstává odvozený stav (spec, bod 9) a nově se počítá JEN
--- u nezaplacených: zaplacená faktura po splatnosti už po splatnosti není,
--- byla zaplacena pozdě. To je rozdíl, který klient na obrazovce pozná.
+-- `po_splatnosti` zůstává odvozený stav (spec, bod 9) a počítá se JEN
+-- u nezaplacených — výraz je nezměněný, protože `status = 'vystaveno'` v něm
+-- stál od začátku. Nově je vidět DŮSLEDEK: dokud se stav `zaplaceno` nedal
+-- nastavit, byla ta podmínka jen tautologie. Zaplacená faktura po splatnosti
+-- už po splatnosti není, byla zaplacena pozdě.
 -- -----------------------------------------------------------------------------
 DROP VIEW IF EXISTS public.invoices_list;
 CREATE VIEW public.invoices_list WITH (security_invoker = on) AS

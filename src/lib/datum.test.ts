@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { denZDb } from './datum';
+import { denZDb, dnesPrahaProInput } from './datum';
 
 // Chyba o jeden den se na dokladu pozná těžko a v QR platbě vůbec — proto se
 // testuje tvar, který produkci skutečně přichází z PostgRESTu (holé `RRRR-MM-DD`),
@@ -41,5 +41,24 @@ describe('denZDb — datum z `date` sloupce', () => {
     expect(denZDb(undefined)).toBeNull();
     expect(denZDb('')).toBeNull();
     expect(denZDb('nedatum')).toBeNull();
+  });
+});
+
+describe('dnesPrahaProInput — dnešek pro `<input type="date">`', () => {
+  it('má tvar RRRR-MM-DD', () => {
+    expect(dnesPrahaProInput()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('drží se pražského dne, ne dne prohlížeče', () => {
+    // Server rozhoduje podle Evropy/Praha, takže admin v pásmu napřed by dostal
+    // předvyplněné „zítra" a RPC by ho odmítlo.
+    const praha = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Prague' }).format(new Date());
+    expect(dnesPrahaProInput()).toBe(praha);
+  });
+
+  it('vrací den, který jde rovnou přečíst zpátky', () => {
+    const d = denZDb(dnesPrahaProInput());
+    expect(d).not.toBeNull();
+    expect(d!.getHours()).toBe(0);
   });
 });
