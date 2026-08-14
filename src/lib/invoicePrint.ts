@@ -4,6 +4,7 @@ import { denZDb } from '@/lib/datum';
 import { esc } from '@/lib/invoiceDraft';
 import { fmtHodin, fmtKc, fmtSazba } from '@/lib/money';
 import { spaydQrSvg } from '@/lib/spayd';
+import { otevriTiskovouStranku } from '@/lib/tiskoveOkno';
 import type { Invoice, InvoiceItem } from '@/hooks/useInvoices';
 
 // Tisk VYSTAVENÉHO dokladu.
@@ -229,24 +230,7 @@ function buildHtml(invoice: Invoice, items: InvoiceItem[]): string {
  */
 export function openInvoicePrint(invoice: Invoice, items: InvoiceItem[]): boolean {
   // HTML se sestavuje PŘED otevřením okna: kdyby na rozbitém datu spadl format(),
-  // zůstalo by uživateli viset prázdné okno.
-  const html = buildHtml(invoice, items);
-
-  // Bez „noopener" schválně: s ním vrací window.open podle specifikace null.
-  // Obsah je náš a ve stejném originu.
-  const okno = window.open('', '_blank', 'width=900,height=1000');
-  if (!okno) return false;
-
-  okno.document.write(html);
-  okno.document.close();
-  okno.focus();
-
-  setTimeout(() => {
-    try {
-      if (!okno.closed) okno.print();
-    } catch {
-      /* zavřené okno nebo blokovaný tisk — doklad je vykreslený, vytiskne se ručně */
-    }
-  }, 250);
-  return true;
+  // zůstalo by uživateli viset prázdné okno. Zbytek řeší `tiskoveOkno.ts` —
+  // včetně toho, že se předchozí okno zavře a tisk spouští stránka sama.
+  return otevriTiskovouStranku(buildHtml(invoice, items));
 }

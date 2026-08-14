@@ -1,6 +1,7 @@
 import { format } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { BRAND } from '@/config/brand';
+import { otevriTiskovouStranku } from '@/lib/tiskoveOkno';
 import { fmtHodin, fmtKc, fmtSazba, roundCzk, roundingDiff, sumHodin, sumKc } from '@/lib/money';
 
 // Podklad k fakturaci ve formě tisknutelné stránky.
@@ -206,28 +207,13 @@ function buildHtml({ subject, rows, periodFrom, periodTo }: InvoiceDraft): strin
 /**
  * Otevře podklad v novém okně a rovnou nabídne tisk (odtud „Uložit jako PDF").
  * Vrací false, když okno zablokoval blokovač vyskakovacích oken.
+ *
+ * Otevírání i spuštění tisku dělá `tiskoveOkno.ts`. Dřív to bylo tady a volalo
+ * `okno.print()` z tohohle vlákna — druhé generování v jedné session tím zamrzlo
+ * hlavní vlákno appky (P0, 14. 8. 2026).
  */
 export function openInvoiceDraft(draft: InvoiceDraft): boolean {
   // HTML sestavujeme PŘED otevřením okna: kdyby na rozbitém datu spadl format(),
   // zůstalo by uživateli viset prázdné okno.
-  const html = buildHtml(draft);
-
-  // Pozor na windowFeatures: s „noopener" vrací window.open podle specifikace null,
-  // takže by se podklad nikdy nevykreslil. Obsah je náš a ve stejném originu.
-  const okno = window.open('', '_blank', 'width=900,height=1000');
-  if (!okno) return false;
-
-  okno.document.write(html);
-  okno.document.close();
-  okno.focus();
-
-  // Tisk až po vykreslení, ať v PDF nechybí styly. Uživatel mohl okno mezitím zavřít.
-  setTimeout(() => {
-    try {
-      if (!okno.closed) okno.print();
-    } catch {
-      /* zavřené okno nebo blokovaný tisk — podklad je vykreslený, vytiskne se ručně */
-    }
-  }, 250);
-  return true;
+  return otevriTiskovouStranku(buildHtml(draft));
 }
