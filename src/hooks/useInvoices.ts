@@ -85,6 +85,25 @@ export const useInvoices = () => {
     onSuccess: invalidate,
   });
 
+  const markPaid = useMutation({
+    mutationFn: async (p: { invoiceId: string; datum: string }) => {
+      const { data, error } = await supabase.rpc('mark_invoice_paid', {
+        _invoice_id: p.invoiceId, _datum: p.datum,
+      });
+      if (error) throw chyba(error, 'Úhradu se nepodařilo zapsat.');
+      return data as { cislo: string; datum_uhrady: string };
+    },
+    onSuccess: invalidate,
+  });
+
+  const unmarkPaid = useMutation({
+    mutationFn: async (invoiceId: string) => {
+      const { error } = await supabase.rpc('unmark_invoice_paid', { _invoice_id: invoiceId });
+      if (error) throw chyba(error, 'Označení úhrady se nepodařilo zrušit.');
+    },
+    onSuccess: invalidate,
+  });
+
   const deleteDraft = useMutation({
     mutationFn: async (invoiceId: string) => {
       const { data, error } = await supabase.rpc('delete_invoice_draft', { _invoice_id: invoiceId });
@@ -104,8 +123,11 @@ export const useInvoices = () => {
     createCommercialDraft: createCommercialDraft.mutateAsync,
     issue: issue.mutateAsync,
     deleteDraft: deleteDraft.mutateAsync,
+    markPaid: markPaid.mutateAsync,
+    unmarkPaid: unmarkPaid.mutateAsync,
     isBusy: createClubDraft.isPending || createCommercialDraft.isPending
-      || issue.isPending || deleteDraft.isPending,
+      || issue.isPending || deleteDraft.isPending
+      || markPaid.isPending || unmarkPaid.isPending,
   };
 };
 

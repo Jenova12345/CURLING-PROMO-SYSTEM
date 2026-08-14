@@ -3,12 +3,15 @@ import { addMonths, endOfMonth, format, startOfMonth, subMonths } from 'date-fns
 import { cs } from 'date-fns/locale';
 import {
   FileText, Printer, Trash2, Check, AlertTriangle, ChevronLeft, ChevronRight, Scale,
+  Banknote, Undo2,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { useAuth } from '@/contexts/AuthContext';
 import { denZDb } from '@/lib/datum';
 import { useToast } from '@/components/ui/use-toast';
@@ -29,21 +32,38 @@ const den = (d: string | null) => {
   return datum ? format(datum, 'd. M. yyyy', { locale: cs }) : '—';
 };
 
+/**
+ * Štítek stavu klientovým slovníkem: nezaplaceno / zaplaceno / po splatnosti.
+ *
+ * „Vystaveno" v databázi a „nezaplaceno" na obrazovce jsou totéž — jen se na to
+ * dívá jednou účetní a jednou člověk, který chce vědět, jestli přišly peníze.
+ * „Po splatnosti" zůstává ODVOZENÝ stav (spec, bod 9), ne hodnota v databázi,
+ * a počítá se jen u nezaplacených: zaplacená faktura po splatnosti už po
+ * splatnosti není, byla zaplacena pozdě.
+ */
 const StavBadge = ({ stav, poSplatnosti }: { stav: string; poSplatnosti: boolean | null }) => {
-  // „Po splatnosti" je odvozený stav (spec, bod 9), ne hodnota v databázi —
-  // proto se ukazuje vedle stavu, ne místo něj.
-  if (poSplatnosti) return <Badge variant="destructive">Po splatnosti</Badge>;
   if (stav === 'koncept') return <Badge variant="secondary">Koncept</Badge>;
-  if (stav === 'zaplaceno') return <Badge>Zaplaceno</Badge>;
   if (stav === 'stornovano') return <Badge variant="outline">Stornováno</Badge>;
-  return <Badge variant="default">Vystaveno</Badge>;
+  if (stav === 'zaplaceno') {
+    return <Badge className="border-emerald-300 bg-emerald-100 text-emerald-900 hover:bg-emerald-100">Zaplaceno</Badge>;
+  }
+  if (poSplatnosti) return <Badge variant="destructive">Po splatnosti</Badge>;
+  return <Badge className="border-amber-300 bg-amber-100 text-amber-900 hover:bg-amber-100">Nezaplaceno</Badge>;
+};
+
+/** Dnešek ve tvaru pro `<input type="date">` — v místním čase, ne v UTC. */
+const dnesProInput = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 
 const Invoices = () => {
   const { isAdmin } = useAuth();
   const { toast } = useToast();
-  const { invoices, isLoading, error, issue, deleteDraft, isBusy } = useInvoices();
+  const { invoices, isLoading, error, issue, deleteDraft, markPaid, unmarkPaid, isBusy } = useInvoices();
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [platba, setPlatba] = useState<{ id: string; popis: string } | null>(null);
+  const [datumUhrady, setDatumUhrady] = useState(dnesProInput);
   const { data: detail, isLoading: detailLoading } = useInvoiceDetail(detailId);
 
   // Kontrolní součet za měsíc. Vlastní období, ne to z „Kdo dluží": tady se
@@ -90,6 +110,34 @@ const Invoices = () => {
         description: `Uvolnilo se ${uvolneno} rezervací — půjdou vyfakturovat znovu.`,
       });
       if (detailId === id) setDetailId(null);
+    } catch (e) {
+      toast({ title: 'Nepovedlo se', description: (e as Error).message, variant: 'destructive' });
+    }
+  };
+
+  const otevriPlatbu = (id: string, popis: string) => {
+    setDatumUhrady(dnesProInput());   // vždy dnešek, ať se nezdědí datum z minulé faktury
+    setPlatba({ id, popis });
+  };
+
+  const zapisPlatbu = async () => {
+    if (!platba) return;
+    try {
+      const v = await markPaid({ invoiceId: platba.id, datum: datumUhrady });
+      setPlatba(null);
+      toast({ title: `Faktura ${v.cislo} označena jako zaplacená`, description: `Datum úhrady ${den(v.datum_uhrady)}.` });
+    } catch (e) {
+      // Hláška z databáze je konkrétní („úhrada nemůže být dřív, než byl doklad
+      // vystavený"), takže se ukazuje tak, jak přišla.
+      toast({ title: 'Úhradu nelze zapsat', description: (e as Error).message, variant: 'destructive' });
+    }
+  };
+
+  const zrusPlatbu = async (id: string, popis: string) => {
+    if (!window.confirm(`Zrušit označení úhrady${popis ? ` — ${popis}` : ''}?\n\nFaktura se vrátí mezi nezaplacené.`)) return;
+    try {
+      await unmarkPaid(id);
+      toast({ title: 'Označení úhrady zrušeno' });
     } catch (e) {
       toast({ title: 'Nepovedlo se', description: (e as Error).message, variant: 'destructive' });
     }
@@ -224,6 +272,7 @@ const Invoices = () => {
                   <TableHead>Odběratel</TableHead>
                   <TableHead>Období</TableHead>
                   <TableHead>Splatnost</TableHead>
+                  <TableHead>Uhrazeno</TableHead>
                   <TableHead className="text-right">K úhradě</TableHead>
                   <TableHead>Stav</TableHead>
                   <TableHead className="text-right">Akce</TableHead>
@@ -248,6 +297,7 @@ const Invoices = () => {
                     </TableCell>
                     <TableCell className="whitespace-nowrap">{den(f.obdobi_od)} – {den(f.obdobi_do)}</TableCell>
                     <TableCell className="whitespace-nowrap">{den(f.datum_splatnosti)}</TableCell>
+                    <TableCell className="whitespace-nowrap">{den(f.datum_uhrady)}</TableCell>
                     <TableCell className="text-right font-semibold">{fmtKc(Number(f.total_rounded ?? 0))}</TableCell>
                     <TableCell><StavBadge stav={f.status ?? ''} poSplatnosti={f.po_splatnosti} /></TableCell>
                     <TableCell className="text-right">
@@ -267,6 +317,24 @@ const Invoices = () => {
                             </Button>
                           </>
                         )}
+                        {f.status === 'vystaveno' && (
+                          <Button
+                            size="sm" variant="outline" disabled={isBusy}
+                            aria-label={`Označit jako zaplaceno — ${f.odberatel}`}
+                            onClick={() => otevriPlatbu(f.id!, `${f.cislo ?? ''} · ${f.odberatel}`)}
+                          >
+                            <Banknote className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Označit zaplaceno
+                          </Button>
+                        )}
+                        {f.status === 'zaplaceno' && (
+                          <Button
+                            size="sm" variant="ghost" disabled={isBusy}
+                            aria-label={`Zrušit označení úhrady — ${f.odberatel}`}
+                            onClick={() => zrusPlatbu(f.id!, `${f.cislo ?? ''} · ${f.odberatel}`)}
+                          >
+                            <Undo2 className="h-3.5 w-3.5" aria-hidden="true" />
+                          </Button>
+                        )}
                         <Button size="sm" variant="outline" onClick={() => setDetailId(f.id)}>
                           Detail
                         </Button>
@@ -279,6 +347,33 @@ const Invoices = () => {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={!!platba} onOpenChange={(o) => !o && setPlatba(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Označit jako zaplaceno</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">{platba?.popis}</p>
+          <div className="space-y-2">
+            <Label htmlFor="datum-uhrady">Datum úhrady</Label>
+            <Input
+              id="datum-uhrady"
+              type="date"
+              value={datumUhrady}
+              max={dnesProInput()}
+              onChange={(e) => setDatumUhrady(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Datum z bankovního výpisu. Nemůže být v budoucnosti ani dřív, než byl
+              doklad vystavený — hlídá to databáze.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPlatba(null)}>Zrušit</Button>
+            <Button disabled={isBusy || !datumUhrady} onClick={zapisPlatbu}>
+              <Check className="mr-1 h-4 w-4" aria-hidden="true" /> Zapsat úhradu
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!detailId} onOpenChange={(o) => !o && setDetailId(null)}>
         <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
@@ -385,9 +480,33 @@ const Invoices = () => {
                     </Button>
                   </>
                 ) : (
-                  <Button variant="outline" onClick={tisk}>
-                    <Printer className="mr-1 h-4 w-4" aria-hidden="true" /> Tisk / uložit jako PDF
-                  </Button>
+                  <>
+                    <Button variant="outline" onClick={tisk}>
+                      <Printer className="mr-1 h-4 w-4" aria-hidden="true" /> Tisk / uložit jako PDF
+                    </Button>
+                    {detail.invoice.status === 'vystaveno' && (
+                      <Button
+                        disabled={isBusy}
+                        onClick={() => otevriPlatbu(
+                          detail.invoice.id,
+                          `${detail.invoice.cislo ?? ''} · ${detail.invoice.odberatel_nazev ?? ''}`,
+                        )}
+                      >
+                        <Banknote className="mr-1 h-4 w-4" aria-hidden="true" /> Označit jako zaplaceno
+                      </Button>
+                    )}
+                    {detail.invoice.status === 'zaplaceno' && (
+                      <Button
+                        variant="outline" disabled={isBusy}
+                        onClick={() => zrusPlatbu(
+                          detail.invoice.id,
+                          `${detail.invoice.cislo ?? ''} · ${detail.invoice.odberatel_nazev ?? ''}`,
+                        )}
+                      >
+                        <Undo2 className="mr-1 h-4 w-4" aria-hidden="true" /> Zrušit označení úhrady
+                      </Button>
+                    )}
+                  </>
                 )}
               </div>
 
@@ -396,6 +515,7 @@ const Invoices = () => {
                 {detail.invoice.datum_vystaveni && ` · vystaveno ${den(detail.invoice.datum_vystaveni)}`}
                 {detail.invoice.datum_splatnosti && ` · splatnost ${den(detail.invoice.datum_splatnosti)}`}
                 {detail.invoice.variabilni_symbol && ` · VS ${detail.invoice.variabilni_symbol}`}
+                {detail.invoice.datum_uhrady && ` · uhrazeno ${den(detail.invoice.datum_uhrady)}`}
               </div>
             </div>
           )}

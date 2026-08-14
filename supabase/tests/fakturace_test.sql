@@ -609,6 +609,117 @@ BEGIN
 END $$;
 
 -- -----------------------------------------------------------------------------
+-- 7j) Evidence úhrady
+--
+-- Zápis data úhrady sahá na VYSTAVENÝ, tedy neměnný doklad. Prochází jen proto,
+-- že ho whitelist guardu výslovně pouští — a přesně tuhle past si B1+B2 samo
+-- předpovědělo („až přijde evidence plateb, musí se `_povolene` rozšířit ZÁROVEŇ
+-- s ADD COLUMN, jinak nepůjde zaplatit").
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _inv uuid; _f record; _r jsonb; _dnes date := (now() AT TIME ZONE 'Europe/Prague')::date;
+BEGIN
+  SELECT hodnota::uuid INTO _inv FROM _stav WHERE klic = 'invoice';
+
+  -- Výchozí stav: vystavená faktura není zaplacená a datum úhrady nemá.
+  SELECT * INTO _f FROM public.invoices WHERE id = _inv;
+  PERFORM pg_temp.tvrd(_f.status = 'vystaveno' AND _f.datum_uhrady IS NULL,
+    'vystavená faktura je nezaplacená a bez data úhrady');
+
+  -- Datum v budoucnosti a datum před vystavením se nepustí.
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.mark_invoice_paid(%L, %L)', _inv, _dnes + 1),
+    'budoucnosti', 'úhradu nejde datovat dopředu');
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.mark_invoice_paid(%L, %L)', _inv, _f.datum_vystaveni - 1),
+    'dřív', 'úhrada nemůže být dřív než vystavení dokladu');
+
+  -- Zápis úhrady.
+  _r := public.mark_invoice_paid(_inv, _dnes);
+  SELECT * INTO _f FROM public.invoices WHERE id = _inv;
+  PERFORM pg_temp.tvrd(_f.status = 'zaplaceno', 'stav se přepnul na zaplaceno');
+  PERFORM pg_temp.tvrd(_f.datum_uhrady = _dnes, 'datum úhrady se zapsalo');
+  PERFORM pg_temp.tvrd(_f.paid_by IS NOT NULL AND _f.paid_at IS NOT NULL,
+    'zůstala stopa, KDO a kdy úhradu zapsal (spec, bod 12)');
+  PERFORM pg_temp.tvrd((_r ->> 'datum_uhrady')::date = _dnes, 'RPC vrátí zapsané datum');
+
+  -- Částky ani strany se zápisem úhrady nesměly hnout.
+  -- `subtotal`, ne `total_rounded`: to druhé je zaokrouhlené na koruny, takže by
+  -- se se součtem řádků shodovalo jen náhodou (když total vyjde celočíselně).
+  -- Test by pak padal z důvodu, který s evidencí úhrady vůbec nesouvisí.
+  PERFORM pg_temp.tvrd(
+    _f.subtotal = (SELECT sum(line_total) FROM public.invoice_items WHERE invoice_id = _inv),
+    'zápis úhrady nesáhl na částky dokladu');
+
+  -- Dvakrát zaplatit nejde.
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.mark_invoice_paid(%L, %L)', _inv, _dnes),
+    'už od', 'druhý zápis úhrady se odmítne');
+
+  -- Kontrolní součet se tím nesmí rozejít: `zaplaceno` se pořád počítá jako vyfakturováno.
+  PERFORM pg_temp.tvrd(
+    (SELECT count(*) FROM public.billing_reconcile('2026-07-01', '2026-07-31') WHERE rozdil <> 0) = 0,
+    'kontrolní součet po zaplacení pořád sedí');
+
+  -- Zrušení označení: vystavení je nevratné, úhrada ne.
+  PERFORM public.unmark_invoice_paid(_inv);
+  SELECT * INTO _f FROM public.invoices WHERE id = _inv;
+  PERFORM pg_temp.tvrd(_f.status = 'vystaveno' AND _f.datum_uhrady IS NULL,
+    'označení úhrady jde zrušit a doklad se vrátí mezi nezaplacené');
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.unmark_invoice_paid(%L)', _inv),
+    'označená není', 'zrušit úhradu u nezaplacené faktury nejde');
+END $$;
+
+-- Koncept a stornovaný doklad se neplatí.
+DO $$
+DECLARE _sub uuid; _koncept uuid; _inv uuid;
+BEGIN
+  SELECT id INTO _sub FROM public.subjects WHERE name = 'Curling Ostrava';
+  _koncept := public.create_invoice_draft_club(_sub, '2026-07-01', '2026-07-31');
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.mark_invoice_paid(%L, NULL)', _koncept),
+    'nejdřív ho vystav', 'koncept se neplatí');
+  PERFORM public.delete_invoice_draft(_koncept);
+
+  SELECT hodnota::uuid INTO _inv FROM _stav WHERE klic = 'invoice';
+  UPDATE public.invoices SET status = 'stornovano' WHERE id = _inv;
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.mark_invoice_paid(%L, NULL)', _inv),
+    'Stornovaný', 'stornovaný doklad se neoznačuje jako zaplacený');
+  UPDATE public.invoices SET status = 'vystaveno' WHERE id = _inv;
+END $$;
+
+-- Stav a datum se nesmí rozejít ani přímým zápisem pod databázovou rolí.
+DO $$
+DECLARE _inv uuid;
+BEGIN
+  SELECT hodnota::uuid INTO _inv FROM _stav WHERE klic = 'invoice';
+  PERFORM pg_temp.ocekavej_chybu(
+    format('UPDATE public.invoices SET datum_uhrady = current_date WHERE id = %L', _inv),
+    'invoices_uhrada_dle_stavu', 'datum úhrady bez stavu „zaplaceno" CHECK nepustí');
+END $$;
+
+-- Stornovat ZAPLACENÝ doklad musí jít, a úhrada u něj musí zůstat zapsaná.
+-- Je to právě ten případ, kdy je storno potřeba (peníze přišly, plnění se
+-- nekonalo) — a kdyby constraint žádal prázdné datum, nešlo by to vůbec.
+DO $$
+DECLARE _inv uuid; _f record; _dnes date := (now() AT TIME ZONE 'Europe/Prague')::date;
+BEGIN
+  SELECT hodnota::uuid INTO _inv FROM _stav WHERE klic = 'invoice';
+  PERFORM public.mark_invoice_paid(_inv, _dnes);
+
+  UPDATE public.invoices SET status = 'stornovano' WHERE id = _inv;
+  SELECT * INTO _f FROM public.invoices WHERE id = _inv;
+  PERFORM pg_temp.tvrd(_f.status = 'stornovano', 'zaplacený doklad jde stornovat');
+  PERFORM pg_temp.tvrd(_f.datum_uhrady = _dnes,
+    'a úhrada na něm ZŮSTANE — u dobropisu je potřeba vědět, že peníze dorazily');
+
+  UPDATE public.invoices SET status = 'zaplaceno' WHERE id = _inv;
+  PERFORM public.unmark_invoice_paid(_inv);
+END $$;
+
+-- -----------------------------------------------------------------------------
 -- 8) Zahození konceptu odemkne rezervace
 --
 -- Běží pod databázovou rolí schválně: tvrzení tady je o DATECH (uvolnil se zámek?),
@@ -755,6 +866,12 @@ BEGIN
   PERFORM pg_temp.ocekavej_chybu(
     'SELECT * FROM public.billing_health()',
     'jen správce', 'člen nevidí stav fakturace');
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.mark_invoice_paid(%L, NULL)', _inv),
+    'jen správce', 'člen neoznačí fakturu jako zaplacenou');
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.unmark_invoice_paid(%L)', _inv),
+    'jen správce', 'člen nezruší označení úhrady');
 
   -- Čtení faktur drží RLS, ne jen RPC.
   PERFORM pg_temp.tvrd((SELECT count(*) FROM public.invoices) = 0,
@@ -822,7 +939,7 @@ BEGIN
      AND p.proname IN ('create_invoice_draft_club', 'create_invoice_draft_commercial',
                        'issue_invoice', 'delete_invoice_draft', 'billing_reconcile',
                        'fakturovatelne_rezervace', 'next_invoice_number', 'billing_health',
-                       'obdobi_hranice')
+                       'obdobi_hranice', 'mark_invoice_paid', 'unmark_invoice_paid')
      AND (has_function_privilege('anon', p.oid, 'EXECUTE')
           OR has_function_privilege('service_role', p.oid, 'EXECUTE'));
   PERFORM pg_temp.tvrd(_chybne IS NULL,

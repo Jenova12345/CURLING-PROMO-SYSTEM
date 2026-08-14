@@ -466,6 +466,7 @@ export type Database = {
           created_at: string
           created_by: string | null
           datum_splatnosti: string | null
+          datum_uhrady: string | null
           datum_vystaveni: string | null
           dodavatel_adresa: string | null
           dodavatel_dic: string | null
@@ -486,6 +487,8 @@ export type Database = {
           odberatel_dic: string | null
           odberatel_ico: string | null
           odberatel_nazev: string | null
+          paid_at: string | null
+          paid_by: string | null
           pdf_path: string | null
           pdf_sha256: string | null
           rounding_amount: number
@@ -504,6 +507,7 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           datum_splatnosti?: string | null
+          datum_uhrady?: string | null
           datum_vystaveni?: string | null
           dodavatel_adresa?: string | null
           dodavatel_dic?: string | null
@@ -524,6 +528,8 @@ export type Database = {
           odberatel_dic?: string | null
           odberatel_ico?: string | null
           odberatel_nazev?: string | null
+          paid_at?: string | null
+          paid_by?: string | null
           pdf_path?: string | null
           pdf_sha256?: string | null
           rounding_amount?: number
@@ -542,6 +548,7 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           datum_splatnosti?: string | null
+          datum_uhrady?: string | null
           datum_vystaveni?: string | null
           dodavatel_adresa?: string | null
           dodavatel_dic?: string | null
@@ -562,6 +569,8 @@ export type Database = {
           odberatel_dic?: string | null
           odberatel_ico?: string | null
           odberatel_nazev?: string | null
+          paid_at?: string | null
+          paid_by?: string | null
           pdf_path?: string | null
           pdf_sha256?: string | null
           rounding_amount?: number
@@ -621,6 +630,27 @@ export type Database = {
           {
             foreignKeyName: "invoices_issued_by_fkey"
             columns: ["issued_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "invoices_paid_by_fkey"
+            columns: ["paid_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "invoices_paid_by_fkey"
+            columns: ["paid_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "invoices_paid_by_fkey"
+            columns: ["paid_by"]
             isOneToOne: false
             referencedRelation: "profiles_self"
             referencedColumns: ["user_id"]
@@ -1509,6 +1539,7 @@ export type Database = {
           cislo: string | null
           created_at: string | null
           datum_splatnosti: string | null
+          datum_uhrady: string | null
           datum_vystaveni: string | null
           id: string | null
           issued_at: string | null
@@ -2004,6 +2035,10 @@ export type Database = {
       is_subject_member: { Args: { _subject: string }; Returns: boolean }
       is_subject_rep: { Args: { _subject: string }; Returns: boolean }
       issue_invoice: { Args: { _invoice_id: string }; Returns: Json }
+      mark_invoice_paid: {
+        Args: { _datum?: string; _invoice_id: string }
+        Returns: Json
+      }
       move_booking: {
         Args: {
           p_end: string
@@ -2057,6 +2092,7 @@ export type Database = {
         Args: { _hodnota: number; _rada: string; _rok: number }
         Returns: number
       }
+      unmark_invoice_paid: { Args: { _invoice_id: string }; Returns: undefined }
       update_booking: {
         Args: {
           p_note?: string

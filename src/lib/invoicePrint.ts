@@ -45,7 +45,11 @@ function dolozkaDph(vatMode: Invoice['vat_mode']): string {
   return '';
 }
 
-function buildHtml(invoice: Invoice, items: InvoiceItem[]): string {
+/**
+ * Sestaví HTML dokladu. Exportované kvůli testům: doklad tiskne částky a QR
+ * platbu, a to jsou věci, které se musí dát ověřit bez prohlížeče.
+ */
+export function sestavDoklad(invoice: Invoice, items: InvoiceItem[]): string {
   // `denZDb`, ne `new Date`: holé `RRRR-MM-DD` je podle specifikace půlnoc UTC,
   // takže by se západně od Greenwiche vytisklo o den míň.
   const den = (d: string | null) => {
@@ -92,9 +96,15 @@ function buildHtml(invoice: Invoice, items: InvoiceItem[]): string {
   // peníze jinam — proto se chyba spolkne do „bez QR", ne do prázdného obrázku.
   //
   // Do QR jde `total_rounded`: zákazník platí zaokrouhlenou částku, ne přesný součet.
+  // UHRAZENÝ DOKLAD SE UŽ NEPLATÍ. Bez tohohle by admin vytiskl kopii faktury,
+  // kterou klub minulý týden zaplatil, a předal mu dokument s částkou „k úhradě"
+  // a naskenovatelným QR — pozvánka k dvojí platbě. Kopie zaplaceného dokladu je
+  // potvrzení, ne výzva.
+  const uhrazeno = denZDb(invoice.datum_uhrady);
+
   let qr = '';
   let qrChyba = '';
-  if (invoice.dodavatel_iban) {
+  if (invoice.dodavatel_iban && !uhrazeno) {
     try {
       qr = spaydQrSvg({
         iban: invoice.dodavatel_iban,
@@ -149,6 +159,11 @@ function buildHtml(invoice: Invoice, items: InvoiceItem[]): string {
   .qr { text-align: center; }
   .qr svg { width: 30mm; height: 30mm; display: block; }
   .qr-popis { font-size: 10px; color: #64748b; margin-top: 2px; }
+  /* Razítko musí být vidět i v černobílém tisku — proto rámeček, ne jen barva. */
+  .uhrazeno-razitko {
+    margin-top: 16px; padding: 8px 12px; border: 2px solid #047857; border-radius: 6px;
+    color: #047857; font-weight: 700; font-size: 14px;
+  }
   .qr-chyba { margin-top: 8px; padding: 6px 8px; border: 1px solid #b45309; border-radius: 4px; color: #b45309; font-weight: 600; }
   .platba h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #64748b; margin: 0 0 6px; }
   .dolozka { margin-top: 16px; font-weight: 600; }
@@ -205,15 +220,20 @@ function buildHtml(invoice: Invoice, items: InvoiceItem[]): string {
         <td class="cislo">${zaokrouhleni > 0 ? '+' : ''}${esc(fmtKc(zaokrouhleni))}</td>
       </tr>` : ''}
       <tr class="uhrada">
-        <td colspan="5">Celkem k úhradě</td>
+        <td colspan="5">${uhrazeno ? 'Celkem (uhrazeno)' : 'Celkem k úhradě'}</td>
         <td class="cislo">${esc(fmtKc(Number(invoice.total_rounded)))}</td>
       </tr>
     </tfoot>
   </table>
 
+  ${uhrazeno ? `
+  <div class="uhrazeno-razitko">
+    ✓ UHRAZENO dne ${esc(format(uhrazeno, 'd. M. yyyy', { locale: cs }))} — doklad je vyrovnaný, neplaťte znovu.
+  </div>` : ''}
+
   <div class="platba">
     <div class="platba-text">
-      <h2>Platební údaje</h2>
+      <h2>${uhrazeno ? 'Platební údaje (doklad je uhrazený)' : 'Platební údaje'}</h2>
       <div>Číslo účtu: <b>${esc(invoice.dodavatel_ucet ?? '—')}</b></div>
       ${invoice.dodavatel_iban ? `<div>IBAN: <b>${esc(invoice.dodavatel_iban)}</b></div>` : ''}
       <div>Variabilní symbol: <b>${esc(invoice.variabilni_symbol ?? '—')}</b></div>
@@ -240,5 +260,5 @@ export function openInvoicePrint(invoice: Invoice, items: InvoiceItem[]): boolea
   // HTML se sestavuje PŘED otevřením okna: kdyby na rozbitém datu spadl format(),
   // zůstalo by uživateli viset prázdné okno. Zbytek řeší `tiskoveOkno.ts` —
   // včetně toho, že se předchozí okno zavře a tisk spouští stránka sama.
-  return otevriTiskovouStranku(buildHtml(invoice, items));
+  return otevriTiskovouStranku(sestavDoklad(invoice, items));
 }
