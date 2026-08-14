@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { overModulo11 } from './iban';
 import { DEMO_IBAN, DEMO_UCET, sestavPodklad, type InvoiceDraft } from './invoiceDraft';
 
 // Podklad je to, co klient vidí jako první „fakturu". Testuje se hlavně to, co
@@ -130,16 +131,23 @@ describe('podklad — QR platba', () => {
     expect(html).toContain('<svg');
   });
 
-  it('DEMO IBAN je platný, jinak by QR vůbec nevzniklo', () => {
+  it('DEMO IBAN projde mod-97 (jinak by QR nevzniklo), ale účet k němu neprojde mod-11', () => {
     const bban = DEMO_IBAN.slice(4);
     const prevedeno = `${bban}1235${DEMO_IBAN.slice(2, 4)}`;
     expect(BigInt(prevedeno) % 97n).toBe(1n);
+    // Ruční opsání DEMO účtu banka odmítne — kontrola mod-11 ČNB ho nepustí.
+    // Nezaměnitelnost tedy nestojí jen na varováních na stránce.
+    expect(overModulo11({ predcisli: '', cislo: '0000000000', kodBanky: '0800' }).ok).toBe(false);
   });
 
   it('neplatný IBAN z nastavení QR nevykreslí, místo aby mířilo neznámo kam', () => {
-    const html = sestavPodklad(podklad({ ...UDAJE, bank_iban: 'nesmysl' }));
-    expect(html).not.toContain('<svg');
-    expect(html).toContain('Platební údaje');
+    // Zjevný nesmysl padne už na tvaru; realistický případ je PŘEKLEP o jednu
+    // číslici, který tvarem projde. Testují se proto oba.
+    for (const spatny of ['nesmysl', 'CZ6508000000192000145398']) {
+      const html = sestavPodklad(podklad({ ...UDAJE, bank_iban: spatny }));
+      expect(html).not.toContain('<svg');
+      expect(html).toContain('Platební údaje');
+    }
   });
 
   it('podklad nemá variabilní symbol — bez čísla by ho stejně nešlo spárovat', () => {

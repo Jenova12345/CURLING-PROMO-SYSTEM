@@ -1,5 +1,6 @@
 // Auth context for managing user authentication state
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -46,6 +47,9 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // `AuthProvider` je uvnitř `QueryClientProvider` (App.tsx), takže tenhle hook
+  // tu je dostupný — a odhlášení díky němu umí vyprázdnit i cache dotazů.
+  const qc = useQueryClient();
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -185,6 +189,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signOut = async () => {
     await supabase.auth.signOut();
+    // Vyprázdnit i cache dotazů. Bez toho zůstane `billing-settings` s IBANem
+    // a IČEM v paměti ještě několik minut po odhlášení: uživatelské id je sice
+    // součástí klíče, takže se to dalšímu uživateli NEZOBRAZÍ, ale data by
+    // přežila přihlašovací údaj, který je autorizoval. Komentář v
+    // `useBillingSettings` sliboval víc, než uid v klíči umí — tohle to dorovnává.
+    qc.clear();
     setUser(null);
     setSession(null);
     setProfile(null);

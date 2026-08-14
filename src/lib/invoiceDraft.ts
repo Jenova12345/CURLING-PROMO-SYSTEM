@@ -64,8 +64,12 @@ export interface InvoiceDraft {
  * Účet, na který se vykreslí QR, když v nastavení žádný není.
  *
  * Samé nuly schválně: je to platný IBAN (projde mod-97, jinak by QR vůbec
- * nevzniklo), ale na první pohled nesmyslný — nikdo si ho nesplete se skutečným
- * účtem. V ostrém provozu se sem nikdy nedostane, protože `issue_invoice`
+ * nevzniklo), ale pro ČLOVĚKA na první pohled nesmyslný. Pro stroj nesmyslný
+ * NENÍ — kontrolní součet projde a 0800 je reálná banka, takže čtečka QR nic
+ * nepozná. Nezaměnitelnost stojí na varováních na stránce a na zprávě „NAVRH -
+ * neplatit" uvnitř QR, ne na tom čísle samotném. Odpovídající české číslo účtu
+ * `0000000000/0800` naopak neprojde kontrolou mod-11 ČNB, takže ruční opsání
+ * banka odmítne. V ostrém provozu se sem nikdy nedostane, protože `issue_invoice`
  * vystavit doklad bez bankovního spojení odmítne; tohle je JEN pro podklad,
  * který se nikam neposílá a nese vodoznak „NÁVRH – UKÁZKA".
  */
@@ -172,6 +176,11 @@ export function sestavPodklad({ subject, rows, periodFrom, periodTo, billing }: 
         // Variabilní symbol podklad nemá: číslo se přiděluje až vystavením, a bez
         // něj by platba stejně nešla spárovat. Zpráva to říká rovnou, ať je to
         // vidět i tomu, kdo kód jen naskenuje a dál se nedívá.
+        //
+        // Prefix stojí 17 z 60 znaků, které SPAYD na zprávu má — na text
+        // z nastavení tedy zbyde 42 a delší se ořízne. Je to vědomá výměna:
+        // varování je důležitější než celá zpráva pro příjemce, a protože je
+        // vpředu, ořízne se vždycky ta zpráva, ne ono.
         message: `NAVRH - neplatit; ${vyplneno(billing?.payment_message) ?? 'Pronajem ledove plochy'}`,
       });
     } catch {

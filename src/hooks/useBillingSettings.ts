@@ -29,10 +29,10 @@ export const useBillingSettings = () => {
   const qc = useQueryClient();
 
   const { data: settings = null, isLoading, error } = useQuery({
-    // Uživatel je součástí klíče schválně: bez něj drží react-query IBAN a IČO
-    // v paměti i po odhlášení a po přepnutí na jiný účet ve stejné záložce.
-    // Nevykreslí se (stránka je za `isAdmin`) a přes REST se k tomu nikdo
-    // nedostane, ale data by přežila přihlašovací údaj, který je autorizoval.
+    // Uživatel je součástí klíče schválně: brání to ZNOVUPOUŽITÍ cizího záznamu
+    // po přepnutí účtu ve stejné záložce. Nebrání to ale DRŽENÍ dat v paměti —
+    // to řeší až `queryClient.clear()` v `signOut` (AuthContext). Původní znění
+    // tohohle komentáře slibovalo obojí, což uid v klíči neumí.
     queryKey: ['billing-settings', user?.id],
     queryFn: async () => {
       const { data, error: chyba } = await supabase

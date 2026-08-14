@@ -13,6 +13,7 @@
 
 import qrcode from 'qrcode-generator';
 
+import { overIban } from '@/lib/iban';
 import { toSetiny } from '@/lib/money';
 
 export interface SpaydPlatba {
@@ -62,6 +63,15 @@ export function buildSpayd(p: SpaydPlatba): string {
   const iban = normalizeIban(p.iban ?? '');
   if (!/^[A-Z]{2}\d{2}[A-Z0-9]{10,30}$/.test(iban)) {
     throw new Error('QR platbu nelze sestavit: IBAN nemá platný tvar.');
+  }
+  // TVAR NESTAČÍ — a je to přesně riziko 4 z plánu („špatný IBAN → QR posílá
+  // peníze jinam, zjistí se po týdnech"). Skutečný IBAN s JEDNOU přepsanou
+  // číslicí má správný tvar a projde regexem; zachytí ho až kontrolní součet
+  // mod-97. Databáze ho sice hlídá CHECKem `billing_settings_bank_iban`, ale
+  // snapshot `invoices.dodavatel_iban` je holý `text` bez omezení — tenhle modul
+  // je poslední místo před QR a jediné, které o původu IBANu nic nepředpokládá.
+  if (!overIban(iban)) {
+    throw new Error('QR platbu nelze sestavit: IBAN neprošel kontrolním součtem (překlep?).');
   }
   if (!Number.isFinite(p.amount) || p.amount < 0) {
     throw new Error('QR platbu nelze sestavit: neplatná částka.');

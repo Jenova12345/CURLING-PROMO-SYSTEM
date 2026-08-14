@@ -83,6 +83,18 @@ describe('buildSpayd — řetězec QR platby', () => {
     }
   });
 
+  it('odmítne i IBAN se SPRÁVNÝM TVAREM, ale špatným kontrolním součtem', () => {
+    // Tohle je riziko 4 z plánu v čisté podobě: skutečný IBAN haly s jednou
+    // přepsanou číslicí. Tvarem projde, mod-97 ne — a QR nikdo nečte, takže
+    // by se to zjistilo až podle toho, že peníze nedorazily.
+    expect(() => buildSpayd({ iban: 'CZ6508000000192000145398', amount: 100 }))
+      .toThrow(/kontroln/i);
+    expect(() => buildSpayd({ iban: 'CZ0000000000000000000000', amount: 100 }))
+      .toThrow(/kontroln/i);
+    // A platný projde dál.
+    expect(buildSpayd({ iban: IBAN, amount: 100 })).toContain(`ACC:${IBAN}`);
+  });
+
   it('odmítne nesmyslnou částku', () => {
     expect(() => buildSpayd({ iban: IBAN, amount: NaN })).toThrow(/částka/);
     expect(() => buildSpayd({ iban: IBAN, amount: -1 })).toThrow(/částka/);
