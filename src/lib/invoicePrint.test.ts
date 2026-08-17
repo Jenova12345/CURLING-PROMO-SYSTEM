@@ -119,3 +119,50 @@ describe('doklad — neplátce DPH', () => {
     expect(html).not.toMatch(/Sazba DPH|Základ daně|DPH 21/);
   });
 });
+
+describe('opravný doklad', () => {
+  // Rozhodnutí PM: u neplátce se to jmenuje „Opravný doklad", ne „dobropis".
+  // Doklad nese KLADNÉ částky jako originál (schéma záporný nepustí), takže
+  // nadpis a věta o tom, co ruší, jsou jediné, co ho odlišuje od druhé výzvy
+  // k zaplacení téže částky.
+  const opravny = (prepis: Partial<Invoice> = {}) => doklad({
+    cislo: '20260002',
+    opravuje_id: 'aaaa1111-0000-0000-0000-000000000001',
+    opravuje_cislo: '20260001',
+    storno_duvod: 'Klub akci odvolal.',
+    ...prepis,
+  });
+
+  it('má nadpis „Opravný doklad", ne „Faktura"', () => {
+    const html = sestavDoklad(opravny(), polozky);
+    expect(html).toContain('<h1>Opravný doklad</h1>');
+    expect(html).not.toContain('<h1>Faktura</h1>');
+  });
+
+  it('řekne, kterou fakturu ruší a proč', () => {
+    const html = sestavDoklad(opravny(), polozky);
+    expect(html).toContain('Ruší fakturu č. 20260001');
+    expect(html).toContain('Klub akci odvolal.');
+  });
+
+  it('NEMÁ QR platbu — opravným dokladem se nic neplatí', () => {
+    // Tohle je ta nebezpečná část: QR na opravném dokladu je pozvánka zaplatit
+    // podruhé částku, která se právě ruší.
+    expect(sestavDoklad(opravny(), polozky)).not.toContain('<svg');
+    // Kontrola kontroly: běžná faktura se stejnými údaji QR MÁ, takže se
+    // netvrdí „bez QR" o dokladu, který by ho nedostal tak jako tak.
+    expect(sestavDoklad(doklad(), polozky)).toContain('<svg');
+  });
+
+  it('součet nepopisuje jako „k úhradě"', () => {
+    const html = sestavDoklad(opravny(), polozky);
+    expect(html).toContain('Celkem (rušená částka)');
+    expect(html).not.toContain('Celkem k úhradě');
+  });
+
+  it('když se číslo rušené faktury nedotáhne, vytiskne pomlčku místo „undefined"', () => {
+    const html = sestavDoklad(opravny({ opravuje_cislo: null }), polozky);
+    expect(html).toContain('Ruší fakturu č. —');
+    expect(html).not.toContain('undefined');
+  });
+});

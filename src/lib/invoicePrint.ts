@@ -102,9 +102,15 @@ export function sestavDoklad(invoice: Invoice, items: InvoiceItem[]): string {
   // potvrzení, ne výzva.
   const uhrazeno = denZDb(invoice.datum_uhrady);
 
+  // OPRAVNÝ DOKLAD (rozhodnutí PM: u neplátce se jmenuje takhle, ne „dobropis").
+  // Nese kladné částky jako originál — schéma záporný doklad nepustí — takže
+  // jediné, co ho odlišuje, je nadpis a věta o tom, co ruší. Kdyby se vytiskl
+  // jako „Faktura", dostal by odběratel druhou výzvu k zaplacení téže částky.
+  const opravny = !!invoice.opravuje_id;
+
   let qr = '';
   let qrChyba = '';
-  if (invoice.dodavatel_iban && !uhrazeno) {
+  if (invoice.dodavatel_iban && !uhrazeno && !opravny) {
     try {
       qr = spaydQrSvg({
         iban: invoice.dodavatel_iban,
@@ -128,7 +134,7 @@ export function sestavDoklad(invoice: Invoice, items: InvoiceItem[]): string {
 <html lang="cs">
 <head>
 <meta charset="utf-8">
-<title>Faktura ${esc(invoice.cislo ?? '')} — ${esc(invoice.odberatel_nazev ?? '')}</title>
+<title>${opravny ? 'Opravný doklad' : 'Faktura'} ${esc(invoice.cislo ?? '')} — ${esc(invoice.odberatel_nazev ?? '')}</title>
 <style>
   @page { size: A4; margin: 16mm; }
   * { box-sizing: border-box; }
@@ -167,6 +173,7 @@ export function sestavDoklad(invoice: Invoice, items: InvoiceItem[]): string {
   .qr-chyba { margin-top: 8px; padding: 6px 8px; border: 1px solid #b45309; border-radius: 4px; color: #b45309; font-weight: 600; }
   .platba h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #64748b; margin: 0 0 6px; }
   .dolozka { margin-top: 16px; font-weight: 600; }
+  .opravuje { margin: 4px 0 12px; padding: 6px 8px; border-left: 3px solid #0f172a; background: #f1f5f9; font-size: 12px; }
   .patka { margin-top: 20px; color: #64748b; font-size: 11px; }
   .tisk { margin-bottom: 20px; }
   .tisk button { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid #0f172a; background: #0f172a; color: #fff; cursor: pointer; }
@@ -176,8 +183,11 @@ export function sestavDoklad(invoice: Invoice, items: InvoiceItem[]): string {
 <body>
   <div class="tisk"><button onclick="window.print()">Uložit jako PDF / vytisknout</button></div>
 
-  <h1>Faktura</h1>
+  <h1>${opravny ? 'Opravný doklad' : 'Faktura'}</h1>
   <div class="cislo-dokladu">č. ${esc(invoice.cislo ?? '(koncept)')}</div>
+  ${opravny ? `<div class="opravuje">Ruší fakturu č. ${esc(invoice.opravuje_cislo ?? '—')}${
+    invoice.storno_duvod ? ` — ${esc(invoice.storno_duvod)}` : ''
+  }</div>` : ''}
 
   <div class="strany">
     <div class="strana">
@@ -220,7 +230,7 @@ export function sestavDoklad(invoice: Invoice, items: InvoiceItem[]): string {
         <td class="cislo">${zaokrouhleni > 0 ? '+' : ''}${esc(fmtKc(zaokrouhleni))}</td>
       </tr>` : ''}
       <tr class="uhrada">
-        <td colspan="5">${uhrazeno ? 'Celkem (uhrazeno)' : 'Celkem k úhradě'}</td>
+        <td colspan="5">${opravny ? 'Celkem (rušená částka)' : uhrazeno ? 'Celkem (uhrazeno)' : 'Celkem k úhradě'}</td>
         <td class="cislo">${esc(fmtKc(Number(invoice.total_rounded)))}</td>
       </tr>
     </tfoot>

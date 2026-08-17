@@ -41,7 +41,12 @@ const den = (d: string | null) => {
  * a počítá se jen u nezaplacených: zaplacená faktura po splatnosti už po
  * splatnosti není, byla zaplacena pozdě.
  */
-const StavBadge = ({ stav, poSplatnosti }: { stav: string; poSplatnosti: boolean | null }) => {
+const StavBadge = ({ stav, poSplatnosti, opravny }: {
+  stav: string; poSplatnosti: boolean | null; opravny?: boolean;
+}) => {
+  // Opravný doklad má vlastní štítek dřív než stav: v seznamu je to jinak
+  // k nerozeznání od běžné vystavené faktury, tedy od druhé výzvy k zaplacení.
+  if (opravny) return <Badge variant="outline">Opravný doklad</Badge>;
   if (stav === 'koncept') return <Badge variant="secondary">Koncept</Badge>;
   if (stav === 'stornovano') return <Badge variant="outline">Stornováno</Badge>;
   if (stav === 'zaplaceno') {
@@ -322,7 +327,7 @@ const Invoices = () => {
                     <TableCell className="whitespace-nowrap">{den(f.datum_splatnosti)}</TableCell>
                     <TableCell className="whitespace-nowrap">{den(f.datum_uhrady)}</TableCell>
                     <TableCell className="text-right font-semibold">{fmtKc(Number(f.total_rounded ?? 0))}</TableCell>
-                    <TableCell><StavBadge stav={f.status ?? ''} poSplatnosti={f.po_splatnosti} /></TableCell>
+                    <TableCell><StavBadge stav={f.status ?? ''} poSplatnosti={f.po_splatnosti} opravny={!!f.opravuje_id} /></TableCell>
                     <TableCell className="text-right">
                       {/* stopPropagation: řádek otevírá detail, tlačítka dělají něco jiného */}
                       <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
@@ -360,7 +365,7 @@ const Invoices = () => {
                         )}
                         {/* Storno jde i u ZAPLACENÉ faktury (rozhodnutí PM) — omylem
                             zaplacený doklad je přesně ten případ, kdy je potřeba. */}
-                        {(f.status === 'vystaveno' || f.status === 'zaplaceno') && (
+                        {(f.status === 'vystaveno' || f.status === 'zaplaceno') && !f.opravuje_id && (
                           <Button
                             size="sm" variant="ghost" disabled={isBusy}
                             aria-label={`Stornovat doklad ${f.cislo ?? ''} — ${f.odberatel}`}

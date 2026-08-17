@@ -4,7 +4,14 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Database } from '@/integrations/supabase/types';
 
 export type InvoiceListRow = Database['public']['Views']['invoices_list']['Row'];
-export type Invoice = Database['public']['Tables']['invoices']['Row'];
+/**
+ * Hlavička dokladu. `opravuje_cislo` není sloupec tabulky — dotahuje se
+ * u opravného dokladu zvlášť, protože „ruší fakturu č. …" je věta, která na
+ * dokladu musí být, a druhý dotaz kvůli jednomu číslu by byl zbytečný.
+ */
+export type Invoice = Database['public']['Tables']['invoices']['Row'] & {
+  opravuje_cislo?: string | null;
+};
 export type InvoiceItem = Database['public']['Tables']['invoice_items']['Row'];
 
 /**
@@ -170,8 +177,20 @@ export const useInvoiceDetail = (invoiceId: string | null) => {
       ]);
       if (hlavicka.error) throw hlavicka.error;
       if (polozky.error) throw polozky.error;
+
+      // Číslo opravované faktury. Jen u opravného dokladu, a chyba se nechá
+      // spolknout: bez čísla se doklad vytiskne s pomlčkou, kdežto rozbitý
+      // detail by adminovi vzal i to, co načíst šlo.
+      let opravuje_cislo: string | null = null;
+      const h = hlavicka.data as Invoice;
+      if (h.opravuje_id) {
+        const { data } = await supabase.from('invoices')
+          .select('cislo').eq('id', h.opravuje_id).maybeSingle();
+        opravuje_cislo = data?.cislo ?? null;
+      }
+
       return {
-        invoice: hlavicka.data as Invoice,
+        invoice: { ...h, opravuje_cislo } as Invoice,
         items: (polozky.data ?? []) as InvoiceItem[],
       };
     },

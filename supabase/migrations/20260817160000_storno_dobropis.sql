@@ -447,3 +447,48 @@ GRANT EXECUTE ON FUNCTION public.billing_health() TO authenticated;
 
 COMMENT ON FUNCTION public.billing_health() IS
   'Počítadla vad, které kontrolní součet neuvidí. `opravne_nesedi` hlídá opravné doklady, které billing_reconcile z rovnice vyřazuje — aby ta výjimka nebyla slepé místo.';
+
+-- -----------------------------------------------------------------------------
+-- 5) Seznam dokladů: ať je poznat opravný doklad
+--
+-- Bez tohohle vypadá opravný doklad v seznamu i na tisku jako obyčejná faktura
+-- — tedy jako druhá výzva k zaplacení téže částky. `opravuje_cislo` se veze
+-- s sebou schválně: „opravný doklad k faktuře 20260001" je informace, kterou
+-- odběratel na dokladu potřebuje, a dohledávat ji druhým dotazem je zbytečné.
+-- -----------------------------------------------------------------------------
+DROP VIEW IF EXISTS public.invoices_list;
+CREATE VIEW public.invoices_list WITH (security_invoker = on) AS
+  SELECT i.id,
+         i.cislo,
+         i.variabilni_symbol,
+         i.kind,
+         i.status,
+         i.subject_id,
+         COALESCE(i.odberatel_nazev, s.name) AS odberatel,
+         i.obdobi_od,
+         i.obdobi_do,
+         i.datum_vystaveni,
+         i.datum_splatnosti,
+         i.datum_uhrady,
+         i.subtotal,
+         i.total,
+         i.total_rounded,
+         i.pdf_path,
+         (SELECT count(*) FROM public.invoice_items it WHERE it.invoice_id = i.id) AS polozek,
+         i.status = 'vystaveno'::invoice_status
+           AND i.datum_splatnosti < (now() AT TIME ZONE 'Europe/Prague')::date AS po_splatnosti,
+         i.created_at,
+         i.issued_at,
+         i.opravuje_id,
+         i.storno_duvod,
+         -- Číslo opravovaného dokladu. `security_invoker = on` znamená, že se
+         -- na `invoices` uplatní RLS volajícího — ta je admin-only, tedy táž
+         -- jako na řádku samotném; nic se tím neodkrývá.
+         (SELECT p.cislo FROM public.invoices p WHERE p.id = i.opravuje_id) AS opravuje_cislo,
+         -- Byl tenhle doklad stornovaný? (Pohled na tutéž vazbu z druhé strany.)
+         (SELECT o.cislo FROM public.invoices o WHERE o.opravuje_id = i.id)  AS stornovan_dokladem
+    FROM public.invoices i
+    LEFT JOIN public.subjects s ON s.id = i.subject_id;
+
+REVOKE ALL ON public.invoices_list FROM anon, authenticated, public, service_role;
+GRANT SELECT ON public.invoices_list TO authenticated;

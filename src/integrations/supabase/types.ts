@@ -719,6 +719,27 @@ export type Database = {
           },
         ]
       }
+      migrace_log: {
+        Row: {
+          applied_at: string
+          applied_by: string
+          sha256: string | null
+          version: string
+        }
+        Insert: {
+          applied_at?: string
+          applied_by?: string
+          sha256?: string | null
+          version: string
+        }
+        Update: {
+          applied_at?: string
+          applied_by?: string
+          sha256?: string | null
+          version?: string
+        }
+        Relationships: []
+      }
       notifications: {
         Row: {
           body: string | null
@@ -1710,10 +1731,14 @@ export type Database = {
           obdobi_do: string | null
           obdobi_od: string | null
           odberatel: string | null
+          opravuje_cislo: string | null
+          opravuje_id: string | null
           pdf_path: string | null
           po_splatnosti: boolean | null
           polozek: number | null
           status: Database["public"]["Enums"]["invoice_status"] | null
+          storno_duvod: string | null
+          stornovan_dokladem: string | null
           subject_id: string | null
           subtotal: number | null
           total: number | null
@@ -1721,6 +1746,20 @@ export type Database = {
           variabilni_symbol: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "invoices_opravuje_id_fkey"
+            columns: ["opravuje_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_opravuje_id_fkey"
+            columns: ["opravuje_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_list"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "invoices_subject_id_fkey"
             columns: ["subject_id"]
