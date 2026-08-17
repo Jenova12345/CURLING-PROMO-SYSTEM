@@ -88,6 +88,28 @@ describe('souhrnSerie — co uvidí klient', () => {
     expect(s.split(',').length).toBeLessThan(12);
   });
 
+  it('strop platí na CELÝ souhrn, ne na každý důvod zvlášť', () => {
+    // Se stropem počítaným po skupinách vyrobily tři důvody 8 + 8 + 8 = 24 dat
+    // a strop nechránil před ničím. Toast přitom nemá scroll ani pro jeden.
+    const davka = (od: number, duvod: 'kolize' | 'mimo_otviraci_dobu' | 'neexistujici_cas') =>
+      Array.from({ length: 10 }, (_, i) =>
+        preskoceny(`2026-04-${String(od + i).padStart(2, '0')}`, duvod));
+    const s = souhrnSerie(vysledek({
+      skipped: [...davka(1, 'kolize'), ...davka(11, 'mimo_otviraci_dobu'), ...davka(21, 'neexistujici_cas')],
+    }));
+
+    // Data se poznají podle tvaru „d. M." — spočítej je napříč celou větou.
+    const pocetDat = (s.match(/\d{1,2}\.\s\d{1,2}\./g) ?? []).length;
+    expect(pocetDat).toBeLessThanOrEqual(8);
+
+    // A zároveň se nesmí ztratit informace: každý důvod je pořád vidět.
+    expect(s).toContain('Přeskočeno kvůli kolizi');
+    expect(s).toContain('Mimo otevírací dobu');
+    expect(s).toContain('letní čas');
+    // Důvod, na který rozpočet nezbyl, hlásí aspoň počet — a česky.
+    expect(s).toContain('10 termínů');
+  });
+
   it('když ISO chybí, spadne zpátky na text ze serveru místo na prázdno', () => {
     const s = souhrnSerie(vysledek({
       skipped: [{ iso: '', date: '15.04.2026', duvod: 'kolize', reason: 'x' }],

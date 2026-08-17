@@ -396,6 +396,13 @@ BEGIN
   IF _end_loc::date <> _start_loc::date THEN
     RAISE EXCEPTION 'Opakovaná rezervace nesmí přesáhnout půlnoc.';
   END IF;
+  -- Konec před začátkem je CHYBA ZADÁNÍ a musí spadnout hned. Kdyby se to
+  -- nechalo na cyklus, sebral by to jako každý jiný termín přeskočený níž a
+  -- uživatel by dostal „posouvají se hodiny na letní čas" u všech dvaceti
+  -- termínů — vysvětlení, které s jeho překlepem nemá nic společného.
+  IF _end_loc <= _start_loc THEN
+    RAISE EXCEPTION 'Konec rezervace musí být po jejím začátku.';
+  END IF;
 
   FOR _day IN SELECT d::date FROM generate_series(_first, p_until, interval '1 day') d LOOP
     CONTINUE WHEN NOT (extract(isodow FROM _day)::int = ANY (p_weekdays));
@@ -416,6 +423,9 @@ BEGIN
     -- P0001, tedy chyba zadání, a shodilo by to CELOU sérii. Přitom je to důvod
     -- vázaný na jeden jediný termín. (Dosažitelné jen když hala v tu hodinu
     -- otvírá, ale právě takové případy sérii rozbíjejí nejošklivěji.)
+    --
+    -- Že jde OPRAVDU o letní čas a ne o obrácené zadání, hlídá kontrola
+    -- `_end_loc <= _start_loc` nahoře: bez ní by sem spadl každý překlep.
     IF _e <= _s THEN
       _skipped := _skipped || jsonb_build_object(
         'iso',    to_char(_day, 'YYYY-MM-DD'),

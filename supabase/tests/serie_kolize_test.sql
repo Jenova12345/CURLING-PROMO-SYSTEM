@@ -423,6 +423,28 @@ BEGIN
     '(TIMESTAMP ''2032-09-06 11:00'' AT TIME ZONE ''Europe/Prague''), '
     'ARRAY[2]::int[], DATE ''2032-09-06'', %L)', _sheet, _subjekt),
     'nevychází ani jeden z vybraných dnů', 'vybraný den mimo období řekne rovnou proč');
+
+  -- Konec před začátkem. Kdyby se to nechalo na cyklus, sebral by to guard na
+  -- letní čas a uživatel by u KAŽDÉHO termínu četl, že se posouvají hodiny.
+  -- Test proto tvrdí i to, že se o letním čase NEMLUVÍ.
+  PERFORM pg_temp.ocekavej_chybu(format(
+    'SELECT public.create_booking_series(ARRAY[%L]::uuid[], ''training'', ''T'', '
+    '(TIMESTAMP ''2032-09-06 11:00'' AT TIME ZONE ''Europe/Prague''), '
+    '(TIMESTAMP ''2032-09-06 10:00'' AT TIME ZONE ''Europe/Prague''), '
+    'ARRAY[1]::int[], DATE ''2032-09-27'', %L)', _sheet, _subjekt),
+    'po jejím začátku', 'konec před začátkem se odmítne jako chyba zadání');
+
+  DECLARE _hlaska text;
+  BEGIN
+    BEGIN
+      PERFORM public.create_booking_series(ARRAY[_sheet]::uuid[], 'training', 'T',
+        (TIMESTAMP '2032-09-06 11:00' AT TIME ZONE 'Europe/Prague'),
+        (TIMESTAMP '2032-09-06 10:00' AT TIME ZONE 'Europe/Prague'),
+        ARRAY[1]::int[], DATE '2032-09-27', _subjekt);
+    EXCEPTION WHEN OTHERS THEN _hlaska := SQLERRM;
+    END;
+    PERFORM pg_temp.tvrd(_hlaska NOT ILIKE '%letní čas%', 'a nesvádí to na letní čas');
+  END;
 END $$;
 
 ROLLBACK;
