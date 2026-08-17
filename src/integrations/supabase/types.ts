@@ -490,8 +490,14 @@ export type Database = {
           opravuje_id: string | null
           paid_at: string | null
           paid_by: string | null
+          pdf_attempts: number
+          pdf_bytes: number | null
+          pdf_claimed_at: string | null
+          pdf_error: string | null
+          pdf_generated_at: string | null
           pdf_path: string | null
           pdf_sha256: string | null
+          pdf_status: Database["public"]["Enums"]["pdf_status"] | null
           rounding_amount: number
           status: Database["public"]["Enums"]["invoice_status"]
           storno_duvod: string | null
@@ -533,8 +539,14 @@ export type Database = {
           opravuje_id?: string | null
           paid_at?: string | null
           paid_by?: string | null
+          pdf_attempts?: number
+          pdf_bytes?: number | null
+          pdf_claimed_at?: string | null
+          pdf_error?: string | null
+          pdf_generated_at?: string | null
           pdf_path?: string | null
           pdf_sha256?: string | null
+          pdf_status?: Database["public"]["Enums"]["pdf_status"] | null
           rounding_amount?: number
           status?: Database["public"]["Enums"]["invoice_status"]
           storno_duvod?: string | null
@@ -576,8 +588,14 @@ export type Database = {
           opravuje_id?: string | null
           paid_at?: string | null
           paid_by?: string | null
+          pdf_attempts?: number
+          pdf_bytes?: number | null
+          pdf_claimed_at?: string | null
+          pdf_error?: string | null
+          pdf_generated_at?: string | null
           pdf_path?: string | null
           pdf_sha256?: string | null
+          pdf_status?: Database["public"]["Enums"]["pdf_status"] | null
           rounding_amount?: number
           status?: Database["public"]["Enums"]["invoice_status"]
           storno_duvod?: string | null
@@ -718,27 +736,6 @@ export type Database = {
             referencedColumns: ["user_id"]
           },
         ]
-      }
-      migrace_log: {
-        Row: {
-          applied_at: string
-          applied_by: string
-          sha256: string | null
-          version: string
-        }
-        Insert: {
-          applied_at?: string
-          applied_by?: string
-          sha256?: string | null
-          version: string
-        }
-        Update: {
-          applied_at?: string
-          applied_by?: string
-          sha256?: string | null
-          version?: string
-        }
-        Relationships: []
       }
       notifications: {
         Row: {
@@ -1733,7 +1730,10 @@ export type Database = {
           odberatel: string | null
           opravuje_cislo: string | null
           opravuje_id: string | null
+          pdf_attempts: number | null
+          pdf_error: string | null
           pdf_path: string | null
+          pdf_status: Database["public"]["Enums"]["pdf_status"] | null
           po_splatnosti: boolean | null
           polozek: number | null
           status: Database["public"]["Enums"]["invoice_status"] | null
@@ -2243,6 +2243,13 @@ export type Database = {
           subject_name: string
         }[]
       }
+      claim_invoice_pdf: {
+        Args: { _limit?: number }
+        Returns: {
+          cislo: string
+          id: string
+        }[]
+      }
       create_booking: {
         Args: {
           p_end: string
@@ -2284,6 +2291,10 @@ export type Database = {
         Returns: string
       }
       delete_invoice_draft: { Args: { _invoice_id: string }; Returns: number }
+      fail_invoice_pdf: {
+        Args: { _chyba: string; _invoice_id: string }
+        Returns: undefined
+      }
       fakturovatelne_rezervace: {
         Args: { _do: string; _od: string; _subject_id: string }
         Returns: {
@@ -2309,6 +2320,15 @@ export type Database = {
           name: string
           type: Database["public"]["Enums"]["subject_type"]
         }[]
+      }
+      finish_invoice_pdf: {
+        Args: {
+          _bytes: number
+          _invoice_id: string
+          _path: string
+          _sha256: string
+        }
+        Returns: undefined
       }
       get_user_role: {
         Args: { _user_id: string }
@@ -2386,6 +2406,7 @@ export type Database = {
         }
         Returns: number
       }
+      retry_invoice_pdf: { Args: { _invoice_id: string }; Returns: undefined }
       set_invoice_counter: {
         Args: { _hodnota: number; _rada: string; _rok: number }
         Returns: number
@@ -2423,6 +2444,7 @@ export type Database = {
         | "tournament"
       invoice_kind: "klub" | "komercni"
       invoice_status: "koncept" | "vystaveno" | "zaplaceno" | "stornovano"
+      pdf_status: "pending" | "generating" | "ready" | "failed"
       reservation_status: "confirmed" | "cancelled"
       shift_status: "open" | "pending" | "claimed" | "completed" | "cancelled"
       subject_rep_level: "rep" | "member"
@@ -2578,6 +2600,7 @@ export const Constants = {
       ],
       invoice_kind: ["klub", "komercni"],
       invoice_status: ["koncept", "vystaveno", "zaplaceno", "stornovano"],
+      pdf_status: ["pending", "generating", "ready", "failed"],
       reservation_status: ["confirmed", "cancelled"],
       shift_status: ["open", "pending", "claimed", "completed", "cancelled"],
       subject_rep_level: ["rep", "member"],

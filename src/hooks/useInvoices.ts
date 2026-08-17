@@ -121,6 +121,42 @@ export const useInvoices = () => {
   });
 
   /**
+   * Odkaz ke stažení serverového PDF.
+   *
+   * Bucket je privátní, takže odkaz podepisuje Edge funkce — klient si ho
+   * vyrobit nemůže a ani nemá. Platnost je krátká (5 minut): má posloužit ke
+   * stažení, ne kolovat e-mailem.
+   */
+  const stahnoutPdf = useMutation({
+    mutationFn: async (invoiceId: string) => {
+      const { data, error } = await supabase.functions.invoke('invoice-pdf-url', {
+        body: { invoice_id: invoiceId },
+      });
+      // `functions.invoke` schová tělo chybové odpovědi do obecné hlášky, takže
+      // se z něj konkrétní důvod („PDF se ještě generuje") dolovává ručně —
+      // jinak by admin viděl jen „Edge Function returned a non-2xx status code".
+      if (error) {
+        let duvod = '';
+        const ctx = (error as { context?: Response }).context;
+        if (ctx && typeof ctx.json === 'function') {
+          try { duvod = (await ctx.json())?.error ?? ''; } catch { duvod = ''; }
+        }
+        throw new Error(duvod || 'Odkaz ke stažení se nepodařilo získat.');
+      }
+      return (data as { url: string }).url;
+    },
+  });
+
+  /** Vrátí doklad do fronty na PDF (po opravě příčiny selhání). */
+  const znovuPdf = useMutation({
+    mutationFn: async (invoiceId: string) => {
+      const { error } = await supabase.rpc('retry_invoice_pdf', { _invoice_id: invoiceId });
+      if (error) throw chyba(error, 'Generování se nepodařilo spustit.');
+    },
+    onSuccess: invalidate,
+  });
+
+  /**
    * Storno vystaveného dokladu. Nemaže nic — vystaví OPRAVNÝ DOKLAD, převede
    * originál do stavu „stornováno" a uvolní rezervace zpět k fakturaci.
    */
@@ -157,9 +193,12 @@ export const useInvoices = () => {
     markPaid: markPaid.mutateAsync,
     unmarkPaid: unmarkPaid.mutateAsync,
     storno: storno.mutateAsync,
+    stahnoutPdf: stahnoutPdf.mutateAsync,
+    znovuPdf: znovuPdf.mutateAsync,
     isBusy: createClubDraft.isPending || createCommercialDraft.isPending
       || issue.isPending || deleteDraft.isPending
-      || markPaid.isPending || unmarkPaid.isPending || storno.isPending,
+      || markPaid.isPending || unmarkPaid.isPending || storno.isPending
+      || stahnoutPdf.isPending || znovuPdf.isPending,
   };
 };
 

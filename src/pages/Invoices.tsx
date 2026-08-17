@@ -3,7 +3,7 @@ import { addMonths, endOfMonth, format, startOfMonth, subMonths } from 'date-fns
 import { cs } from 'date-fns/locale';
 import {
   FileText, Printer, Trash2, Check, AlertTriangle, ChevronLeft, ChevronRight, Scale,
-  Banknote, Undo2, FileMinus,
+  Banknote, Undo2, FileMinus, Download, Loader2, RefreshCw,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -58,11 +58,34 @@ const StavBadge = ({ stav, poSplatnosti, opravny }: {
 
 
 
+/**
+ * Stav serverového PDF. Tři různé situace vypadaly na obrazovce stejně — jako
+ * „chybí odkaz" — a první pomalý render se pak čte jako rozbitá aplikace.
+ */
+const PdfStav = ({ stav, chyba }: { stav: string | null; chyba: string | null }) => {
+  if (stav === 'ready') return null;   // hotové PDF se pozná podle tlačítka Stáhnout
+  if (stav === 'failed') {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-destructive" title={chyba ?? undefined}>
+        <AlertTriangle className="h-3 w-3" aria-hidden="true" /> PDF selhalo
+      </span>
+    );
+  }
+  if (stav === 'pending' || stav === 'generating') {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> PDF se generuje
+      </span>
+    );
+  }
+  return null;
+};
+
 const Invoices = () => {
   const { isAdmin } = useAuth();
   const { toast } = useToast();
   const { invoices, isLoading, error, issue, deleteDraft, markPaid, unmarkPaid,
-          storno: stornoInvoice, isBusy } = useInvoices();
+          storno: stornoInvoice, stahnoutPdf, znovuPdf, isBusy } = useInvoices();
   const [detailId, setDetailId] = useState<string | null>(null);
   const [platba, setPlatba] = useState<{ id: string; popis: string } | null>(null);
   const [datumUhrady, setDatumUhrady] = useState(dnesPrahaProInput);
@@ -158,6 +181,32 @@ const Invoices = () => {
       });
     } catch (e) {
       toast({ title: 'Storno se nepovedlo', description: (e as Error).message, variant: 'destructive' });
+    }
+  };
+
+  const stahni = async (id: string) => {
+    try {
+      const odkaz = await stahnoutPdf(id);
+      // Nové okno, ne `location.href`: podepsaná URL vede na stažení souboru
+      // a přesměrování celé stránky by adminovi zahodilo rozdělanou práci.
+      window.open(odkaz, '_blank', 'noopener');
+    } catch (e) {
+      toast({
+        title: 'PDF zatím není',
+        // Hláška z funkce je konkrétní („PDF se ještě generuje…") a rovnou
+        // nabízí náhradní cestu, tak se ukazuje tak, jak přišla.
+        description: (e as Error).message,
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const zkusZnovu = async (id: string, cislo: string) => {
+    try {
+      await znovuPdf(id);
+      toast({ title: `Doklad ${cislo} je zpátky ve frontě`, description: 'Generování se spustí při dalším běhu.' });
+    } catch (e) {
+      toast({ title: 'Nepovedlo se', description: (e as Error).message, variant: 'destructive' });
     }
   };
 
@@ -327,7 +376,10 @@ const Invoices = () => {
                     <TableCell className="whitespace-nowrap">{den(f.datum_splatnosti)}</TableCell>
                     <TableCell className="whitespace-nowrap">{den(f.datum_uhrady)}</TableCell>
                     <TableCell className="text-right font-semibold">{fmtKc(Number(f.total_rounded ?? 0))}</TableCell>
-                    <TableCell><StavBadge stav={f.status ?? ''} poSplatnosti={f.po_splatnosti} opravny={!!f.opravuje_id} /></TableCell>
+                    <TableCell><div className="space-y-1">
+                        <StavBadge stav={f.status ?? ''} poSplatnosti={f.po_splatnosti} opravny={!!f.opravuje_id} />
+                        <div><PdfStav stav={f.pdf_status} chyba={f.pdf_error} /></div>
+                      </div></TableCell>
                     <TableCell className="text-right">
                       {/* stopPropagation: řádek otevírá detail, tlačítka dělají něco jiného */}
                       <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
@@ -373,6 +425,20 @@ const Invoices = () => {
                                                         Number(f.total_rounded ?? 0))}
                           >
                             <FileMinus className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Stornovat
+                          </Button>
+                        )}
+                        {f.pdf_status === 'ready' && (
+                          <Button size="sm" variant="outline" disabled={isBusy}
+                                  aria-label={`Stáhnout PDF dokladu ${f.cislo ?? ''}`}
+                                  onClick={() => stahni(f.id!)}>
+                            <Download className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> PDF
+                          </Button>
+                        )}
+                        {f.pdf_status === 'failed' && (
+                          <Button size="sm" variant="ghost" disabled={isBusy}
+                                  aria-label={`Zkusit vygenerovat PDF dokladu ${f.cislo ?? ''} znovu`}
+                                  onClick={() => zkusZnovu(f.id!, f.cislo ?? '')}>
+                            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
                           </Button>
                         )}
                         <Button size="sm" variant="outline" onClick={() => setDetailId(f.id)}>
@@ -555,8 +621,19 @@ const Invoices = () => {
                   </>
                 ) : (
                   <>
+                    {/* DVĚ CESTY K DOKLADU, obě zůstávají. Serverové PDF je to,
+                        co umí i automatika bez člověka u obrazovky; tisk je
+                        záložka pro chvíli, kdy fronta stojí nebo render selhal.
+                        Fallback se ruší až po prokliknutí na betě (PM 18. 8.). */}
+                    {detail.invoice.pdf_status === 'ready' && (
+                      <Button variant="outline" disabled={isBusy}
+                              onClick={() => stahni(detail.invoice.id)}>
+                        <Download className="mr-1 h-4 w-4" aria-hidden="true" /> Stáhnout PDF
+                      </Button>
+                    )}
                     <Button variant="outline" onClick={tisk}>
-                      <Printer className="mr-1 h-4 w-4" aria-hidden="true" /> Tisk / uložit jako PDF
+                      <Printer className="mr-1 h-4 w-4" aria-hidden="true" />
+                      {detail.invoice.pdf_status === 'ready' ? 'Tisk z obrazovky' : 'Tisk / uložit jako PDF'}
                     </Button>
                     {detail.invoice.status === 'vystaveno' && (
                       <Button
