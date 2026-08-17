@@ -3,7 +3,7 @@ import { addMonths, endOfMonth, format, startOfMonth, subMonths } from 'date-fns
 import { cs } from 'date-fns/locale';
 import {
   FileText, Printer, Trash2, Check, AlertTriangle, ChevronLeft, ChevronRight, Scale,
-  Banknote, Undo2,
+  Banknote, Undo2, FileMinus,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -56,10 +56,14 @@ const StavBadge = ({ stav, poSplatnosti }: { stav: string; poSplatnosti: boolean
 const Invoices = () => {
   const { isAdmin } = useAuth();
   const { toast } = useToast();
-  const { invoices, isLoading, error, issue, deleteDraft, markPaid, unmarkPaid, isBusy } = useInvoices();
+  const { invoices, isLoading, error, issue, deleteDraft, markPaid, unmarkPaid,
+          storno: stornoInvoice, isBusy } = useInvoices();
   const [detailId, setDetailId] = useState<string | null>(null);
   const [platba, setPlatba] = useState<{ id: string; popis: string } | null>(null);
   const [datumUhrady, setDatumUhrady] = useState(dnesPrahaProInput);
+  const [storno, setStorno] = useState<
+    { id: string; cislo: string; odberatel: string; castka: number } | null>(null);
+  const [stornoDuvod, setStornoDuvod] = useState('');
   const { data: detail, isLoading: detailLoading } = useInvoiceDetail(detailId);
 
   // Kontrolní součet za měsíc. Vlastní období, ne to z „Kdo dluží": tady se
@@ -126,6 +130,29 @@ const Invoices = () => {
       // Hláška z databáze je konkrétní („úhrada nemůže být dřív, než byl doklad
       // vystavený"), takže se ukazuje tak, jak přišla.
       toast({ title: 'Úhradu nelze zapsat', description: (e as Error).message, variant: 'destructive' });
+    }
+  };
+
+  const otevriStorno = (id: string, cislo: string, odberatel: string, castka: number) => {
+    setStornoDuvod('');
+    setStorno({ id, cislo, odberatel, castka });
+  };
+
+  const provedStorno = async () => {
+    if (!storno) return;
+    try {
+      const v = await stornoInvoice({ invoiceId: storno.id, duvod: stornoDuvod.trim() || undefined });
+      setStorno(null);
+      if (detailId === storno.id) setDetailId(null);
+      toast({
+        title: `Doklad ${v.stornovane_cislo} stornován`,
+        // Číslo opravného dokladu je to, co admin potřebuje dál (posílá ho
+        // odběrateli), a počet uvolněných rezervací říká, co se vrátilo k fakturaci.
+        description: `Vystaven opravný doklad ${v.opravny_cislo} na ${fmtKc(Number(v.castka))}. `
+          + `Uvolnilo se ${v.uvolneno_rezervaci} rezervací — půjdou vyfakturovat znovu.`,
+      });
+    } catch (e) {
+      toast({ title: 'Storno se nepovedlo', description: (e as Error).message, variant: 'destructive' });
     }
   };
 
@@ -331,6 +358,18 @@ const Invoices = () => {
                             <Undo2 className="h-3.5 w-3.5" aria-hidden="true" />
                           </Button>
                         )}
+                        {/* Storno jde i u ZAPLACENÉ faktury (rozhodnutí PM) — omylem
+                            zaplacený doklad je přesně ten případ, kdy je potřeba. */}
+                        {(f.status === 'vystaveno' || f.status === 'zaplaceno') && (
+                          <Button
+                            size="sm" variant="ghost" disabled={isBusy}
+                            aria-label={`Stornovat doklad ${f.cislo ?? ''} — ${f.odberatel}`}
+                            onClick={() => otevriStorno(f.id!, f.cislo ?? '', f.odberatel ?? '',
+                                                        Number(f.total_rounded ?? 0))}
+                          >
+                            <FileMinus className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Stornovat
+                          </Button>
+                        )}
                         <Button size="sm" variant="outline" onClick={() => setDetailId(f.id)}>
                           Detail
                         </Button>
@@ -343,6 +382,40 @@ const Invoices = () => {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={!!storno} onOpenChange={(o) => !o && setStorno(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Stornovat doklad</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            {storno?.cislo} · {storno?.odberatel} · {fmtKc(storno?.castka ?? 0)}
+          </p>
+          {/* Co se stane, řečeno dopředu. Storno není mazání a admin musí vědět,
+              že mu vznikne DRUHÝ doklad s vlastním číslem, který se posílá dál. */}
+          <div className="rounded-md border bg-muted/40 p-3 text-sm space-y-1">
+            <p>Vystaví se <strong>opravný doklad</strong> na tutéž částku, s vlastním číslem.</p>
+            <p>Původní faktura zůstane v přehledu jako <strong>stornovaná</strong> — nemaže se.</p>
+            <p>Rezervace se <strong>uvolní</strong> a půjdou vyfakturovat znovu.</p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="storno-duvod">Důvod storna</Label>
+            <Input
+              id="storno-duvod"
+              value={stornoDuvod}
+              placeholder="Např. klub akci odvolal"
+              onChange={(e) => setStornoDuvod(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Nepovinný, ale za půl roku se ptá právě na tohle. Zapíše se na opravný doklad.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setStorno(null)}>Zrušit</Button>
+            <Button variant="destructive" disabled={isBusy} onClick={provedStorno}>
+              <FileMinus className="mr-1 h-4 w-4" aria-hidden="true" /> Stornovat doklad
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!platba} onOpenChange={(o) => !o && setPlatba(null)}>
         <DialogContent className="max-w-md">

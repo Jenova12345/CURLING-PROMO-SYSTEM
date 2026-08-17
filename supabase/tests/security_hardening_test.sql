@@ -363,9 +363,33 @@ BEGIN
    WHERE g.table_schema = 'public' AND c.relkind = 'v'
      AND (g.grantee = 'anon'
           OR (g.grantee IN ('authenticated', 'PUBLIC')
-              AND g.privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')));
+              AND g.privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')))
+     -- JEDINÁ POVOLENÁ VÝJIMKA, a jen na ČTENÍ: `clubs_public` vydává názvy klubů
+     -- do rozbalovátka v registraci, což je veřejná stránka — bez toho by si
+     -- uchazeč klub nevybral. Vydává jen `id` a `name`, nikdy IČO, adresu ani
+     -- sazby, a zápis nemá. Výjimka je jmenovitá schválně: kdyby anonovi zpřístupnil
+     -- pohled někdo příště, tenhle test se ozve dál.
+     AND NOT (g.table_name = 'clubs_public' AND g.grantee = 'anon' AND g.privilege_type = 'SELECT');
   PERFORM pg_temp.tvrd(_spatne IS NULL,
     format('žádný pohled není zapisovatelný ani přístupný anonovi (%s)', COALESCE(_spatne, 'čisté')));
+END $$;
+
+-- Ta výjimka výš musí zůstat úzká. Kdyby `clubs_public` někdy začal vydávat víc
+-- než id a název, výjimka by tiše propustila i to — tak se hlídá i jeho obsah.
+DO $$
+DECLARE _sloupce text;
+BEGIN
+  SELECT string_agg(column_name, ',' ORDER BY ordinal_position) INTO _sloupce
+    FROM information_schema.columns
+   WHERE table_schema = 'public' AND table_name = 'clubs_public';
+  PERFORM pg_temp.tvrd(_sloupce = 'id,name',
+    format('veřejný pohled clubs_public vydává jen id a název (má: %s)', COALESCE(_sloupce, 'neexistuje')));
+
+  PERFORM pg_temp.tvrd(
+    NOT EXISTS (SELECT 1 FROM information_schema.role_table_grants
+                 WHERE table_name = 'clubs_public' AND grantee = 'anon'
+                   AND privilege_type <> 'SELECT'),
+    'a nepřihlášený do něj nesmí zapisovat');
 END $$;
 
 -- Citlivá pole profilu nesmí vytéct ŽÁDNÝM pohledem, ne jen tabulkou.

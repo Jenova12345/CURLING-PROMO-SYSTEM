@@ -113,6 +113,30 @@ export const useInvoices = () => {
     onSuccess: invalidate,
   });
 
+  /**
+   * Storno vystaveného dokladu. Nemaže nic — vystaví OPRAVNÝ DOKLAD, převede
+   * originál do stavu „stornováno" a uvolní rezervace zpět k fakturaci.
+   */
+  const storno = useMutation({
+    mutationFn: async (p: { invoiceId: string; duvod?: string }) => {
+      const { data, error } = await supabase.rpc('storno_invoice', {
+        _invoice_id: p.invoiceId, _duvod: p.duvod ?? undefined,
+      });
+      if (error) throw chyba(error, 'Doklad se nepodařilo stornovat.');
+      return data as {
+        opravny_id: string; opravny_cislo: string;
+        stornovane_cislo: string; castka: number; uvolneno_rezervaci: number;
+      };
+    },
+    // Storno sahá i na rezervace (uvolní zámek), takže kalendář a přehledy
+    // postavené nad nimi jsou po něm staré.
+    onSuccess: () => {
+      invalidate();
+      qc.invalidateQueries({ queryKey: ['reservations'] });
+      qc.invalidateQueries({ queryKey: ['billing-reconcile'] });
+    },
+  });
+
   return {
     invoices,
     isLoading,
@@ -125,9 +149,10 @@ export const useInvoices = () => {
     deleteDraft: deleteDraft.mutateAsync,
     markPaid: markPaid.mutateAsync,
     unmarkPaid: unmarkPaid.mutateAsync,
+    storno: storno.mutateAsync,
     isBusy: createClubDraft.isPending || createCommercialDraft.isPending
       || issue.isPending || deleteDraft.isPending
-      || markPaid.isPending || unmarkPaid.isPending,
+      || markPaid.isPending || unmarkPaid.isPending || storno.isPending,
   };
 };
 

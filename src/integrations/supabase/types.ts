@@ -487,12 +487,14 @@ export type Database = {
           odberatel_dic: string | null
           odberatel_ico: string | null
           odberatel_nazev: string | null
+          opravuje_id: string | null
           paid_at: string | null
           paid_by: string | null
           pdf_path: string | null
           pdf_sha256: string | null
           rounding_amount: number
           status: Database["public"]["Enums"]["invoice_status"]
+          storno_duvod: string | null
           subject_id: string
           subtotal: number
           total: number
@@ -528,12 +530,14 @@ export type Database = {
           odberatel_dic?: string | null
           odberatel_ico?: string | null
           odberatel_nazev?: string | null
+          opravuje_id?: string | null
           paid_at?: string | null
           paid_by?: string | null
           pdf_path?: string | null
           pdf_sha256?: string | null
           rounding_amount?: number
           status?: Database["public"]["Enums"]["invoice_status"]
+          storno_duvod?: string | null
           subject_id: string
           subtotal?: number
           total?: number
@@ -569,12 +573,14 @@ export type Database = {
           odberatel_dic?: string | null
           odberatel_ico?: string | null
           odberatel_nazev?: string | null
+          opravuje_id?: string | null
           paid_at?: string | null
           paid_by?: string | null
           pdf_path?: string | null
           pdf_sha256?: string | null
           rounding_amount?: number
           status?: Database["public"]["Enums"]["invoice_status"]
+          storno_duvod?: string | null
           subject_id?: string
           subtotal?: number
           total?: number
@@ -633,6 +639,20 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "profiles_self"
             referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "invoices_opravuje_id_fkey"
+            columns: ["opravuje_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_opravuje_id_fkey"
+            columns: ["opravuje_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_list"
+            referencedColumns: ["id"]
           },
           {
             foreignKeyName: "invoices_paid_by_fkey"
@@ -2124,6 +2144,7 @@ export type Database = {
       billing_health: {
         Args: never
         Returns: {
+          opravne_nesedi: number
           polozky_mimo_obdobi: number
           posledni_vystaveni: string
           radky_bez_rezervace: number
@@ -2329,6 +2350,10 @@ export type Database = {
       set_invoice_counter: {
         Args: { _hodnota: number; _rada: string; _rok: number }
         Returns: number
+      }
+      storno_invoice: {
+        Args: { _duvod?: string; _invoice_id: string }
+        Returns: Json
       }
       unmark_invoice_paid: { Args: { _invoice_id: string }; Returns: undefined }
       update_booking: {
