@@ -3,7 +3,7 @@ import { addMonths, endOfMonth, format, startOfMonth, subMonths } from 'date-fns
 import { cs } from 'date-fns/locale';
 import {
   FileText, Printer, Trash2, Check, AlertTriangle, ChevronLeft, ChevronRight, Scale,
-  Banknote, Undo2, FileMinus, Download, Loader2, RefreshCw,
+  Banknote, Undo2, FileMinus, Download, Loader2, RefreshCw, Archive,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -85,7 +85,7 @@ const Invoices = () => {
   const { isAdmin } = useAuth();
   const { toast } = useToast();
   const { invoices, isLoading, error, issue, deleteDraft, markPaid, unmarkPaid,
-          storno: stornoInvoice, stahnoutPdf, znovuPdf, isBusy } = useInvoices();
+          storno: stornoInvoice, stahnoutPdf, znovuPdf, mesicniZip, isBusy } = useInvoices();
   const [detailId, setDetailId] = useState<string | null>(null);
   const [platba, setPlatba] = useState<{ id: string; popis: string } | null>(null);
   const [datumUhrady, setDatumUhrady] = useState(dnesPrahaProInput);
@@ -201,6 +201,25 @@ const Invoices = () => {
     }
   };
 
+  const stahniMesic = async () => {
+    try {
+      const blob = await mesicniZip({ rok: mesic.getFullYear(), mesic: mesic.getMonth() + 1 });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `doklady-${format(mesic, 'yyyy-MM')}.zip`;
+      a.click();
+      // Bez uvolnění by blob držel v paměti celý archiv až do zavření karty.
+      URL.revokeObjectURL(url);
+      toast({
+        title: 'Archiv stažen',
+        description: 'Uvnitř je i prehled.csv — a v něm doklady, které se do archivu nedostaly.',
+      });
+    } catch (e) {
+      toast({ title: 'Export se nepovedl', description: (e as Error).message, variant: 'destructive' });
+    }
+  };
+
   const zkusZnovu = async (id: string, cislo: string) => {
     try {
       await znovuPdf(id);
@@ -259,6 +278,12 @@ const Invoices = () => {
             <Button variant="outline" size="icon" aria-label="Další měsíc"
                     onClick={() => setMesic((m) => addMonths(m, 1))}>
               <ChevronRight className="h-4 w-4" />
+            </Button>
+            {/* Export sedí u přepínače měsíce schválně: stahuje se PRÁVĚ ten
+                měsíc, který je vidět, ne nějaký zvlášť nastavený. */}
+            <Button variant="outline" size="sm" disabled={isBusy} onClick={stahniMesic}
+                    aria-label={`Stáhnout doklady za ${format(mesic, 'LLLL yyyy', { locale: cs })} jako ZIP`}>
+              <Archive className="mr-1 h-4 w-4" aria-hidden="true" /> ZIP pro účetní
             </Button>
           </div>
         </CardHeader>

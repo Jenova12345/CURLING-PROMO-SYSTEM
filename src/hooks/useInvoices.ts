@@ -147,6 +147,27 @@ export const useInvoices = () => {
     },
   });
 
+  /**
+   * Měsíční ZIP pro účetní. Vrací bajty, ne odkaz: archiv se skládá až na
+   * vyžádání a nemá kde ležet.
+   */
+  const mesicniZip = useMutation({
+    mutationFn: async (p: { rok: number; mesic: number }) => {
+      const { data, error } = await supabase.functions.invoke('invoice-zip', {
+        body: { rok: p.rok, mesic: p.mesic },
+      });
+      if (error) {
+        let duvod = '';
+        const ctx = (error as { context?: Response }).context;
+        if (ctx && typeof ctx.json === 'function') {
+          try { duvod = (await ctx.json())?.error ?? ''; } catch { duvod = ''; }
+        }
+        throw new Error(duvod || 'Export se nepodařilo sestavit.');
+      }
+      return data as Blob;
+    },
+  });
+
   /** Vrátí doklad do fronty na PDF (po opravě příčiny selhání). */
   const znovuPdf = useMutation({
     mutationFn: async (invoiceId: string) => {
@@ -195,10 +216,11 @@ export const useInvoices = () => {
     storno: storno.mutateAsync,
     stahnoutPdf: stahnoutPdf.mutateAsync,
     znovuPdf: znovuPdf.mutateAsync,
+    mesicniZip: mesicniZip.mutateAsync,
     isBusy: createClubDraft.isPending || createCommercialDraft.isPending
       || issue.isPending || deleteDraft.isPending
       || markPaid.isPending || unmarkPaid.isPending || storno.isPending
-      || stahnoutPdf.isPending || znovuPdf.isPending,
+      || stahnoutPdf.isPending || znovuPdf.isPending || mesicniZip.isPending,
   };
 };
 
