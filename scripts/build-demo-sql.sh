@@ -24,6 +24,13 @@ OUT="demo_setup.sql"
 MIGRATIONS_DIR="supabase/migrations"
 SEED="supabase/seed.sql"
 RESET="supabase/demo/00_reset_demo.sql"
+MIGRACE_LOG="supabase/demo/01_migrace_log.sql"
+
+# Týž součet jako v build-upgrade-sql.sh — aby se evidence z obou cest shodovala.
+soucet() {
+  if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1
+  else sha256sum "$1" | cut -d' ' -f1; fi
+}
 FINALIZE="supabase/demo/99_finalize_demo.sql"
 # Za touhle migrací musí skončit transakce (nová hodnota enumu)
 ENUM_MIGRATION="20260731100000_event_type_tournament.sql"
@@ -63,6 +70,22 @@ HEADER
     if [ "$name" = "$ENUM_MIGRATION" ]; then
       printf '\n-- Nová hodnota enumu musí být potvrzená dřív, než ji začne kdokoli používat.\nCOMMIT;\nBEGIN;\n'
     fi
+  done
+
+  # MIGRAČNÍ HISTORIE. Reset zahodí i evidenci, takže se ustavuje tady — a rovnou
+  # se do ní zapíšou VŠECHNY migrace, které tenhle soubor právě obsahuje. Je to
+  # pravdivé z definice: co reset pustil, to proběhlo.
+  #
+  # Tímhle se demo/beta překlápí na inkrementální nasazování: od téhle chvíle
+  # stačí `upgrade.sql`, který pustí jen nové migrace a nic nemaže. Reset je pak
+  # poslední, ne první krok každého nasazení — a reálné registrace klubů přežijí.
+  part "01_migrace_log.sql — ustavení migrační historie"
+  cat "$MIGRACE_LOG"
+  printf '\n-- Co tenhle soubor právě nasadil (generováno):\n'
+  for file in "$MIGRATIONS_DIR"/*.sql; do
+    v="$(basename "$file" .sql)"
+    printf "INSERT INTO public.migrace_log (version, sha256) VALUES ('%s', '%s')\n  ON CONFLICT (version) DO NOTHING;\n" \
+      "$v" "$(soucet "$file")"
   done
 
   part "seed.sql (fiktivní demo data)"

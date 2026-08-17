@@ -24,16 +24,16 @@
 # i v dashboardu, kam se demo SQL pouští ručně.
 #
 # POUŽITÍ
-#   ./scripts/build-upgrade-sql.sh                        # → upgrade.sql
-#   ./scripts/build-upgrade-sql.sh --backfill <verze>     # jednorázově, pro existující DB
+#   ./scripts/build-upgrade-sql.sh    # → upgrade.sql
 #
-# Mez u `--backfill` je povinná: říká, co na cílové databázi UŽ je. Označit za
-# proběhlou migraci, která neproběhla, je tichá chyba (upgrade ji přeskočí);
-# opačný omyl je hlučný (migrace spadne na obrazovku). Proto se neuhaduje.
+# PLÁN NASAZENÍ (rozhodnutí PM, 17. 8. 2026)
+#   BETA:      jeden čistý `demo_setup.sql` — reset + všechny migrace + seed,
+#              a ten SÁM ustaví migrační historii (`public.migrace_log`).
+#   OD BETY:   už jen `upgrade.sql`. Žádný reset, takže reálné registrace klubů
+#              a jejich rezervace nemá co smazat.
 #
-# POŘADÍ NA NOVÉM PROSTŘEDÍ
-#   1) supabase/demo/01_migrace_log.sql   (jednorázově; zapíše, co už proběhlo)
-#   2) upgrade.sql                        (a pak už jen tohle, při každém nasazení)
+# Evidenci tedy nikdo neplní ručně a není kde udělat chybu v mezi: `demo_setup.sql`
+# do ní zapíše přesně to, co sám nasadil.
 # =============================================================================
 set -euo pipefail
 
@@ -50,51 +50,6 @@ soucet() {
   if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1
   else sha256sum "$1" | cut -d' ' -f1; fi
 }
-
-# --- režim --backfill: zapiš do 01_migrace_log.sql, co se má brát jako proběhlé -
-if [[ "${1:-}" == "--backfill" ]]; then
-  # Mez je POVINNÁ a je to bezpečnostní prvek, ne pohodlí.
-  #
-  # Zapsat jako „proběhlou" migraci, která na cílové databázi neproběhla, je
-  # tichá chyba: upgrade ji přeskočí a schéma se rozejde, aniž by se kdokoli
-  # dozvěděl. Opačný omyl (zapomenutá mez → migrace se zkusí pustit znovu)
-  # je hlučný: buď projde, nebo spadne na obrazovku. Proto se mez neuhaduje.
-  MEZ="${2:-}"
-  if [[ -z "$MEZ" ]]; then
-    echo "Použití: $0 --backfill <verze-poslední-migrace-na-cílové-DB>" >&2
-    echo "" >&2
-    echo "Dostupné verze:" >&2
-    for m in "${MIGRACE[@]}"; do echo "  $(verze "$m")" >&2; done
-    echo "" >&2
-    echo "Zjistíš ji na cílové databázi, ne odhadem — např. podle toho, co tam" >&2
-    echo "existuje (poslední nasazení), nebo z historie nasazení." >&2
-    exit 1
-  fi
-  if [[ ! -f "supabase/migrations/${MEZ}.sql" ]]; then
-    echo "CHYBA: migrace '$MEZ' v repu není." >&2
-    exit 1
-  fi
-
-  RADKY=""
-  for m in "${MIGRACE[@]}"; do
-    v="$(verze "$m")"
-    # Lexikografické porovnání stačí: názvy začínají časovým razítkem RRRRMMDDhhmmss.
-    [[ "$v" > "$MEZ" ]] && continue
-    RADKY+="INSERT INTO public.migrace_log (version, sha256) VALUES ('$v', '$(soucet "$m")')"$'\n'
-    RADKY+="  ON CONFLICT (version) DO NOTHING;"$'\n'
-  done
-  python3 - "$LOG_SQL" <<PY
-import sys, io
-cesta = sys.argv[1]
-s = io.open(cesta, encoding='utf-8').read()
-zac = s.index('-- BACKFILL-ZACATEK')
-kon = s.index('-- BACKFILL-KONEC')
-novy = s[:zac] + '-- BACKFILL-ZACATEK (generované — needituj ručně)\n' + """$RADKY""" + s[kon:]
-io.open(cesta, 'w', encoding='utf-8').write(novy)
-PY
-  echo "Backfill doplněn do $LOG_SQL — jako proběhlé označeny migrace až po $MEZ (včetně)."
-  exit 0
-fi
 
 # --- generování upgrade.sql --------------------------------------------------
 {
