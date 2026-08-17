@@ -21,6 +21,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { User, Phone, Clock, TrendingUp, Wallet, CheckCircle, CreditCard } from 'lucide-react';
+import ClenstviVKlubu from '@/components/profile/ClenstviVKlubu';
 import { format } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { 
@@ -250,6 +251,10 @@ const Profile = () => {
 
         {/* Stats & History */}
         <div className="md:col-span-2 space-y-6">
+          {/* Členství v klubu — a cesta, jak o něj požádat, když si ho člověk
+              nevybral při registraci. */}
+          <ClenstviVKlubu />
+
           {/* Stats Cards */}
           <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
             <Card>
