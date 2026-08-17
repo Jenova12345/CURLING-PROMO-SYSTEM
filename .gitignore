@@ -50,3 +50,6 @@ demo_update_*.sql
 
 # TypeScript build mode (tsc -b) — generované, do repa nepatří
 *.tsbuildinfo
+
+# Ukázkové doklady z scripts/render-vzorky.mjs — vizuální kontrola, ne artefakt.
+vzorky/
