@@ -42,6 +42,19 @@ export interface BookingInput {
   override?: boolean;
 }
 
+/** Co série vrátí. `celkem` je potřeba na větu „Vytvořeno 18 z 20". */
+export type SeriesResult = {
+  series_id: string;
+  celkem: number;
+  created: number;
+  skipped: {
+    iso: string;                                  // YYYY-MM-DD, na formátování v UI
+    date: string;                                 // DD.MM.RRRR, pro člověka
+    duvod: 'kolize' | 'mimo_otviraci_dobu';
+    reason: string;                               // původní hláška ze serveru
+  }[];
+};
+
 export interface SeriesInput extends BookingInput {
   /** 1 = pondělí … 7 = neděle */
   weekdays: number[];
@@ -224,7 +237,14 @@ export const useReservations = (range: DateRange | null) => {
     onSuccess: invalidate,
   });
 
-  // Pravidelný trénink — série termínů; kolizní termíny se přeskočí a vrátí se seznam.
+  /**
+   * Pravidelný trénink — série termínů.
+   *
+   * Server přeskočí termíny, které nejdou založit z důvodu vázaného NA TERMÍN
+   * (obsazená dráha, mimo otevírací dobu), a zbytek série dojede. Chyba, která
+   * platí pro celé zadání (chybí oprávnění, sazba nad stropem), sérii naopak
+   * zastaví a probublá sem jako výjimka — proto se tady nic nefiltruje.
+   */
   const createSeries = useMutation({
     mutationFn: async (input: SeriesInput) => {
       const { data, error } = await supabase.rpc('create_booking_series', {
@@ -233,7 +253,7 @@ export const useReservations = (range: DateRange | null) => {
         p_until: input.until,
       });
       if (error) throw rpcError(error, 'Sérii se nepodařilo založit.');
-      return data as { series_id: string; created: number; skipped: { date: string; reason: string }[] };
+      return data as SeriesResult;
     },
     onSuccess: invalidate,
   });

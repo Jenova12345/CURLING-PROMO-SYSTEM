@@ -19,11 +19,12 @@ import {
 } from '@/components/ui/select';
 import { useToast } from '@/components/ui/use-toast';
 import { sanitizeText, VALIDATION_LIMITS } from '@/lib/validation';
+import { nadpisSerie, souhrnSerie } from '@/lib/serie';
 import { hoursForDay } from '@/lib/openingHours';
 import { parseSazba } from '@/lib/money';
 import type {
   Sheet, Subject, Settings, CalendarReservation, BookingKind, Conflict,
-  BookingInput, SeriesInput, Membership,
+  BookingInput, SeriesInput, SeriesResult, Membership,
 } from '@/hooks/useReservations';
 
 const STAFF_ROLES = [
@@ -45,7 +46,7 @@ const WEEKDAYS: [number, string][] = [
 
 export interface ReservationApi {
   createBooking: (input: BookingInput) => Promise<unknown>;
-  createSeries: (input: SeriesInput) => Promise<{ created: number; skipped: { date: string; reason: string }[] }>;
+  createSeries: (input: SeriesInput) => Promise<SeriesResult>;
   updateBooking: (args: { id: string; title?: string; note?: string | null; rate_per_hour?: number | null }) => Promise<unknown>;
   moveBooking: (args: { id: string; start_at: string; end_at: string; sheet_id?: string }) => Promise<unknown>;
   checkConflicts: (args: { sheet_ids: string[]; start_at: string; end_at: string; kind: BookingKind; ignore_event?: string }) => Promise<Conflict[]>;
@@ -330,12 +331,12 @@ export function ReservationDialog({
     try {
       if (repeat) {
         const res = await api.createSeries({ ...buildInput(), weekdays, until });
-        const skipped = res.skipped?.length ?? 0;
         toast({
-          title: `Založeno ${res.created} termínů`,
-          description: skipped
-            ? `${skipped} termínů se přeskočilo (kolize nebo mimo otevírací dobu): ${res.skipped.map((s) => s.date).join(', ')}`
-            : 'Celá série je v kalendáři.',
+          title: nadpisSerie(res),
+          description: souhrnSerie(res),
+          // Přeskočené termíny musí zůstat na obrazovce dýl: uživatel si podle
+          // nich shání náhradní časy a čtyřsekundový toast na to nestačí.
+          duration: res.skipped?.length ? 12000 : 4000,
         });
       } else {
         await api.createBooking({ ...buildInput(), override });
