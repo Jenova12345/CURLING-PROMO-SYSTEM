@@ -41,6 +41,8 @@ backups/
 
 # generované/lokální artefakty dema (regeneruje scripts/build-demo-sql.sh)
 demo_setup.sql
+# Generuje scripts/build-upgrade-sql.sh z migrací — zdroj pravdy jsou migrace.
+upgrade.sql
 demo-web.zip
 
 # jednorázový doplněk k nasazení dema (generovaný)

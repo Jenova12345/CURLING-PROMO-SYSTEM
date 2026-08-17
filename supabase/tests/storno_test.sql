@@ -54,6 +54,17 @@ BEGIN
   RAISE EXCEPTION 'TEST SELHAL (%): operace měla skončit chybou, ale prošla', _popis;
 END $$;
 
+-- Fakturační údaje. Migrace je nechávají PRÁZDNÉ schválně (vyplňuje je admin
+-- v Nastavení), takže na čerstvém seedu by `issue_invoice` odmítl vystavit
+-- cokoli a celý soubor by spadl na přípravě, ne na tvrzení.
+UPDATE public.billing_settings SET
+  supplier_name    = 'Curling Promo Ostrava z.s.',
+  supplier_address = 'Ledová 1, 700 30 Ostrava',
+  supplier_ico     = '12345678',
+  bank_account     = '19-2000145399/0800',
+  bank_iban        = 'CZ6508000000192000145399',
+  payment_message  = 'Pronájem ledu';
+
 CREATE TEMP TABLE _stav (klic text primary key, hodnota text);
 -- Přenáší hodnoty mezi bloky, které běží pod rolí `authenticated` — bez grantu
 -- na ni role nedosáhne a test spadne na vlastní pomůcce, ne na tvrzení.
