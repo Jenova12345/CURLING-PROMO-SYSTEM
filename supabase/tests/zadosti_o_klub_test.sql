@@ -195,6 +195,25 @@ BEGIN
     'neexistuje', 'žádost na neexistující klub se odmítne');
 END $$;
 
+-- Dlouhá poznámka: musí přijít ČESKÁ věta, ne `DETAIL: Failing row contains (…)`
+-- s celým řádkem a jménem constraintu. Hláška z RPC jde v UI rovnou uživateli
+-- (`useSubjectRequests`), takže tudy uniká vnitřní schéma na obrazovku.
+DO $$
+DECLARE _klub uuid; _det text;
+BEGIN
+  SELECT id INTO _klub FROM public.clubs_public WHERE name = 'TJ Poruba';
+  BEGIN
+    PERFORM public.request_subject_membership(_klub, repeat('A', 600));
+    PERFORM pg_temp.tvrd(false, 'dlouhá poznámka měla skončit chybou');
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS _det = PG_EXCEPTION_DETAIL;
+    PERFORM pg_temp.tvrd(SQLERRM LIKE '%moc dlouhá%',
+      'dlouhá poznámka vrátí českou větu, ne hlášku databáze');
+    PERFORM pg_temp.tvrd(coalesce(_det, '') = '',
+      'a klientovi neuteče DETAIL s obsahem řádku (R11)');
+  END;
+END $$;
+
 -- Poslední obranu proti dvěma čekajícím žádostem drží unikátní index, ne ta
 -- kontrola výš — ta je TOCTOU. Že index existuje a je PARTIAL (jinak by člověk
 -- po zamítnutí nesměl požádat znovu) se tvrdí tady; že se z jeho porušení
@@ -338,6 +357,45 @@ BEGIN
     'a žádné členství po tom pokusu nezůstalo');
 
   UPDATE public.subjects SET deleted_at = NULL WHERE id = _klub;
+END $$;
+
+-- Zamítnutí: týž strop na délku jako u žadatele a týž R11 obal. Nesouměrné
+-- pravidlo („žadateli 500 znaků, adminovi neomezeně") je jen čekání na to,
+-- až se do `decision_reason` vleze něco, co nikdo nečeká.
+DO $$
+DECLARE _klub uuid; _z uuid; _u uuid := '22222222-2222-2222-2222-222222222222'; _det text;
+BEGIN
+  SELECT id INTO _klub FROM public.clubs_public WHERE name = 'TJ Poruba';
+  DELETE FROM public.subject_requests WHERE user_id = _u;
+  INSERT INTO public.subject_requests (user_id, subject_id, status)
+  VALUES (_u, _klub, 'ceka') RETURNING id INTO _z;
+
+  SET LOCAL ROLE authenticated;
+  PERFORM set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111111"}', true);
+  BEGIN
+    PERFORM public.reject_subject_request(_z, repeat('B', 600));
+    PERFORM pg_temp.tvrd(false, 'dlouhý důvod zamítnutí měl skončit chybou');
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS _det = PG_EXCEPTION_DETAIL;
+    PERFORM pg_temp.tvrd(SQLERRM LIKE '%moc dlouhý%', 'dlouhý důvod zamítnutí se odmítne česky');
+    PERFORM pg_temp.tvrd(coalesce(_det, '') = '', 'a bez DETAILu (R11 i u zamítnutí)');
+  END;
+  RESET ROLE;
+  DELETE FROM public.subject_requests WHERE id = _z;
+END $$;
+
+-- Obrana do hloubky: `subject_reps` je jediné úložiště klubových oprávnění,
+-- takže nepřihlášený na něj nesmí mít vůbec nic. Dnes ho zastaví RLS, ale to je
+-- jedna vrstva — a jediná budoucí politika `FOR ALL USING (true)` by z grantu
+-- udělala zápis do tabulky členství.
+DO $$
+DECLARE _prava text;
+BEGIN
+  SELECT string_agg(privilege_type, ', ' ORDER BY privilege_type) INTO _prava
+    FROM information_schema.role_table_grants
+   WHERE table_schema = 'public' AND table_name = 'subject_reps' AND grantee = 'anon';
+  PERFORM pg_temp.tvrd(_prava IS NULL,
+    format('nepřihlášený nemá na subject_reps žádné právo (má: %s)', COALESCE(_prava, 'žádné')));
 END $$;
 
 -- -----------------------------------------------------------------------------

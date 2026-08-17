@@ -124,7 +124,7 @@ REVOKE ALL ON public.clubs_public FROM anon, authenticated, public, service_role
 GRANT SELECT ON public.clubs_public TO anon, authenticated;
 
 COMMENT ON VIEW public.clubs_public IS
-  'Názvy klubů pro rozbalovátko v registraci. Vědomě čitelné i nepřihlášeným — bez toho by si klub nešlo vybrat. Vydává JEN id a název, nikdy IČO, adresu ani sazby.';
+  'Názvy klubů pro rozbalovátko v registraci. Vědomě čitelné i nepřihlášeným — bez toho by si klub nešlo vybrat. Vydává JEN id a název, nikdy IČO, adresu ani sazby. POZOR: je to jednoduchý pohled nad jednou tabulkou, tedy AUTO-UPDATABLE, a běží pod vlastníkem (security_invoker = off) — jakýkoli GRANT INSERT/UPDATE/DELETE na něj by byl okamžitý obchod RLS na subjects. Nechávej mu výhradně SELECT.';
 
 -- -----------------------------------------------------------------------------
 -- 5) Podání žádosti
@@ -144,6 +144,15 @@ DECLARE
 BEGIN
   IF _uid IS NULL THEN
     RAISE EXCEPTION 'Pro podání žádosti se musíte přihlásit.';
+  END IF;
+  -- Délka poznámky se kontroluje TADY, ne až constraintem. Constraint by ji
+  -- taky zachytil, jenže jako `check_violation` uvnitř SECURITY DEFINER — a to
+  -- znamená, že Postgres do chyby přidá `DETAIL: Failing row contains (…)`
+  -- s celým řádkem a jménem constraintu, a `useSubjectRequests` tu anglickou
+  -- hlášku pošle rovnou uživateli. Česká věta předem je lepší než odchycená
+  -- havárie potom.
+  IF length(coalesce(_poznamka, '')) > 500 THEN
+    RAISE EXCEPTION 'Poznámka je moc dlouhá (nejvýš 500 znaků, máš %).', length(_poznamka);
   END IF;
   IF NOT EXISTS (SELECT 1 FROM public.subjects
                   WHERE id = _subject_id AND type = 'club' AND deleted_at IS NULL) THEN
@@ -172,6 +181,13 @@ EXCEPTION
   WHEN unique_violation THEN
     RAISE EXCEPTION 'Jedna žádost už čeká na vyřízení.'
       USING HINT = 'Počkej, až ji správce vyřídí, nebo mu napiš.';
+  -- R11 jako u sourozenců. Kontrola délky výš pokrývá jediný constraint, na
+  -- který dnes jde narazit; tohle je záchytná síť pro ty, které někdo přidá
+  -- příště — ať se ven nedostane `DETAIL: Failing row contains (…)`.
+  WHEN check_violation OR not_null_violation OR foreign_key_violation THEN
+    RAISE EXCEPTION 'Žádost se nepodařilo podat.'
+      USING ERRCODE = '22023',
+            HINT = 'Zkontroluj vyplněné údaje a zkus to znovu.';
 END;
 $$;
 
@@ -210,8 +226,16 @@ BEGIN
   -- smazat; bez téhle kontroly vzniklo členství ve smazaném klubu, které nikde
   -- není vidět (`subjects` skryté kluby nepouští), ale opravňuje. Frontu to
   -- neblokuje — admin takovou žádost prostě zamítne.
-  IF NOT EXISTS (SELECT 1 FROM public.subjects
-                  WHERE id = _z.subject_id AND type = 'club' AND deleted_at IS NULL) THEN
+  --
+  -- `FOR SHARE`, ne holý `EXISTS`: `FOR UPDATE` výš zamyká žádost, ne klub.
+  -- Bez tohohle se mezi kontrolu a `INSERT` níž vejde souběžné smazání klubu
+  -- a členství vznikne přesto. (Neopravňovalo by k ničemu — `is_subject_member`
+  -- i `is_subject_rep` filtrují `deleted_at IS NULL` — ale ožilo by ve chvíli,
+  -- kdy by někdo klub obnovil. Zámek na řádku je levnější než ta úvaha.)
+  PERFORM 1 FROM public.subjects
+    WHERE id = _z.subject_id AND type = 'club' AND deleted_at IS NULL
+    FOR SHARE;
+  IF NOT FOUND THEN
     RAISE EXCEPTION 'Klub už neexistuje, takže do něj nejde nikoho přiřadit.'
       USING HINT = 'Žádost zamítni — případně klub nejdřív obnov.';
   END IF;
@@ -270,11 +294,24 @@ BEGIN
   IF _stav <> 'ceka' THEN
     RAISE EXCEPTION 'Tahle žádost už je vyřízená (%).', _stav;
   END IF;
+  -- Týž strop jako u poznámky žadatele. Admin-only, takže nízké riziko, ale
+  -- nesouměrné pravidlo („žadateli 500 znaků, adminovi neomezeně") je jen
+  -- čekání na to, až se do `decision_reason` vleze něco, co nikdo nečeká.
+  IF length(coalesce(_duvod, '')) > 500 THEN
+    RAISE EXCEPTION 'Důvod je moc dlouhý (nejvýš 500 znaků, máš %).', length(_duvod);
+  END IF;
 
   UPDATE public.subject_requests
      SET status = 'zamitnuta', decided_at = now(), decided_by = _uid,
          decision_reason = nullif(btrim(coalesce(_duvod, '')), '')
    WHERE id = _request_id;
+
+EXCEPTION
+  -- R11, ať je to souměrné se `approve_subject_request`.
+  WHEN check_violation OR not_null_violation OR foreign_key_violation THEN
+    RAISE EXCEPTION 'Žádost se nepodařilo zamítnout.'
+      USING ERRCODE = '22023',
+            HINT = 'Zkus to znovu; když to potrvá, zkontroluj stav žádosti ve frontě.';
 END;
 $$;
 
