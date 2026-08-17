@@ -1,8 +1,8 @@
 # Etapa 2 — Fakturace · STAV
 
-**Aktualizováno:** 17. 8. 2026 (večer) · **Větev:** `dev` · **HEAD:** `19f7a98`
+**Aktualizováno:** 18. 8. 2026 · **Větev:** `dev` · **HEAD:** `3d5889e`
 
-> **Deset commitů čeká nepushnutých na `dev`.** Frontend se z GitHubu nasazuje
+> **Patnáct commitů čeká nepushnutých na `dev`.** Frontend se z GitHubu nasazuje
 > sám a na demu testují kluby, takže se push drží zpátky vědomě — nasadí se
 > dávkou jako beta. Nepushuj bez pokynu.
 
@@ -167,7 +167,43 @@ enkodér, nebo QR až se serverovým PDF (C4). **Rozhodnutí PM.**
 
 ### Odloženo (vědomě, rozhodnutí PM)
 
-Automatika (D), měsíční cron, agregace DPH (Q7), částečný dobropis.
+* **Agregace DPH (Q7)** — čeká na účetní klienta. Plátcovská větev dokladu
+  hotová je, ale `issue_invoice` plátcovský režim zatím nepustí.
+* **`invoice_payments` (E2 v plné podobě)** — částečné úhrady a přeplatky.
+  Rozhodnutí PM 18. 8.: zjednodušené zaplaceno/nezaplaceno stačí, kontrolní
+  součet se před betou přepisovat nebude. Doděláme, až to klient bude potřebovat.
+* **E4** (svátky a posun splatnosti), **E5** (CSP a hlavičky).
+
+### Fáze C, D a zbytek E — hotové 17.–18. 8. 2026
+
+| Co | Commit |
+|---|---|
+| Serverové PDF (C1–C4): fronta, font, dvě větve DPH, determinismus | `ea42266` |
+| Stav PDF v UI + stahování podepsanou URL (C5) | `295c3b4` |
+| Automatika: denní komerční akce, měsíční kluby, pg_cron (D) | `840d526` |
+| Částečný dobropis | `8be3827` |
+| Měsíční ZIP pro účetní (E3) | `3d5889e` |
+
+**Fallback tisk z obrazovky ZŮSTÁVÁ** vedle serverového PDF, dokud si render
+neproklikáme naživo na betě (rozhodnutí PM 18. 8.).
+
+**pg_cron se neinstaluje migrací** — je to krok nasazení. Příkazy a pořadí
+zapínání (týdny naprázdno → koncepty → teprve pak vystavování) jsou v komentáři
+na konci `20260818130000_automatika.sql`.
+
+### Na co si dát pozor
+
+* **Migrace si navzájem záplatují funkce textovou náhradou** (`pg_get_functiondef`
+  + `replace`). V sekvenčním nasazení to je v pořádku, ale RUČNÍ přehrání starší
+  migrace tiše zruší pozdější záplatu — `storno_invoice` tak přišlo o napojení
+  na frontu PDF a vypadalo to jako skutečná chyba. Když ladíš, vracej se
+  `supabase db reset`, ne přehráním jednoho souboru.
+* **Layout dokladu testy neuhlídají.** Dvě chyby (QR přes součty; QR na první
+  straně dvoustránkového dokladu) prošly zelenými testy — soubor byl platný
+  i deterministický. Kdo sáhne na `pdfDoklad.ts`, pustí
+  `node scripts/render-vzorky.mjs` a podívá se.
+* **`deno check` je brána** vedle `npm run typecheck`; chytila datum splatnosti
+  posílané do QR jako řetězec i netypovaný `select`.
 
 ---
 
