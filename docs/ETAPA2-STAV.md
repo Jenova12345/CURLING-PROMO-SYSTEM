@@ -1,6 +1,10 @@
 # Etapa 2 — Fakturace · STAV
 
-**Aktualizováno:** 13. 8. 2026 (odpoledne) · **Větev:** `dev` · **HEAD:** `3a5119b`
+**Aktualizováno:** 17. 8. 2026 (večer) · **Větev:** `dev` · **HEAD:** `19f7a98`
+
+> **Deset commitů čeká nepushnutých na `dev`.** Frontend se z GitHubu nasazuje
+> sám a na demu testují kluby, takže se push drží zpátky vědomě — nasadí se
+> dávkou jako beta. Nepushuj bez pokynu.
 
 Předávací dokument. Kdo přebírá práci, ať čte tohle první — pak
 `docs/etapa2-fakturace-plan.md` (rozhodnutí R1–R11, otázky Q1–Q7)
@@ -161,12 +165,53 @@ enkodér, nebo QR až se serverovým PDF (C4). **Rozhodnutí PM.**
 **C-subset (PDF přes `pdf-lib` v Edge funkci)** zůstává neudělaný; fallback
 „tisk z obrazovky" funguje a používá snapshot z faktury, ne `BRAND`.
 
-**Dobropisy, storno, evidence plateb, automatika** — vědomě odložené (viz níž).
-
 ### Odloženo (vědomě, rozhodnutí PM)
 
-Automatika (D), dobropisy a storno, evidence plateb (E2), měsíční cron,
-agregace DPH (Q7).
+Automatika (D), měsíční cron, agregace DPH (Q7), částečný dobropis.
+
+---
+
+## 2b. Přibylo 14.–17. 8. 2026 (nepushnuto)
+
+| Co | Commit | Podstatné |
+|---|---|---|
+| Evidence úhrady | `20260814120000` | stav dokladu + „označit zaplaceno"; storno si datum úhrady drží |
+| Série tréninků: kolize | `d5e5752`, `d8d7eb7` | kolize termín přeskočí, sérii nezastaví; souhrn vyjmenuje dny |
+| Oprava série | `de0b8ff` | konec před začátkem není letní čas; strop výpisu platí na celý souhrn |
+| Žádosti o klub | `bb911cf`, `e6800c1` | registrace zakládá ŽÁDOST, ne členství; úroveň přiděluje admin |
+| **Storno / opravný doklad** | `e082334`, `527d982` | viz níž — mění kontrolní součet |
+| Dodatečná žádost o klub | `05dfb9a` | karta na profilu; RPC existovalo, ale nevolala ho žádná stránka |
+| Inkrementální nasazení | `8e5211e`, `19f7a98` | beta = poslední reset; dál `upgrade.sql` bez resetu |
+
+### Storno mění kontrolní součet — čti, než na něj sáhneš
+
+Rovnice `dluzi = fakturovano + v_konceptu + ve_stornu + k_fakturaci +
+neschvalene` se stornem **rozbije sama od sebe**: uvolněná rezervace se počítá
+jednou jako `ve_stornu` (řádek stornovaného dokladu) a podruhé jako
+`k_fakturaci` (prázdný zámek). Změřeno před opravou `rozdil = −22 600`,
+s opravnými doklady v rovnici −45 200. Proto `billing_reconcile`:
+
+* opravné doklady (`opravuje_id IS NOT NULL`) se do rovnice **nepočítají** —
+  zrcadlí originál,
+* `ve_stornu` počítá **jen rezervace, které na stornovaném dokladu visí**
+  (částečný dobropis); po plném stornu je nese `k_fakturaci`.
+
+Že ta výjimka není slepé místo, hlídá `billing_health.opravne_nesedi`.
+Opravný doklad nese **kladné** částky — schéma záporný nepustí (`hodiny > 0`,
+`sazba >= 0`, `invoices_castky_nezaporne`); význam nese `opravuje_id`, ne znaménko.
+
+### Nasazení bety — pořadí je závazné
+
+1. **jednou** `demo_setup.sql` — reset + všechny migrace + seed, a **sám ustaví
+   migrační historii** (`public.migrace_log`),
+2. **dál už jen** `upgrade.sql` (`scripts/build-upgrade-sql.sh`) — bez resetu,
+   pustí jen nové migrace.
+
+Reset po betě je **ztráta registrací klubů**. Pojistka v `00_reset_demo.sql`
+před tím neochrání: zastaví se jen tehdy, když v databázi NENÍ ani jeden účet
+`@test.local` — a ty tam podle rozhodnutí PM zůstávají (login `admin@test.local`,
+populovaný systém). Devět z migrací navíc není znovuspustitelných, takže „pusť
+je všechny znovu" není náhrada; proto ta evidence.
 
 ---
 
