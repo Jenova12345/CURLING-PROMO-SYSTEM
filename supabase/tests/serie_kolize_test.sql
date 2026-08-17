@@ -102,6 +102,36 @@ BEGIN
 END $$;
 
 -- -----------------------------------------------------------------------------
+-- 1b) A totéž POD SKUTEČNOU ROLÍ, ne jako superuživatel
+--
+-- Sekce nad tímhle běží jako `postgres`, a je to tam správně: tvrdí něco
+-- o chování (kolik termínů vzniklo), ne o právech, a čtou `public.reservations`,
+-- kam `authenticated` po A2b přímo nevidí. Kdyby ale VŠECHNO běželo pod
+-- superuživatelem, netvrdil by tenhle soubor nic o tom, že sérii vůbec smí
+-- zavolat běžný admin — a kdyby zmizel GRANT, testy by svítily zeleně nad
+-- funkcí, která je pro appku mrtvá. Pravidlo 8 z CLAUDE.md.
+-- -----------------------------------------------------------------------------
+SET LOCAL ROLE authenticated;
+SET LOCAL request.jwt.claims = '{"sub":"11111111-1111-1111-1111-111111111111"}';
+DO $$
+DECLARE _r jsonb;
+BEGIN
+  PERFORM pg_temp.tvrd(
+    has_function_privilege('authenticated',
+      'public.create_booking_series(uuid[], text, text, timestamptz, timestamptz, int[], date, uuid, text, jsonb, numeric)',
+      'EXECUTE'),
+    'admin jako authenticated má na sérii právo ji zavolat');
+
+  _r := pg_temp.serie(
+    (TIMESTAMP '2032-05-03 10:00' AT TIME ZONE 'Europe/Prague'),
+    (TIMESTAMP '2032-05-03 11:00' AT TIME ZONE 'Europe/Prague'),
+    DATE '2032-05-31');
+  PERFORM pg_temp.tvrd((_r ->> 'created')::int = 5,
+    format('a celá cesta mu projde end-to-end (%s z %s)', _r ->> 'created', _r ->> 'celkem'));
+END $$;
+RESET ROLE;
+
+-- -----------------------------------------------------------------------------
 -- 2) JÁDRO ZADÁNÍ: kolize termín přeskočí, zbytek série dojede
 --
 -- Do prostředka série se postaví komerční akce. Trénink ji přebít nesmí (priorita
@@ -187,7 +217,7 @@ BEGIN
     DATE '2032-05-31');
 
   PERFORM pg_temp.tvrd(false, 'sem se to nemá dostat — všechny termíny jsou mimo otevírací dobu');
-EXCEPTION WHEN object_in_use THEN
+EXCEPTION WHEN SQLSTATE 'U0001' OR raise_exception THEN
   -- Když neprojde ani jeden termín, série se ozve nahlas (a nezaloží nic).
   PERFORM pg_temp.tvrd(position('otevírací dobu' in SQLERRM) > 0,
     format('série s nulou použitelných termínů řekne důvod (%s)', left(SQLERRM, 60)));
@@ -267,7 +297,7 @@ BEGIN
     IF SQLERRM LIKE 'TEST SELHAL%' THEN RAISE; END IF;
     _sqlstate := SQLSTATE;
   END;
-  PERFORM pg_temp.tvrd(_sqlstate = '55006',
+  PERFORM pg_temp.tvrd(_sqlstate = 'U0001',
     format('kolize zjištěná až constraintem má SQLSTATE kolize, ne P0001 (dostal jsem %s)', _sqlstate));
 
   -- A teď to hlavní: série přes ten termín přejede a zbytek založí.
@@ -285,6 +315,37 @@ BEGIN
   PERFORM pg_temp.tvrd(
     (SELECT bool_and(x ->> 'reason' NOT LIKE '%constraint%') FROM jsonb_array_elements(_r -> 'skipped') x),
     'uživatel nedostane syrovou hlášku Postgresu o constraintu');
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 4c) Neexistující hodina při přechodu na letní čas termín přeskočí, ne sérii
+--
+-- Poslední březnovou neděli se ve 2:00 posunou hodiny na 3:00, takže 02:00–03:00
+-- ten den neexistuje: `AT TIME ZONE` obojí přeloží na 03:00 a konec vyjde
+-- před začátkem. `create_booking` by to odmítlo jako chybu zadání (P0001) a
+-- shodilo by celou sérii, přestože jde o jeden termín.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _r jsonb; _stara jsonb; _duvody text;
+BEGIN
+  SELECT opening_hours INTO _stara FROM public.settings;
+  -- Neděle otevřená od jedné v noci, ať se na tu hodinu vůbec dá cílit.
+  UPDATE public.settings SET opening_hours = jsonb_set(_stara, '{7}', '{"open":"01:00","close":"22:00"}'::jsonb);
+
+  _r := pg_temp.serie(
+    (TIMESTAMP '2032-03-14 02:00' AT TIME ZONE 'Europe/Prague'),
+    (TIMESTAMP '2032-03-14 03:00' AT TIME ZONE 'Europe/Prague'),
+    DATE '2032-04-04', ARRAY[7]);
+
+  PERFORM pg_temp.tvrd((_r ->> 'created')::int > 0,
+    format('ostatní neděle vznikly (%s z %s)', _r ->> 'created', _r ->> 'celkem'));
+
+  SELECT string_agg(DISTINCT x ->> 'duvod', ',') INTO _duvody
+    FROM jsonb_array_elements(_r -> 'skipped') x;
+  PERFORM pg_temp.tvrd(_duvody = 'neexistujici_cas',
+    format('a 28. 3. se přeskočilo s vlastním důvodem, ne jako kolize (%s)', COALESCE(_duvody, 'nic')));
+
+  UPDATE public.settings SET opening_hours = _stara;
 END $$;
 
 -- -----------------------------------------------------------------------------

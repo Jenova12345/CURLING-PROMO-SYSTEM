@@ -50,7 +50,7 @@ export type SeriesResult = {
   skipped: {
     iso: string;                                  // YYYY-MM-DD, na formátování v UI
     date: string;                                 // DD.MM.RRRR, pro člověka
-    duvod: 'kolize' | 'mimo_otviraci_dobu';
+    duvod: 'kolize' | 'mimo_otviraci_dobu' | 'neexistujici_cas';
     reason: string;                               // původní hláška ze serveru
   }[];
 };

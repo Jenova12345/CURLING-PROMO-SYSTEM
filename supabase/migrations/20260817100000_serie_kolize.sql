@@ -21,8 +21,16 @@
 -- ŘEŠENÍ: kolizní a časové důvody dostaly VLASTNÍ SQLSTATE, takže je série pozná
 -- a nemusí hádat podle textu hlášky:
 --
---   55006  object_in_use                     dráha obsazená (i akcí s vyšší prioritou)
---   55000  object_not_in_prerequisite_state  mimo otevírací dobu / den, kdy se nehraje
+--   U0001  dráha obsazená (i akcí s vyšší prioritou)
+--   U0002  mimo otevírací dobu / den, kdy se nehraje
+--
+-- PROČ VLASTNÍ KÓDY A NE STANDARDNÍ TŘÍDA 55 (`object_in_use` a spol.): PostgREST
+-- mapuje CELOU třídu 55 na HTTP 500. Běžná uživatelská chyba „dráha je obsazená"
+-- by se tím stala serverovou — a to nejen v sérii, ale i u jednotlivé rezervace,
+-- protože `create_booking` obsluhuje obojí. Na demu by se každý pokus o obsazený
+-- termín zapsal do logů Supabase jako 500 a „pětistovka" by přestala znamenat
+-- „něco je rozbité". Změřeno sondou přes PostgREST: 55006 → 500, 55000 → 500,
+-- P0001 → 400, 23P01 → 400, vlastní kód (U0001) → 400.
 --
 -- Cokoli jiného sérii ZASTAVÍ a probublá ven — nic se nezaloží a je vidět proč.
 -- Priorita akcí se nemění: komerční > turnaj > trénink, přebít smí jen admin
@@ -32,8 +40,15 @@
 -- (pravidlo 7 v CLAUDE.md); vložené jsou do nich jen zásahy popsané výš.
 --
 -- VRATNOST: `CREATE OR REPLACE` všech tří funkcí zpět do znění z
---   supabase/migrations/20260731110000_booking_core.sql (validate_reservation_slot)
---   supabase/migrations/20260731120000_booking_api.sql  (create_booking, create_booking_series)
+--   supabase/migrations/20260731110000_booking_core.sql     (validate_reservation_slot)
+--   supabase/migrations/20260812200000_security_hardening.sql (create_booking, create_booking_series)
+--
+-- ⚠️ POZOR NA TEN DRUHÝ ODKAZ. Obě `create_booking*` naposledy nahradila A5, ne
+-- `booking_api.sql` — revert podle staršího souboru by SHODIL A5 a klientovi by
+-- se přes PostgREST zase vracelo `DETAIL: Failing row contains (…)` se sazbou
+-- a částkou (drift 8b). Poznat to jde podle `check_violation`: v A5 je,
+-- v `booking_api.sql` ani jednou.
+--
 -- Data se nemění, žádný sloupec ani constraint nepřibývá.
 -- =============================================================================
 
@@ -81,14 +96,14 @@ BEGIN
     -- SQLSTATE 55000 = „důvod platí pro TENHLE termín, ne pro celé zadání".
     -- Série podle něj pozná, že má termín přeskočit a jet dál (viz create_booking_series).
     RAISE EXCEPTION 'Pro tento den není nastavená otevírací doba — doplňte ji v Nastavení.'
-      USING ERRCODE = '55000';
+      USING ERRCODE = 'U0002';
   END IF;
 
   IF _local_start::time < _open OR _local_end::time > _close THEN
     -- Otevírací doba se liší den od dne, takže tohle je taky důvod PRO TERMÍN.
     RAISE EXCEPTION 'Mimo otevírací dobu (%–%). Vyberte čas uvnitř provozní doby.',
       to_char(_open, 'HH24:MI'), to_char(_close, 'HH24:MI')
-      USING ERRCODE = '55000';
+      USING ERRCODE = 'U0002';
   END IF;
 
   RETURN NEW;
@@ -205,25 +220,25 @@ BEGIN
     SELECT c.* FROM public.check_booking_conflicts(p_sheet_ids, p_start, p_end, p_kind) c
   LOOP
     IF NOT _is_admin THEN
-      -- SQLSTATE 55006 (object_in_use) = KOLIZE. Série podle něj pozná, že má
+      -- SQLSTATE U0001 = KOLIZE. Série podle něj pozná, že má
       -- termín přeskočit a jet dál. Bez vlastního kódu by musela chytat všechno
       -- (WHEN OTHERS) a hlásila by jako „kolizi" i chybějící oprávnění nebo
       -- sazbu nad stropem — tedy věci, které platí pro celé zadání, ne pro termín.
       RAISE EXCEPTION '% je v tomto čase už obsazená (%). Vyberte jiný čas nebo dráhu.',
         _conf.sheet_name, COALESCE(_conf.event_title, _conf.subject_name, 'jiná rezervace')
-        USING ERRCODE = '55006';
+        USING ERRCODE = 'U0001';
     END IF;
     IF NOT p_override THEN
       RAISE EXCEPTION '% je v tomto čase obsazená (%). Rezervaci lze založit jen s vědomým přebitím.',
         _conf.sheet_name, COALESCE(_conf.event_title, _conf.subject_name, 'jiná rezervace')
-        USING ERRCODE = '55006';
+        USING ERRCODE = 'U0001';
     END IF;
     IF NOT _conf.can_override THEN
       -- Priorita zůstává v platnosti (komerční > turnaj > trénink): termín, který
       -- drží akce se stejnou nebo vyšší prioritou, je pro sérii prostě obsazený.
       RAISE EXCEPTION 'Akci „%" (%) nelze přebít — má stejnou nebo vyšší prioritu.',
         COALESCE(_conf.event_title, _conf.subject_name, 'rezervace'), _conf.sheet_name
-        USING ERRCODE = '55006';
+        USING ERRCODE = 'U0001';
     END IF;
   END LOOP;
 
@@ -339,7 +354,7 @@ EXCEPTION
     -- Je to táž kolize jako z `check_booking_conflicts`, jen zjištěná o vteřinu
     -- později, takže dostává týž kód.
     RAISE EXCEPTION 'Dráha už je v tomto čase obsazená — někdo byl rychlejší. Zkuste jiný čas nebo dráhu.'
-      USING ERRCODE = '55006';
+      USING ERRCODE = 'U0001';
 END;
 $function$;
 
@@ -394,6 +409,22 @@ BEGIN
     _s := (_day + _start_loc::time) AT TIME ZONE _tz;
     _e := (_day + _end_loc::time)   AT TIME ZONE _tz;
 
+    -- NEEXISTUJÍCÍ ČAS PŘI PŘECHODU NA LETNÍ ČAS. Poslední březnovou neděli se
+    -- ve 2:00 posunou hodiny na 3:00, takže třeba 02:00–03:00 ten den vůbec
+    -- neexistuje: `AT TIME ZONE` obojí přeloží na 03:00 a vyjde `_e <= _s`.
+    -- `create_booking` by to odmítlo hláškou „Konec musí být po začátku" — což je
+    -- P0001, tedy chyba zadání, a shodilo by to CELOU sérii. Přitom je to důvod
+    -- vázaný na jeden jediný termín. (Dosažitelné jen když hala v tu hodinu
+    -- otvírá, ale právě takové případy sérii rozbíjejí nejošklivěji.)
+    IF _e <= _s THEN
+      _skipped := _skipped || jsonb_build_object(
+        'iso',    to_char(_day, 'YYYY-MM-DD'),
+        'date',   to_char(_day, 'DD.MM.YYYY'),
+        'duvod',  'neexistujici_cas',
+        'reason', 'Tenhle čas v daný den neexistuje — posouvají se hodiny na letní čas.');
+      CONTINUE;
+    END IF;
+
     BEGIN
       PERFORM public.create_booking(
         p_sheet_ids, p_kind, p_title, _s, _e,
@@ -408,13 +439,10 @@ BEGIN
     -- kvůli kolizi" místo jedné věty o tom, co má opravit. Tyhle chyby proto
     -- probublají ven a sérii zastaví — nic se nezaloží a je jasné proč.
     --
-    --   55006 (object_in_use)                     → dráha obsazená, včetně akce
-    --                                               s vyšší prioritou (komerční >
-    --                                               turnaj > trénink)
-    --   55000 (object_not_in_prerequisite_state)  → mimo otevírací dobu / den,
-    --                                               kdy se nehraje
-    --   23P01 (exclusion_violation)               → kolize, která vznikla AŽ MEZI
-    --                                               kontrolou a zápisem
+    --   U0001  → dráha obsazená, včetně akce s vyšší prioritou
+    --             (komerční > turnaj > trénink)
+    --   U0002  → mimo otevírací dobu / den, kdy se nehraje
+    --   23P01  → kolize, která vznikla AŽ MEZI kontrolou a zápisem
     --
     -- Ten poslední případ je snadné přehlédnout: `check_booking_conflicts` se ptá
     -- před INSERTem, takže mezi dotazem a zápisem může někdo jiný slot zabrat.
@@ -422,16 +450,15 @@ BEGIN
     -- série nechytala, jeden nešťastně načasovaný termín by shodil celou sérii.
     -- Až poběží automatika vedle ručního zadávání, bude to trefovat pravidelně.
     EXCEPTION
-      WHEN object_in_use OR object_not_in_prerequisite_state OR exclusion_violation THEN
-        -- `object_not_in_prerequisite_state` je KATEGORIE: kód končící na 000
-        -- chytá celou třídu 55xxx, tedy i `lock_not_available` (55P03) nebo
-        -- `cant_change_runtime_param` (55P02). Ty by se uživateli nahlásily jako
-        -- kolize v daný den — a to je zase to tiché selhání, kvůli kterému tahle
-        -- migrace vznikla. Co není náš důvod, letí ven.
-        IF SQLSTATE NOT IN ('55000', '55006', '23P01') THEN
+      WHEN SQLSTATE 'U0001' OR SQLSTATE 'U0002' OR exclusion_violation THEN
+        -- Guard zůstává i u vlastních kódů: `exclusion_violation` je konkrétní,
+        -- ale kdyby sem někdo přidal další podmínku, ať se cizí chyba nepřevleče
+        -- za kolizi v daný den. To je přesně to tiché selhání, kvůli kterému
+        -- tahle migrace vznikla.
+        IF SQLSTATE NOT IN ('U0002', 'U0001', '23P01') THEN
           RAISE;
         END IF;
-        _duvod := CASE SQLSTATE WHEN '55000' THEN 'mimo_otviraci_dobu' ELSE 'kolize' END;
+        _duvod := CASE SQLSTATE WHEN 'U0002' THEN 'mimo_otviraci_dobu' ELSE 'kolize' END;
         -- `iso` je pro UI, `date` pro člověka. Formátovat „15. 4." patří do UI
         -- (má locale i date-fns); databáze dodá tvar, ze kterého to jde spolehlivě
         -- složit, ne hotovou větu.
@@ -453,18 +480,20 @@ BEGIN
     -- Jinak by z toho vypadlo „nepodařilo se založit ani jeden z 0 termínů".
     -- Dialog hlídá, že je vybraný aspoň jeden den a že konec není před začátkem,
     -- ale ne to, že vybraný den do období vůbec padne (pondělí v období 17.–17. 8.).
+    -- Chyba zadání, ne obsazení — proto obyčejný P0001 (a HTTP 400).
     RAISE EXCEPTION 'V zadaném období nevychází ani jeden z vybraných dnů v týdnu.'
-      USING ERRCODE = '55006',
-            HINT = 'Prodluž období nebo vyber jiný den.';
+      USING HINT = 'Prodluž období nebo vyber jiný den.';
   END IF;
 
   IF _created = 0 THEN
     -- Všechny termíny kolidovaly (chyby zadání sem nedojdou, ty vyletí výš).
     -- Vyjmenovat je je k ničemu, když jich je dvacet — stačí důvod prvního.
+    -- Bez vlastního kódu: důvodem nemusí být obsazení (může padnout i všechno
+    -- na otevírací dobu), takže „obsazeno" by tady mohlo lhát. Konkrétní důvod
+    -- nese text hlášky.
     RAISE EXCEPTION 'Nepodařilo se založit ani jeden z % termínů. Důvod prvního: %',
       _count, COALESCE(_skipped->0->>'reason', 'neznámý')
-      USING ERRCODE = '55006',
-            HINT = 'Vyber jiný čas, dráhu nebo dny v týdnu.';
+      USING HINT = 'Zkontroluj čas, dráhu, vybrané dny i otevírací dobu haly.';
   END IF;
 
   -- `celkem` je nutné, aby šlo napsat „Vytvořeno 18 z 20" — bez něj by UI muselo
@@ -500,7 +529,7 @@ BEGIN
   IF position('WHEN OTHERS' in _def) > 0 THEN
     RAISE EXCEPTION 'Série pořád chytá WHEN OTHERS — chyby zadání by se hlásily jako kolize.';
   END IF;
-  IF position('object_in_use' in _def) = 0 THEN
+  IF position('SQLSTATE ''U0001''' in _def) = 0 THEN
     RAISE EXCEPTION 'Série nerozpoznává kolizi podle SQLSTATE.';
   END IF;
   IF position('celkem' in _def) = 0 THEN
@@ -510,12 +539,12 @@ BEGIN
   -- I tady se komentáře strhávají: obě funkce ty kódy zmiňují ve vysvětlení,
   -- takže by kontrola prošla, i kdyby se všechny `USING ERRCODE` smazaly.
   -- Hledá se proto celá klauzule, ne jen číslo.
-  IF position('ERRCODE = ''55006''' in regexp_replace(
+  IF position('ERRCODE = ''U0001''' in regexp_replace(
        pg_get_functiondef('public.create_booking(uuid[], text, text, timestamptz, timestamptz, uuid, text, jsonb, numeric, boolean, uuid)'::regprocedure),
        '--[^\n]*', '', 'g')) = 0 THEN
     RAISE EXCEPTION 'create_booking neoznačuje kolize vlastním SQLSTATE.';
   END IF;
-  IF position('ERRCODE = ''55000''' in regexp_replace(
+  IF position('ERRCODE = ''U0002''' in regexp_replace(
        pg_get_functiondef('public.validate_reservation_slot()'::regprocedure),
        '--[^\n]*', '', 'g')) = 0 THEN
     RAISE EXCEPTION 'validate_reservation_slot neoznačuje důvody mimo otevírací dobu.';

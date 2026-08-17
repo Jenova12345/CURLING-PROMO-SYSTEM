@@ -36,12 +36,13 @@ export function souhrnSerie(res: SeriesResult): string {
 
   const kolize = seznamDnu(res.skipped.filter((s) => s.duvod === 'kolize'));
   const zavreno = seznamDnu(res.skipped.filter((s) => s.duvod === 'mimo_otviraci_dobu'));
+  const neexistuje = seznamDnu(res.skipped.filter((s) => s.duvod === 'neexistujici_cas'));
 
   // ZÁLOHA PRO STARŠÍ SERVER. Frontend se nasazuje z GitHubu sám, kdežto migrace
   // se pouští ručně se souhlasem PM — mezi tím je okno, kdy nové UI mluví se
   // starou funkcí, která `duvod` neposílá vůbec. Bez tohohle by oba filtry
   // vyšly prázdné a uživatel by se nedozvěděl NIC, tedy míň než předtím.
-  if (!kolize && !zavreno) {
+  if (!kolize && !zavreno && !neexistuje) {
     return `Přeskočené termíny: ${seznamDnu(res.skipped)}`;
   }
 
@@ -50,6 +51,9 @@ export function souhrnSerie(res: SeriesResult): string {
   return [
     kolize && `Přeskočeno kvůli kolizi: ${kolize}`,
     zavreno && `Mimo otevírací dobu: ${zavreno}`,
+    // Vlastní věta schválně: „kolize" ani „zavřeno" by tady lhaly a uživatel by
+    // marně hledal, kdo mu dráhu zabral.
+    neexistuje && `Čas v daný den neexistuje (posun na letní čas): ${neexistuje}`,
   ].filter(Boolean).join(' ');
 }
 

@@ -52,6 +52,17 @@ describe('souhrnSerie — co uvidí klient', () => {
     expect(s).toContain('Mimo otevírací dobu: 22. 4.');
   });
 
+  it('neexistující čas při posunu na letní čas má vlastní větu', () => {
+    // „Kolize" ani „zavřeno" by tady lhaly a uživatel by marně hledal, kdo mu
+    // dráhu zabral.
+    const s = souhrnSerie(vysledek({
+      skipped: [preskoceny('2026-03-29', 'neexistujici_cas')],
+    }));
+    expect(s).toContain('Čas v daný den neexistuje');
+    expect(s).toContain('29. 3.');
+    expect(s).not.toContain('kolizi');
+  });
+
   it('u samých zavřených dnů nemluví o kolizi', () => {
     const s = souhrnSerie(vysledek({
       skipped: [preskoceny('2026-04-15', 'mimo_otviraci_dobu')],
