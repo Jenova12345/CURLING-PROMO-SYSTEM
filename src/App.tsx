@@ -12,6 +12,7 @@ import Dashboard from "./pages/Dashboard";
 import Calendar from "./pages/Calendar";
 import Dues from "./pages/Dues";
 import Invoices from "./pages/Invoices";
+import Requests from "./pages/Requests";
 import Subjects from "./pages/Subjects";
 import Settings from "./pages/Settings";
 import Portal from "./pages/Portal";
@@ -45,6 +46,7 @@ const App = () => (
               <Route path="/shifts" element={<Shifts />} />
               <Route path="/dues" element={<Dues />} />
               <Route path="/invoices" element={<Invoices />} />
+              <Route path="/requests" element={<Requests />} />
               <Route path="/subjects" element={<Subjects />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/payouts" element={<Payouts />} />

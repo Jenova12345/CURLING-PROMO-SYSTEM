@@ -7,6 +7,7 @@ import {
   Wallet,
   Coins,
   FileText,
+  UserPlus,
   Building2,
   Settings,
   User,
@@ -50,6 +51,12 @@ export const NAV_ITEMS: NavItem[] = [
     path: '/members',
     label: 'Členové',
     icon: Users,
+    roles: ['admin']
+  },
+  {
+    path: '/requests',
+    label: 'Žádosti',
+    icon: UserPlus,
     roles: ['admin']
   },
   {

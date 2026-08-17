@@ -659,6 +659,13 @@ export type Database = {
             foreignKeyName: "invoices_subject_id_fkey"
             columns: ["subject_id"]
             isOneToOne: false
+            referencedRelation: "clubs_public"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
             referencedRelation: "subjects"
             referencedColumns: ["id"]
           },
@@ -773,6 +780,13 @@ export type Database = {
             columns: ["reservation_id"]
             isOneToOne: false
             referencedRelation: "reservations_calendar"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "notifications_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "clubs_public"
             referencedColumns: ["id"]
           },
           {
@@ -1099,6 +1113,13 @@ export type Database = {
             foreignKeyName: "reservations_subject_id_fkey"
             columns: ["subject_id"]
             isOneToOne: false
+            referencedRelation: "clubs_public"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reservations_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
             referencedRelation: "subjects"
             referencedColumns: ["id"]
           },
@@ -1390,6 +1411,13 @@ export type Database = {
             foreignKeyName: "subject_reps_subject_id_fkey"
             columns: ["subject_id"]
             isOneToOne: false
+            referencedRelation: "clubs_public"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "subject_reps_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
             referencedRelation: "subjects"
             referencedColumns: ["id"]
           },
@@ -1416,6 +1444,106 @@ export type Database = {
           },
           {
             foreignKeyName: "subject_reps_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
+      subject_requests: {
+        Row: {
+          created_at: string
+          decided_at: string | null
+          decided_by: string | null
+          decision_reason: string | null
+          id: string
+          poznamka: string | null
+          status: Database["public"]["Enums"]["subject_request_status"]
+          subject_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          decided_at?: string | null
+          decided_by?: string | null
+          decision_reason?: string | null
+          id?: string
+          poznamka?: string | null
+          status?: Database["public"]["Enums"]["subject_request_status"]
+          subject_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          decided_at?: string | null
+          decided_by?: string | null
+          decision_reason?: string | null
+          id?: string
+          poznamka?: string | null
+          status?: Database["public"]["Enums"]["subject_request_status"]
+          subject_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "subject_requests_decided_by_fkey"
+            columns: ["decided_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "subject_requests_decided_by_fkey"
+            columns: ["decided_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "subject_requests_decided_by_fkey"
+            columns: ["decided_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "subject_requests_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "clubs_public"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "subject_requests_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "subject_requests_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects_rates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "subject_requests_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "subject_requests_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "subject_requests_user_id_fkey"
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "profiles_self"
@@ -1534,6 +1662,21 @@ export type Database = {
       }
     }
     Views: {
+      clubs_public: {
+        Row: {
+          id: string | null
+          name: string | null
+        }
+        Insert: {
+          id?: string | null
+          name?: string | null
+        }
+        Update: {
+          id?: string | null
+          name?: string | null
+        }
+        Relationships: []
+      }
       invoices_list: {
         Row: {
           cislo: string | null
@@ -1558,6 +1701,13 @@ export type Database = {
           variabilni_symbol: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "invoices_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "clubs_public"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "invoices_subject_id_fkey"
             columns: ["subject_id"]
@@ -1692,6 +1842,13 @@ export type Database = {
             foreignKeyName: "reservations_subject_id_fkey"
             columns: ["subject_id"]
             isOneToOne: false
+            referencedRelation: "clubs_public"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reservations_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
             referencedRelation: "subjects"
             referencedColumns: ["id"]
           },
@@ -1797,6 +1954,13 @@ export type Database = {
             foreignKeyName: "reservations_subject_id_fkey"
             columns: ["subject_id"]
             isOneToOne: false
+            referencedRelation: "clubs_public"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reservations_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
             referencedRelation: "subjects"
             referencedColumns: ["id"]
           },
@@ -1873,6 +2037,65 @@ export type Database = {
           },
         ]
       }
+      subject_requests_list: {
+        Row: {
+          created_at: string | null
+          decided_at: string | null
+          decision_reason: string | null
+          id: string | null
+          klub: string | null
+          poznamka: string | null
+          status: Database["public"]["Enums"]["subject_request_status"] | null
+          subject_id: string | null
+          uroven: Database["public"]["Enums"]["subject_rep_level"] | null
+          user_id: string | null
+          zadatel: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "subject_requests_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "clubs_public"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "subject_requests_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "subject_requests_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects_rates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "subject_requests_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "subject_requests_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "subject_requests_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
       subjects_rates: {
         Row: {
           default_rate: number | null
@@ -1891,6 +2114,13 @@ export type Database = {
     }
     Functions: {
       approve_reservation: { Args: { p_reservation_id: string }; Returns: Json }
+      approve_subject_request: {
+        Args: {
+          _level?: Database["public"]["Enums"]["subject_rep_level"]
+          _request_id: string
+        }
+        Returns: Json
+      }
       billing_health: {
         Args: never
         Returns: {
@@ -2081,6 +2311,14 @@ export type Database = {
           zacatek: string
         }[]
       }
+      reject_subject_request: {
+        Args: { _duvod?: string; _request_id: string }
+        Returns: undefined
+      }
+      request_subject_membership: {
+        Args: { _poznamka?: string; _subject_id: string }
+        Returns: string
+      }
       reservation_priority: {
         Args: {
           _event_type: Database["public"]["Enums"]["event_type"]
@@ -2124,6 +2362,7 @@ export type Database = {
       reservation_status: "confirmed" | "cancelled"
       shift_status: "open" | "pending" | "claimed" | "completed" | "cancelled"
       subject_rep_level: "rep" | "member"
+      subject_request_status: "ceka" | "schvalena" | "zamitnuta"
       subject_type: "club" | "commercial"
       vat_mode: "neplatce" | "identifikovana_osoba" | "platce"
     }
@@ -2278,6 +2517,7 @@ export const Constants = {
       reservation_status: ["confirmed", "cancelled"],
       shift_status: ["open", "pending", "claimed", "completed", "cancelled"],
       subject_rep_level: ["rep", "member"],
+      subject_request_status: ["ceka", "schvalena", "zamitnuta"],
       subject_type: ["club", "commercial"],
       vat_mode: ["neplatce", "identifikovana_osoba", "platce"],
     },

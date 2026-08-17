@@ -8,9 +8,10 @@
  * - No sensitive data logged to console
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Navigate, Link } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -42,7 +43,26 @@ const Auth = () => {
   // Register state
   const [registerEmail, setRegisterEmail] = useState('');
   const [registerPassword, setRegisterPassword] = useState('');
+  // Vybraný klub. Prázdné = „zatím nevím" a je to plnohodnotná volba: bez klubu
+  // se dá účet založit a žádost podat později, jinak by hobby hráč neměl kudy dovnitř.
+  const [registerClub, setRegisterClub] = useState('');
+  const [kluby, setKluby] = useState<{ id: string; name: string }[]>([]);
   const [registerName, setRegisterName] = useState('');
+
+  // Seznam klubů pro rozbalovátko. Čte veřejný pohled `clubs_public`, který
+  // vydává jen id a název — `subjects` samotné je admin-only (IČO, adresy, sazby).
+  // Když se nenačte, registrace tím netrpí: klub je nepovinný a dá se doplnit potom.
+  //
+  // MUSÍ zůstat nad early returny níž: `loading` je zprvu true, takže první
+  // render skončí u spinneru. Kdyby byl hook až za ním, přibyl by až v druhém
+  // renderu a React shodí celou přihlašovací stránku („Rendered more hooks…").
+  useEffect(() => {
+    let zivy = true;
+    supabase.from('clubs_public').select('id, name').order('name').then(({ data }) => {
+      if (zivy && data) setKluby(data as { id: string; name: string }[]);
+    });
+    return () => { zivy = false; };
+  }, []);
 
   if (loading) {
     return (
@@ -136,9 +156,10 @@ const Auth = () => {
 
     setIsSubmitting(true);
     const { error } = await signUp(
-      validatedData.email, 
-      validatedData.password, 
-      validatedData.name
+      validatedData.email,
+      validatedData.password,
+      validatedData.name,
+      registerClub || undefined,
     );
     setIsSubmitting(false);
 
@@ -163,9 +184,12 @@ const Auth = () => {
       setRegisterEmail('');
       setRegisterPassword('');
       setRegisterName('');
+      setRegisterClub('');
       toast({
         title: 'Registrace úspěšná!',
-        description: 'Zkontrolujte prosím svůj email pro potvrzení registrace.',
+        description: registerClub
+          ? 'Zkontrolujte prosím svůj e-mail pro potvrzení registrace. Přiřazení ke klubu musí ještě schválit správce haly.'
+          : 'Zkontrolujte prosím svůj email pro potvrzení registrace.',
         duration: 10000, // Show longer for important message
       });
     }
@@ -283,6 +307,25 @@ const Auth = () => {
                   />
                   <p className="text-xs text-muted-foreground">
                     Minimálně {VALIDATION_LIMITS.PASSWORD_MIN} znaků
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="register-club">Klub (nepovinné)</Label>
+                  <select
+                    id="register-club"
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                    value={registerClub}
+                    onChange={(e) => setRegisterClub(e.target.value)}
+                  >
+                    <option value="">Zatím žádný / nevím</option>
+                    {kluby.map((k) => (
+                      <option key={k.id} value={k.id}>{k.name}</option>
+                    ))}
+                  </select>
+                  {/* Ať je od začátku jasné, že výběrem se do klubu nikdo nedostane —
+                      jinak by člověk čekal, že po přihlášení uvidí rezervace klubu. */}
+                  <p className="text-xs text-muted-foreground">
+                    Výběrem klubu vznikne žádost o přiřazení. Členství potvrzuje správce haly.
                   </p>
                 </div>
                 <Button type="submit" className="w-full" disabled={isRegisterDisabled}>

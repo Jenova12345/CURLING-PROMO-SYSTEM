@@ -35,7 +35,7 @@ interface AuthContextType {
   roles: AppRole[];               // All user roles
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
-  signUp: (email: string, password: string, fullName: string) => Promise<{ error: Error | null }>;
+  signUp: (email: string, password: string, fullName: string, subjectId?: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
   hasAnyRole: (allowedRoles: string[]) => boolean;
   isAdmin: boolean;
@@ -171,7 +171,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { error: error as Error | null };
   };
 
-  const signUp = async (email: string, password: string, fullName: string) => {
+  /**
+   * `subjectId` je klub vybraný v registračním formuláři. Jede v metadatech,
+   * odkud si ho vyzvedne trigger `handle_new_user` a udělá z něj ŽÁDOST — ne
+   * členství. Že je to hodnota od nepřihlášeného uživatele, tedy nevadí:
+   * schválit ji musí admin a databáze si stejně ověří, že jde o existující klub.
+   */
+  const signUp = async (email: string, password: string, fullName: string, subjectId?: string) => {
     const redirectUrl = `${window.location.origin}/`;
     
     const { error } = await supabase.auth.signUp({
@@ -181,6 +187,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         emailRedirectTo: redirectUrl,
         data: {
           full_name: fullName,
+          ...(subjectId ? { subject_id: subjectId } : {}),
         },
       },
     });
