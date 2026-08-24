@@ -40,7 +40,10 @@ export const nactiConfig = (env: Record<string, string | undefined>): FakturoidC
 
   // Splatnost mimo rozsah je překlep, ne záměr — „0“ by znamenalo splatnost dnes
   // a záporná hodnota doklad splatný v minulosti.
-  const dny = Number(env.BILLING_DUE_DAYS ?? 14);
+  // Prázdný řetězec je „nevyplněno", ne nula: `Number('')` je 0, takže by
+  // odkomentovaný, ale nevyplněný řádek v .env shodil start s hláškou o splatnosti.
+  const zadano = (env.BILLING_DUE_DAYS ?? '').trim();
+  const dny = zadano === '' ? 14 : Number(zadano);
   if (!Number.isInteger(dny) || dny < 1 || dny > 365) {
     // Hodnota se ZÁMĚRNĚ nevypisuje, ačkoli by to tady bylo neškodné: kdo si
     // v `supabase secrets set` prohodí pořadí, dostane do téhle proměnné klíč —

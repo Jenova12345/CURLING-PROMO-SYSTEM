@@ -11,13 +11,13 @@
 // vznikl, aniž bychom si pamatovali cizí id.
 
 import type {
-  InvoiceDraft, InvoiceParty, InvoiceProvider, InvoiceResult,
+  InvoiceDraft, InvoiceLine, InvoiceParty, InvoiceProvider, InvoiceResult,
 } from '../../types.ts';
 import { BillingProviderError, BillingValidationError } from '../../errors.ts';
 import { TokenCache } from './auth.ts';
 import { zakladUrl, type FakturoidConfig } from './config.ts';
 import {
-  jakoJson, pozadavek, type FetchFn, type HttpOdpoved, type HttpPozadavek,
+  jakoJson, pozadavek, smiSeOpakovat, type FetchFn, type HttpOdpoved, type HttpPozadavek,
 } from './http.ts';
 
 /** Tvar odběratele, jak ho vrací Fakturoid. Jen pole, která používáme. */
@@ -36,7 +36,40 @@ interface FInvoice {
   custom_id: string | null;
   /** Fakturoid posílá částky jako řetězce („3752.00"). */
   total: string | number | null;
+  lines: FLine[] | null;
 }
+
+/** Řádek dokladu u Fakturoidu. */
+interface FLine {
+  name: string | null;
+  quantity: string | number | null;
+  unit_name: string | null;
+  unit_price: string | number | null;
+}
+
+/**
+ * Číslo z hodnoty, kterou Fakturoid posílá jako řetězec.
+ *
+ * `Number()` je tu zrádné: `Number("")` je 0 (doklad na nula korun), `Number("3 752,00")`
+ * je NaN — a `JSON.stringify(NaN)` je `null`, takže by ta hodnota beze stopy zmizela.
+ * Co není konečné číslo, se proto vrací jako `undefined` a volající se zachová
+ * opatrně, místo aby počítal s nesmyslem.
+ */
+const cislo = (hodnota: string | number | null | undefined): number | undefined => {
+  if (hodnota === null || hodnota === undefined) return undefined;
+  const text = String(hodnota).trim();
+  if (text === '') return undefined;
+  const n = Number(text);
+  return Number.isFinite(n) ? n : undefined;
+};
+
+/** Odpověď, která měla být pole. Bez téhle kontroly by `.find` spadl na TypeError. */
+const jakoPole = <T>(hodnota: unknown, cesta: string): T[] => {
+  if (Array.isArray(hodnota)) return hodnota as T[];
+  throw new BillingProviderError(
+    `Fakturoid vrátil na ${cesta} něco jiného než seznam.`, 200,
+  );
+};
 
 export interface FakturoidVolby {
   config: FakturoidConfig;
@@ -45,6 +78,16 @@ export interface FakturoidVolby {
   ted?: () => number;
   pokusu?: number;
 }
+
+/** Řádek od Fakturoidu → náš tvar. Nepřevoditelný řádek se zahodí, ne dohaduje. */
+const naRadek = (l: FLine): InvoiceLine | null => {
+  const quantity = cislo(l.quantity);
+  const unitPrice = cislo(l.unit_price);
+  if (quantity === undefined || unitPrice === undefined) return null;
+  return { name: l.name ?? '', quantity, unitName: l.unit_name ?? '', unitPrice };
+};
+
+const jeRadek = (l: InvoiceLine | null): l is InvoiceLine => l !== null;
 
 export class FakturoidProvider implements InvoiceProvider {
   // `#` pole, ne `private`. TypeScriptové `private` je jen kompilační značka —
@@ -91,6 +134,15 @@ export class FakturoidProvider implements InvoiceProvider {
     if (odpoved.status !== 401) return odpoved;
 
     this.#tokeny.zneplatni();
+
+    // ZOPAKOVAT SE SMÍ JEN ČTENÍ. 401 sice znamená „nezpracováno", takže by POST
+    // bylo teoreticky bezpečné poslat znovu — ale je to tichý obchvat pravidla
+    // „POST se neopakuje" a odesílal by druhé identické tělo. U dokladu se
+    // nevyplácí spoléhat na to, že druhá strana odmítla dřív, než něco založila;
+    // neúspěch tady vyřeší zámek 2 v příštím běhu.
+    if (!smiSeOpakovat(init, { fetch: this.#volby.fetch, userAgent: this.#volby.config.userAgent })) {
+      return odpoved;
+    }
     return poslat(await this.#tokeny.token());
   }
 
@@ -110,19 +162,19 @@ export class FakturoidProvider implements InvoiceProvider {
   async ensureSubject(party: InvoiceParty): Promise<{ providerSubjectId: string }> {
     const customId = `subj-${party.ourSubjectId}`;
 
-    const nalezene = await this.#json<FSubject[]>(
+    const nalezene = jakoPole<FSubject>(await this.#json<unknown>(
       `/subjects.json?custom_id=${encodeURIComponent(customId)}`,
-    );
+    ), '/subjects.json');
 
     // Fakturoid filtruje serverově, ale spoléhat se na to naslepo by znamenalo
     // poslat doklad cizímu odběrateli, kdyby se chování filtru změnilo.
-    const existujici = (nalezene ?? []).find((s) => s.custom_id === customId);
+    const existujici = nalezene.find((s) => s.custom_id === customId);
     if (existujici) return { providerSubjectId: String(existujici.id) };
 
     // Neprázdná odpověď, ve které NENÍ hledané custom_id, znamená, že filtr
     // neúčinkuje. Založit dalšího odběratele by v takové situaci znamenalo
     // zakládat duplicitu při každém běhu — radši hlasitě stát.
-    if ((nalezene ?? []).length > 0) {
+    if (nalezene.length > 0) {
       throw new BillingProviderError(
         `Filtr custom_id u /subjects.json nefunguje: dostal jsem ${nalezene.length} odběratelů, ` +
         `ale žádný nemá custom_id „${customId}“. Nezakládám dalšího.`, 200,
@@ -162,17 +214,17 @@ export class FakturoidProvider implements InvoiceProvider {
   // ---------------------------------------------------------------------------
 
   async findExistingInvoice(idempotencyKey: string): Promise<InvoiceResult | null> {
-    const nalezene = await this.#json<FInvoice[]>(
+    const nalezene = jakoPole<FInvoice>(await this.#json<unknown>(
       `/invoices.json?custom_id=${encodeURIComponent(idempotencyKey)}`,
-    );
-    const doklad = (nalezene ?? []).find((f) => f.custom_id === idempotencyKey);
+    ), '/invoices.json');
+    const doklad = nalezene.find((f) => f.custom_id === idempotencyKey);
     if (doklad) return this.#naVysledek(doklad);
 
     // TICHÁ DEGRADACE JE TU NEBEZPEČNĚJŠÍ NEŽ CHYBA. Kdyby Fakturoid přestal
     // `custom_id` filtrovat serverově, vrátil by první stránku cizích dokladů,
     // `.find` by nenašel nic, my bychom vrátili `null` — a zámek 2 by tiše
     // přestal fungovat. Duplicitní doklad by se objevil až u klienta.
-    if ((nalezene ?? []).length > 0) {
+    if (nalezene.length > 0) {
       throw new BillingProviderError(
         `Filtr custom_id u /invoices.json nefunguje: dostal jsem ${nalezene.length} dokladů, ` +
         `ale žádný nemá custom_id „${idempotencyKey}“. Zámek idempotence tím přestává platit.`, 200,
@@ -225,11 +277,8 @@ export class FakturoidProvider implements InvoiceProvider {
       variableSymbol: f.variable_symbol ?? '',
       ...(f.public_html_url ? { publicUrl: f.public_html_url } : {}),
       status: f.status ?? 'unknown',
-      // Fakturoid posílá částky jako řetězce. `Number('')` je 0, což by se tvářilo
-      // jako doklad na nula korun — proto se prázdná hodnota převádí na undefined.
-      ...(f.total !== null && f.total !== undefined && String(f.total).trim() !== ''
-        ? { providerTotal: Number(f.total) }
-        : {}),
+      ...(cislo(f.total) !== undefined ? { providerTotal: cislo(f.total) } : {}),
+      ...(Array.isArray(f.lines) ? { providerLines: f.lines.map(naRadek).filter(jeRadek) } : {}),
     };
   }
 

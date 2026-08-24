@@ -64,6 +64,9 @@ export class MockProvider implements InvoiceProvider {
       // (větev „nesedi" v pipeline). Mock, který ji neposílá, by tu větev
       // spouštěl pořád a vypadalo by to jako chyba v jádře.
       providerTotal: roundCzk(soucetRadku(draft.lines)),
+      // Skutečný Fakturoid řádky vrací a jádro je porovnává — bez nich by se
+      // testovala jen slabší varianta kontroly (podle částky).
+      providerLines: draft.lines.map((l) => ({ ...l })),
     };
     this.doklady.set(draft.idempotencyKey, vysledek);
     return vysledek;

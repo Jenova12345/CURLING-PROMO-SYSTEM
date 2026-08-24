@@ -257,3 +257,41 @@ describe('kontrolní součet — řádky dokladu vs. „Kdo kolik dluží“', (
     expect(roundCzk(soucetRadku(draft.lines))).toBe(3752);
   });
 });
+
+describe('duplicitní rezervace v podkladu', () => {
+  const r = (id: string) => rez({ id, start_at: '2026-08-04T16:00:00Z', end_at: '2026-08-04T17:00:00Z' });
+
+  // Zámek 1 to nechytí — ptá se, jestli rezervace UŽ nese doklad, ne jestli je
+  // v tomhle podkladu dvakrát. Zaplatil by to klient.
+  it('neprojde ani u klubu, ani u akce', () => {
+    expect(() => mapujKlubMesicne({
+      subjekt: KLUB, obdobiOd: '2026-08-01', jePlatceDph: false, rezervace: [r('a'), r('a')],
+    })).toThrow(/dvakrát/);
+
+    expect(() => mapujKomercniAkci({
+      eventId: 'ev1', subjekt: FIRMA, jePlatceDph: false, rezervace: [r('x'), r('x')],
+    })).toThrow(BillingValidationError);
+  });
+
+  it('různá id projdou', () => {
+    expect(mapujKlubMesicne({
+      subjekt: KLUB, obdobiOd: '2026-08-01', jePlatceDph: false, rezervace: [r('a'), r('b')],
+    })!.lines).toHaveLength(2);
+  });
+});
+
+describe('půlnoc', () => {
+  // `hour12: false` umí v některých runtimech vrátit „24:00" místo „00:00".
+  // Opravovat to náhradou hodiny je past: 24:00 dne 4. je 00:00 dne PÁTÉHO,
+  // takže by hodina seděla ke špatnému datu. Proto `hourCycle: 'h23'`.
+  it('rezervace přes půlnoc má správnou hodinu i správné datum', () => {
+    const p = popisKlubu(rez({
+      id: 'noc',
+      start_at: '2026-08-04T22:00:00Z',   // 5. 8. 00:00 pražského
+      end_at: '2026-08-04T23:00:00Z',     // 5. 8. 01:00 pražského
+    }));
+    expect(p).toContain('05.08.');
+    expect(p).toContain('00:00–01:00');
+    expect(p).not.toContain('24:00');
+  });
+});

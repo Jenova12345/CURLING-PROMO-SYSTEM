@@ -35,14 +35,17 @@ export type VysledekVystaveni =
   /** Není co fakturovat (0 řádků). Normální stav, ne chyba. */
   | { stav: 'prazdne' }
   /** Zámek 2 zabral — doklad u providera už byl. Vazba se jen dorovnala. */
-  | { stav: 'existoval'; link: InvoiceLink }
+  | { stav: 'existoval'; link: InvoiceLink; varovani?: string }
   /**
    * Doklad u providera existuje, ale NEODPOVÍDÁ dnešnímu podkladu.
    * Vazba se záměrně NEZAPSALA — kouká na to člověk.
    */
   | { stav: 'nesedi'; duvod: string; result: InvoiceResult }
-  /** Doklad vznikl teď. */
-  | { stav: 'vystaveno'; link: InvoiceLink };
+  /**
+   * Doklad vznikl teď. `varovani` nese rozpor kontrolního součtu proti providerovi —
+   * PR 4 ho MUSÍ někam vypsat, tichý rozpor u peněz je horší než hlasitý.
+   */
+  | { stav: 'vystaveno'; link: InvoiceLink; varovani?: string };
 
 /**
  * O kolik smí celková částka u providera odskočit od naší, aby to ještě bylo
@@ -83,6 +86,11 @@ export const vystavDoklad = async (vstup: {
   // Doklad bez zdrojových rezervací by neoznačil nic jako vyfakturované, takže
   // by tytéž hodiny prošly znovu pod jiným klíčem (`akce-…` vs. `klub-…`).
   // Je to jediná duplicita, kterou zámek 2 nechytá — klíč by byl jiný.
+  // Doklad na nula korun se nevystavuje — sazba 0 je platná (hodina zdarma
+  // uvnitř placeného dokladu), ale celý doklad na nulu je pro účetní horší
+  // než žádný. Automatika v repu to má stejně (`amount > 0` v automatika.sql).
+  if (roundCzk(soucetRadku(draft.lines)) <= 0) return { stav: 'prazdne' };
+
   if (draft.sourceReservationIds.length === 0) {
     throw new BillingValidationError(
       `Doklad ${draft.idempotencyKey} má řádky, ale žádné zdrojové rezervace — ` +
@@ -138,7 +146,8 @@ export const vystavDoklad = async (vstup: {
     const { providerSubjectId } = await provider.ensureSubject(draft.party);
     const vysledek = await provider.createInvoice(draft, providerSubjectId);
     const link = await dorovnej(store, draft, vysledek, vstup.pdfUloziste, provider, cekej, vstup.pdfPokusu);
-    return { stav: 'vystaveno', link };
+    const varovani = zkontrolujSoucet(draft, vysledek);
+    return { stav: 'vystaveno', link, ...(varovani ? { varovani } : {}) };
   } catch (chyba) {
     // Claim se pouští: po selhaném POSTu NEVÍME, jestli doklad vznikl. Rozhodne
     // až příští běh — zámek 2 ho buď najde, nebo ne. Držet claim navždy by
@@ -157,18 +166,67 @@ export const vystavDoklad = async (vstup: {
  * zaokrouhlovacích pravidel nanejvýš půl koruny.
  */
 const proc0Nesedi = (draft: InvoiceDraft, u: InvoiceResult): string | null => {
-  const nase = roundCzk(soucetRadku(draft.lines));
+  const oznaceni = u.number || u.providerInvoiceId;
 
+  // PRVNÍ A ROZHODUJÍCÍ KONTROLA JSOU ŘÁDKY, NE ČÁSTKA.
+  //
+  // Porovnávat jen součet je slabé přesně tam, kde na tom záleží: klub trénuje
+  // týdně za stejnou sazbu, takže doklad na rezervaci „a" a doklad na rezervaci
+  // „b" mají TUTÉŽ částku. Kontrola částkou by je prohlásila za shodné, „b" by
+  // se označila za vyfakturovanou — a už nikdy by se nevyfakturovala.
+  //
+  // Popis řádku nese datum a čas, takže je mezi rezervacemi rozlišuje.
+  if (u.providerLines) {
+    const otisk = (l: { name: string; quantity: number; unitPrice: number }) =>
+      `${l.name}|${l.quantity}|${l.unitPrice}`;
+    const uProvidera = [...u.providerLines].map(otisk).sort();
+    const nase = [...draft.lines].map(otisk).sort();
+
+    if (uProvidera.length !== nase.length || uProvidera.some((r, i) => r !== nase[i])) {
+      return `Doklad ${oznaceni} má ${uProvidera.length} řádků, ale dnešní podklad dává ` +
+        `${nase.length} a neshodují se. Nejspíš mezitím přibyla nebo se změnila rezervace. ` +
+        'Vazba se nezapsala.';
+    }
+    return null;
+  }
+
+  // Bez řádků zbývá jen částka — slabší, ale pořád lepší než nic.
+  const nase = roundCzk(soucetRadku(draft.lines));
   if (u.providerTotal === undefined) {
-    return `Doklad ${u.number || u.providerInvoiceId} existuje, ale provider nevrátil celkovou ` +
-      'částku, takže nejde ověřit, že odpovídá dnešnímu podkladu. Vazba se nezapsala.';
+    return `Doklad ${oznaceni} existuje, ale provider nevrátil ani řádky, ani celkovou částku, ` +
+      'takže nejde ověřit, že odpovídá dnešnímu podkladu. Vazba se nezapsala.';
   }
 
   const rozdil = Math.abs(u.providerTotal - nase);
   if (rozdil > TOLERANCE_KC) {
-    return `Doklad ${u.number || u.providerInvoiceId} zní na ${u.providerTotal} Kč, ` +
-      `ale dnešní podklad dává ${nase} Kč (rozdíl ${rozdil.toFixed(2)} Kč). ` +
-      'Nejspíš mezitím přibyla nebo se změnila rezervace. Vazba se nezapsala.';
+    return `Doklad ${oznaceni} zní na ${u.providerTotal} Kč, ale dnešní podklad dává ${nase} Kč ` +
+      `(rozdíl ${rozdil.toFixed(2)} Kč). Vazba se nezapsala.`;
+  }
+  return null;
+};
+
+/**
+ * Kontrolní součet PO vystavení: sedí částka u providera na naši?
+ *
+ * Vrací text varování, nebo `null`. Doklad už existuje, takže se nedá vzít zpět —
+ * ale rozpor se nesmí ztratit. Je to ta rovnice, kterou po fakturaci vyžaduje
+ * CLAUDE.md, jen proti externímu systému: co jsme poslali == co vytiskl.
+ */
+const zkontrolujSoucet = (draft: InvoiceDraft, u: InvoiceResult): string | null => {
+  if (u.providerTotal === undefined) {
+    return `Doklad ${u.number || u.providerInvoiceId} vznikl, ale provider nevrátil celkovou ` +
+      'částku — kontrolní součet se neověřil.';
+  }
+  const nase = roundCzk(soucetRadku(draft.lines));
+  const rozdil = Number((u.providerTotal - nase).toFixed(2));
+  if (Math.abs(rozdil) > TOLERANCE_KC) {
+    return `KONTROLNÍ SOUČET NESEDÍ: doklad ${u.number || u.providerInvoiceId} zní na ` +
+      `${u.providerTotal} Kč, my jsme poslali ${nase} Kč (rozdíl ${rozdil} Kč).`;
+  }
+  // Do půl koruny je to rozdíl zaokrouhlovacích pravidel — čekaný, ale ne němý.
+  if (rozdil !== 0) {
+    return `Zaokrouhlení se liší o ${rozdil} Kč (doklad ${u.providerTotal} Kč, ` +
+      `náš podklad ${nase} Kč). V mezích, ale stojí za zápis.`;
   }
   return null;
 };
@@ -196,12 +254,20 @@ const dorovnej = async (
 
   if (!uloziste) return link;
 
-  const pdf = result.pdf ?? await stahniPdf(provider, result.providerInvoiceId, cekej, pokusu);
-  if (!pdf) return link;   // pořád se generuje — doklad platí, PDF dobere další běh
+  // PDF SE NESMÍ DOTKNOUT PLATNOSTI DOKLADU. Výjimka odsud (429, výpadek sítě,
+  // plné úložiště) by shodila celé vystavení — vazba je přitom už zapsaná, takže
+  // příští běh by doklad podle zámku 1 přeskočil a PDF by nedobral NIKDO.
+  // Doklad má číslo a platí i bez PDF (R5); tohle je dobírání, ne vystavování.
+  try {
+    const pdf = result.pdf ?? await stahniPdf(provider, result.providerInvoiceId, cekej, pokusu);
+    if (!pdf) return link;   // pořád se generuje — dobere ho další běh fronty
 
-  const cesta = await uloziste.uloz(draft.idempotencyKey, pdf);
-  await store.zapisPdf(draft.idempotencyKey, cesta);
-  return { ...link, pdfPath: cesta };
+    const cesta = await uloziste.uloz(draft.idempotencyKey, pdf);
+    await store.zapisPdf(draft.idempotencyKey, cesta);
+    return { ...link, pdfPath: cesta };
+  } catch {
+    return link;
+  }
 };
 
 /**

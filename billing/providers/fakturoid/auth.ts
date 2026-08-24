@@ -97,9 +97,16 @@ export class TokenCache {
     return this.#rozpracovany;
   }
 
-  /** Zahodí token — volá se po 401, ať se další pokus nevydá se stejným. */
+  /**
+   * Zahodí token — volá se po 401, ať se další pokus nevydá se stejným.
+   *
+   * Musí zahodit i ROZPRACOVANOU obnovu. Bez toho by `token()` hned nato vrátil
+   * příslib, který právě dobíhá s TÝMŽ tokenem, retry po 401 by odešel se stejnou
+   * hlavičkou a skončil hláškou „zkontroluj klíče" — u klíčů, které jsou v pořádku.
+   */
   zneplatni(): void {
     this.#ulozeny = null;
+    this.#rozpracovany = null;
   }
 
   /** Pojistka pro případ, že někdo instanci přesto předá do `JSON.stringify`. */

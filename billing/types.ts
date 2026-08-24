@@ -95,6 +95,15 @@ export interface InvoiceResult {
    * na doklad. Bez tohohle pole by se ta odchylka nedala změřit, jen tušit.
    */
   providerTotal?: number;
+  /**
+   * Řádky, jak je má doklad U PROVIDERA.
+   *
+   * Bez nich se nedá bezpečně poznat, JESTLI nalezený doklad pokrývá dnešní
+   * podklad. Porovnání pouhých částek tu nestačí: klub trénuje týdně za stejnou
+   * sazbu, takže doklad na rezervaci „a" a doklad na rezervaci „b" mají tutéž
+   * částku — a „b" by se označila za vyfakturovanou, ačkoli je na dokladu „a".
+   */
+  providerLines?: InvoiceLine[];
   /** PDF, pokud už bylo hotové v okamžiku vystavení. Jinak se dotáhne `downloadPdf`. */
   pdf?: Uint8Array;
 }

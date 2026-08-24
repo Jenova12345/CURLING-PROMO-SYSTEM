@@ -7,7 +7,8 @@ import {
   prodlevaPoLimitu, smiSeOpakovat, type FetchFn, type HttpOdpoved, type HttpPozadavek,
 } from './http.ts';
 import {
-  BillingAuthError, BillingProviderError, BillingRateLimitError, BillingValidationError,
+  BillingAuthError, BillingNetworkError, BillingProviderError, BillingRateLimitError,
+  BillingValidationError, lzeOpakovat,
 } from '../../errors.ts';
 import type { InvoiceDraft } from '../../types.ts';
 
@@ -462,5 +463,162 @@ describe('tajemství nesmí jít serializovat', () => {
   it('ani Object.keys nevydá vnitřek', () => {
     const p = new FakturoidProvider({ config: TAJNY, fetch: mrtvyFetch });
     expect(Object.keys(p)).toEqual([]);
+  });
+});
+
+describe('rozpoznání prodlevy po 429', () => {
+  // Přesný tvar hlavičky u Fakturoidu v3 NENÍ ověřený proti živé odpovědi, proto
+  // se čte víc podob a spadá se na backoff. Tenhle test necertifikuje, KTEROU
+  // hlavičku Fakturoid posílá — ověřuje, že parser zvládne všechny tři a nespoléhá
+  // se na jednu domněnku.
+  it('zvládne Retry-After, X-RateLimit-Reset i parametrický tvar', () => {
+    expect(prodlevaPoLimitu(odpoved(429, '', { 'Retry-After': '3' }), 1)).toBe(3000);
+    expect(prodlevaPoLimitu(odpoved(429, '', { 'X-RateLimit-Reset': '7' }), 1)).toBe(7000);
+    expect(prodlevaPoLimitu(odpoved(429, '', { 'X-RateLimit': 'limit=100; remaining=0; t=42' }), 1)).toBe(42_000);
+  });
+
+  it('bez použitelné hlavičky spadne na backoff, ne na nulu', () => {
+    expect(prodlevaPoLimitu(odpoved(429, ''), 1)).toBe(500);
+    expect(prodlevaPoLimitu(odpoved(429, '', { 'Retry-After': 'Wed, 21 Oct 2026 07:28:00 GMT' }), 2)).toBe(1000);
+    expect(prodlevaPoLimitu(odpoved(429, '', { 'X-RateLimit': 'limit=100; remaining=0' }), 3)).toBe(2000);
+  });
+
+  it('rozbitá hodnota neuspí Edge funkci na čtvrt hodiny', () => {
+    expect(prodlevaPoLimitu(odpoved(429, '', { 'Retry-After': '9999' }), 1)).toBe(60_000);
+  });
+});
+
+describe('síťová chyba (odmítnutý fetch)', () => {
+  const padajiciFetch = (kolikrat: number): { fn: FetchFn; pocet: () => number } => {
+    let n = 0;
+    const fn: FetchFn = async (url) => {
+      if (url === TOKEN_URL) return TOKEN_OK();
+      n++;
+      if (n <= kolikrat) throw new TypeError('fetch failed: ECONNRESET');
+      return odpoved(200, [{ id: 7, custom_id: 'subj-abc' }]);
+    };
+    return { fn, pocet: () => n };
+  };
+
+  it('u ČTENÍ se zopakuje — přechodný výpadek nesmí trvale shodit doklad', async () => {
+    const { fn, pocet } = padajiciFetch(2);
+    const p = new FakturoidProvider({ config: CONFIG, fetch: fn, cekej: hnedCekej });
+    expect(await p.ensureSubject(DRAFT.party)).toEqual({ providerSubjectId: '7' });
+    expect(pocet()).toBe(3);
+  });
+
+  it('u ZÁPISU se nezopakuje — nevíme, jestli požadavek doletěl', async () => {
+    let post = 0;
+    const fn: FetchFn = async (url, init) => {
+      if (url === TOKEN_URL) return TOKEN_OK();
+      if (init?.method === 'POST') { post++; throw new TypeError('fetch failed'); }
+      return odpoved(200, []);
+    };
+    const p = new FakturoidProvider({ config: CONFIG, fetch: fn, cekej: hnedCekej });
+    await expect(p.createInvoice(DRAFT, '7')).rejects.toBeInstanceOf(BillingNetworkError);
+    expect(post).toBe(1);
+  });
+
+  it('je klasifikovaná jako opakovatelná na úrovni celého vystavení', () => {
+    // Bez vlastní třídy vyletěl TypeError, `lzeOpakovat` řekla „ne"
+    // a přechodný výpadek sítě znamenal trvale selhaný doklad.
+    expect(lzeOpakovat(new BillingNetworkError('x'))).toBe(true);
+    expect(lzeOpakovat(new BillingValidationError('x'))).toBe(false);
+    expect(lzeOpakovat(new BillingAuthError('x'))).toBe(false);
+  });
+});
+
+describe('401 u zápisu', () => {
+  it('POST se po 401 NEOPAKUJE, i když je 401 „nezpracováno"', async () => {
+    let post = 0;
+    const fn: FetchFn = async (url, init) => {
+      if (url === TOKEN_URL) return TOKEN_OK();
+      if (init?.method === 'POST') { post++; return odpoved(401, ''); }
+      return odpoved(200, []);
+    };
+    const p = new FakturoidProvider({ config: CONFIG, fetch: fn, cekej: hnedCekej });
+    await expect(p.createInvoice(DRAFT, '7')).rejects.toBeInstanceOf(BillingAuthError);
+    expect(post).toBe(1);
+  });
+
+  it('zneplatni() zahodí i rozpracovanou obnovu, ne jen uložený token', async () => {
+    // Bez toho by retry po 401 dostal TÝŽ token a skončil hláškou
+    // „zkontroluj klíče" u klíčů, které jsou v pořádku.
+    let vydano = 0;
+    const fn: FetchFn = async () => odpoved(200, {
+      access_token: `tok-${++vydano}`, token_type: 'Bearer', expires_in: 7200,
+    });
+    const cache = new TokenCache({ ...CONFIG, fetch: fn, userAgent: CONFIG.userAgent, cekej: hnedCekej });
+
+    const prvni = cache.token();
+    cache.zneplatni();
+    const druhy = await cache.token();
+    await prvni;
+    expect(druhy).not.toBe('tok-1');
+  });
+});
+
+describe('parsování částek a řádků od providera', () => {
+  const sTotalem = async (total: unknown, lines: unknown = null) => {
+    const { fn } = mockFetch([TOKEN_OK, () => odpoved(200, [{
+      id: 5, number: '20260001', variable_symbol: '20260001', public_html_url: null,
+      status: 'open', custom_id: 'klub-abc-202608', total, lines,
+    }])]);
+    const p = new FakturoidProvider({ config: CONFIG, fetch: fn, cekej: hnedCekej });
+    return p.findExistingInvoice('klub-abc-202608');
+  };
+
+  it('řetězcovou částku převede', async () => {
+    expect((await sTotalem('3752.00'))?.providerTotal).toBe(3752);
+  });
+
+  // Number('') je 0 — doklad na nula korun. Number('3 752,00') je NaN
+  // a JSON.stringify(NaN) je null, takže by hodnota beze stopy zmizela.
+  it('prázdnou ani neparsovatelnou částku nevydává za číslo', async () => {
+    expect((await sTotalem(''))?.providerTotal).toBeUndefined();
+    expect((await sTotalem('3 752,00'))?.providerTotal).toBeUndefined();
+    expect((await sTotalem(null))?.providerTotal).toBeUndefined();
+    expect((await sTotalem('0.00'))?.providerTotal).toBe(0);
+  });
+
+  it('řádky převede na náš tvar', async () => {
+    const v = await sTotalem('1200.00', [
+      { name: '04.08. 18:00–19:00 · Trénink', quantity: '1.0', unit_name: 'h', unit_price: '1200.0' },
+    ]);
+    expect(v?.providerLines).toEqual([
+      { name: '04.08. 18:00–19:00 · Trénink', quantity: 1, unitName: 'h', unitPrice: 1200 },
+    ]);
+  });
+});
+
+describe('odolnost proti nečekanému tvaru odpovědi', () => {
+  it('odpověď, která není seznam, je chyba — ne TypeError z .find', async () => {
+    const { fn } = mockFetch([TOKEN_OK, () => odpoved(200, { chyba: 'neco' })]);
+    const p = new FakturoidProvider({ config: CONFIG, fetch: fn, cekej: hnedCekej });
+    await expect(p.ensureSubject(DRAFT.party)).rejects.toBeInstanceOf(BillingProviderError);
+  });
+
+  it('odpověď, která není JSON, je čitelná chyba', async () => {
+    const { fn } = mockFetch([TOKEN_OK, () => odpoved(200, '<html>502 Bad Gateway</html>')]);
+    const p = new FakturoidProvider({ config: CONFIG, fetch: fn, cekej: hnedCekej });
+    await expect(p.findExistingInvoice('klub-abc-202608')).rejects.toThrow(/není JSON/);
+  });
+
+  it('hláška neuvádí víc pokusů, než kolik jich doopravdy bylo', async () => {
+    const { fn } = mockFetch([TOKEN_OK, () => odpoved(500, 'oops')]);
+    const p = new FakturoidProvider({ config: CONFIG, fetch: fn, cekej: hnedCekej, pokusu: 4 });
+    // POST se neopakuje, takže požadavek byl jeden — hláška „i po 4 pokusech"
+    // by ladění posílala špatným směrem.
+    await expect(p.createInvoice(DRAFT, '7')).rejects.toThrow(/^Fakturoid odpověděl 500\.$/);
+  });
+});
+
+describe('prázdná splatnost není nula', () => {
+  it('nevyplněné BILLING_DUE_DAYS znamená default 14, ne pád', () => {
+    // Number('') je 0, takže odkomentovaný, ale nevyplněný řádek v .env
+    // by jinak shodil start hláškou o splatnosti.
+    expect(nactiConfig({ ...ENV, BILLING_DUE_DAYS: '' }).dueDays).toBe(14);
+    expect(nactiConfig({ ...ENV, BILLING_DUE_DAYS: '  ' }).dueDays).toBe(14);
+    expect(nactiConfig({ ...ENV, BILLING_DUE_DAYS: undefined }).dueDays).toBe(14);
   });
 });

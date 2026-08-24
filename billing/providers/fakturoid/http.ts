@@ -7,7 +7,7 @@
 // se `fetch` dá injektovat a testovat bez sítě.
 
 import {
-  BillingAuthError, BillingProviderError, BillingRateLimitError,
+  BillingAuthError, BillingNetworkError, BillingProviderError, BillingRateLimitError,
 } from '../../errors.ts';
 
 export interface HttpOdpoved {
@@ -41,12 +41,23 @@ const spat = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms)
  * bušit dál, protože další požadavky okno jen prodlužují.
  */
 export const prodlevaPoLimitu = (odpoved: HttpOdpoved, pokus: number): number => {
-  const retryAfter = odpoved.headers.get('Retry-After');
-  const reset = odpoved.headers.get('X-RateLimit-Reset');
-  const vteriny = Number(retryAfter ?? reset);
+  // ZÁMĚRNĚ TOLERANTNÍ. Přesný tvar hlaviček u Fakturoidu v3 NENÍ ověřený proti
+  // živé odpovědi (viz billing/README.md, „Otevřené věci") a čte se víc podob:
+  // `Retry-After: 30`, `X-RateLimit-Reset: 30` i `X-RateLimit: …; t=30`.
+  // Když nesedí ani jedna, spadne se na exponenciální backoff — pořád lepší než
+  // bušit dál, protože další požadavky okno jen prodlužují.
+  const kandidati = [
+    odpoved.headers.get('Retry-After'),
+    odpoved.headers.get('X-RateLimit-Reset'),
+    // Parametrický tvar: z „limit=100; remaining=0; t=42" vytáhne 42.
+    /(?:^|[;,\s])t\s*=\s*(\d+)/.exec(odpoved.headers.get('X-RateLimit') ?? '')?.[1],
+  ];
 
-  // Strop 60 s: rozbitá hlavička („9999") nesmí uspat Edge funkci na čtvrt hodiny.
-  if (Number.isFinite(vteriny) && vteriny > 0) return Math.min(vteriny * 1000, 60_000);
+  for (const kandidat of kandidati) {
+    const vteriny = Number((kandidat ?? '').trim());
+    // Strop 60 s: rozbitá hlavička („9999") nesmí uspat Edge funkci na čtvrt hodiny.
+    if (Number.isFinite(vteriny) && vteriny > 0) return Math.min(vteriny * 1000, 60_000);
+  }
   return BACKOFF_MS * 2 ** (pokus - 1);
 };
 
@@ -124,20 +135,41 @@ export const pozadavek = async (
 ): Promise<HttpOdpoved> => {
   const cekej = volby.cekej ?? spat;
   const pokusu = volby.pokusu ?? POKUSU;
+  if (!Number.isInteger(pokusu) || pokusu < 1) {
+    throw new BillingProviderError(`Počet pokusů musí být aspoň 1 (dostal jsem ${pokusu}).`, 0);
+  }
+  const opakovatelny = smiSeOpakovat(init, volby);
 
   let posledni: HttpOdpoved | null = null;
+  let pokusuSkutecne = 0;
 
   for (let pokus = 1; pokus <= pokusu; pokus++) {
-    const odpoved = await volby.fetch(url, {
-      ...init,
-      headers: {
-        // User-Agent je u Fakturoidu POVINNÝ. Bez něj přijde 400 a vypadá to
-        // jako chyba v datech, ne v hlavičkách.
-        'User-Agent': volby.userAgent,
-        Accept: 'application/json',
-        ...init.headers,
-      },
-    });
+    pokusuSkutecne = pokus;
+    let odpoved: HttpOdpoved;
+    try {
+      odpoved = await volby.fetch(url, {
+        ...init,
+        headers: {
+          // User-Agent je u Fakturoidu POVINNÝ. Bez něj přijde 400 a vypadá to
+          // jako chyba v datech, ne v hlavičkách.
+          'User-Agent': volby.userAgent,
+          Accept: 'application/json',
+          ...init.headers,
+        },
+      });
+    } catch (chyba) {
+      // ODMÍTNUTÝ FETCH NENÍ ODPOVĚĎ. `ECONNRESET` nebo DNS výpadek doteď neprošel
+      // klasifikací vůbec a vyletěl jako `TypeError`, takže `lzeOpakovat` řekla
+      // „neopakovat" — a přechodný výpadek sítě znamenal trvale selhaný doklad.
+      if (opakovatelny && pokus < pokusu) {
+        await cekej(BACKOFF_MS * 2 ** (pokus - 1));
+        continue;
+      }
+      throw new BillingNetworkError(
+        `Spojení s Fakturoidem selhalo po ${pokus} ${pokus === 1 ? 'pokusu' : 'pokusech'}.`,
+        { cause: chyba },
+      );
+    }
     posledni = odpoved;
 
     if (odpoved.status === 429) {
@@ -155,7 +187,7 @@ export const pozadavek = async (
     // viz `smiSeOpakovat`. 4xx se neopakuje nikdy: druhý pokus se stejnými daty
     // dopadne stejně a jen spotřebuje rate limit.
     if (odpoved.status >= 500) {
-      if (pokus === pokusu || !smiSeOpakovat(init, volby)) break;
+      if (pokus === pokusu || !opakovatelny) break;
       await cekej(BACKOFF_MS * 2 ** (pokus - 1));
       continue;
     }
@@ -164,8 +196,10 @@ export const pozadavek = async (
   }
 
   const odpoved = posledni!;
+  // Počet se bere ze SKUTEČNĚ provedených pokusů. Hláška „i po 4 pokusech"
+  // u jediného requestu (neopakovatelný POST) by posílala ladění špatným směrem.
   throw new BillingProviderError(
-    `Fakturoid odpověděl ${odpoved.status} i po ${pokusu} pokusech.`,
+    `Fakturoid odpověděl ${odpoved.status}${pokusuSkutecne > 1 ? ` i po ${pokusuSkutecne} pokusech` : ''}.`,
     odpoved.status,
     zkrat(await odpoved.text().catch(() => '')),
   );

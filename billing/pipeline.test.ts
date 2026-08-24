@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { PDF_POKUSU, stahniPdf, vystavDoklad } from './pipeline.ts';
 import { PametovyStore } from './store.ts';
 import { MockProvider } from './providers/mock.ts';
-import { mapujKlubMesicne, mapujKomercniAkci, type BillableReservation, type SubjectForBilling } from './mapping.ts';
+import {
+  mapujKlubMesicne, mapujKomercniAkci, soucetRadku,
+  type BillableReservation, type SubjectForBilling,
+} from './mapping.ts';
 import type { InvoiceProvider } from './types.ts';
 
 const KLUB: SubjectForBilling = {
@@ -288,7 +291,8 @@ describe('větev „nesedi" — doklad existuje, ale neodpovídá podkladu', () 
 
     expect(v.stav).toBe('nesedi');
     if (v.stav !== 'nesedi') return;
-    expect(v.duvod).toMatch(/1200 Kč.*2400 Kč|rozdíl/);
+    // Kontrola řádků běží dřív než kontrola částky, takže důvod mluví o řádcích.
+    expect(v.duvod).toMatch(/1 řádků.*podklad dává 2/);
     // TOHLE je pointa: „b" se nesmí označit za vyfakturovanou.
     expect(await store.jeVyfakturovana('b')).toBe(false);
     expect(store.pocetDokladu).toBe(0);
@@ -328,5 +332,129 @@ describe('doklad bez zdrojových rezervací', () => {
     await expect(vystavDoklad({
       draft, provider: new MockProvider(), store: new PametovyStore(), cekej: hnedCekej,
     })).rejects.toThrow(/žádné zdrojové rezervace/);
+  });
+});
+
+describe('kontrola nalezeného dokladu je podle ŘÁDKŮ, ne podle částky', () => {
+  // TOHLE je scénář, na kterém kontrola pouhým součtem selže — a není okrajový,
+  // je to normální provoz: klub trénuje týdně za stejnou sazbu, takže doklad
+  // na rezervaci „a" a doklad na rezervaci „b" mají TUTÉŽ částku.
+  //
+  // Běh 1: podklad {a} → doklad vystaven, ale vazba se nezapsala (spadlo spojení).
+  // Běh 2: volající posílá jen nevyfakturované, tedy {b} — přesně jak to dělají
+  //        RPC v repu. Klíč je týž (klub-…-202608), takže zámek 2 najde doklad z {a}.
+  // Bez kontroly řádků by se „b" označila za vyfakturovanou, ačkoli na dokladu
+  // je „a" — a „b" by se nevyfakturovala NIKDY.
+  it('stejná částka, jiná rezervace → nesedi, ne existoval', async () => {
+    const provider = new MockProvider();
+    const store = new PametovyStore();
+
+    const jenA = mapujKlubMesicne({
+      subjekt: KLUB, obdobiOd: '2026-08-01', jePlatceDph: false, rezervace: [rezervace[0]],
+    })!;
+    const jenB = mapujKlubMesicne({
+      subjekt: KLUB, obdobiOd: '2026-08-01', jePlatceDph: false, rezervace: [rezervace[1]],
+    })!;
+
+    // Předpoklad testu: obě částky jsou opravdu stejné, jinak by test nic nedokazoval.
+    expect(soucetRadku(jenA.lines)).toBe(soucetRadku(jenB.lines));
+    expect(jenA.idempotencyKey).toBe(jenB.idempotencyKey);
+
+    await provider.createInvoice(jenA, 's');          // běh 1, vazba se ztratila
+    const v = await vystavDoklad({ draft: jenB, provider, store, cekej: hnedCekej });
+
+    expect(v.stav).toBe('nesedi');
+    expect(await store.jeVyfakturovana('b')).toBe(false);
+  });
+
+  it('shodné řádky projdou', async () => {
+    const provider = new MockProvider();
+    const store = new PametovyStore();
+    await provider.createInvoice(draftKlubu()!, 's');
+
+    const v = await vystavDoklad({ draft: draftKlubu(), provider, store, cekej: hnedCekej });
+    expect(v.stav).toBe('existoval');
+  });
+});
+
+describe('kontrolní součet po vystavení', () => {
+  it('rozpor proti providerovi se vrátí jako varování, ne mlčky', async () => {
+    const store = new PametovyStore();
+    const lzivy: InvoiceProvider = {
+      ...new MockProvider(),
+      ensureSubject: async () => ({ providerSubjectId: 's' }),
+      findExistingInvoice: async () => null,
+      createInvoice: async () => ({
+        providerInvoiceId: 'i1', number: '20260001', variableSymbol: '20260001',
+        status: 'open', providerTotal: 9999,        // my posíláme 2 400 Kč
+      }),
+      downloadPdf: async () => null,
+    };
+
+    const v = await vystavDoklad({ draft: draftKlubu(), provider: lzivy, store, cekej: hnedCekej });
+    expect(v.stav).toBe('vystaveno');
+    if (v.stav !== 'vystaveno') return;
+    expect(v.varovani).toMatch(/KONTROLNÍ SOUČET NESEDÍ/);
+    // Doklad existuje, takže se vazba zapsat MUSÍ — jinak by ho nikdo neevidoval.
+    expect(await store.jeVyfakturovana('a')).toBe(true);
+  });
+
+  it('když sedí, varování není', async () => {
+    const v = await vystavDoklad({
+      draft: draftKlubu(), provider: new MockProvider(), store: new PametovyStore(), cekej: hnedCekej,
+    });
+    if (v.stav !== 'vystaveno') throw new Error('čekal jsem vystavení');
+    expect(v.varovani).toBeUndefined();
+  });
+});
+
+describe('PDF nesmí shodit vystavení', () => {
+  it('výjimka při stahování PDF nechá doklad vystavený', async () => {
+    // Vazba je v tu chvíli UŽ zapsaná, takže by příští běh doklad podle zámku 1
+    // přeskočil a PDF by nedobral nikdo. Doklad má číslo a platí i bez PDF.
+    const store = new PametovyStore();
+    const provider: InvoiceProvider = {
+      ...new MockProvider(),
+      ensureSubject: async () => ({ providerSubjectId: 's' }),
+      findExistingInvoice: async () => null,
+      createInvoice: async () => ({
+        providerInvoiceId: 'i1', number: '20260001', variableSymbol: '20260001',
+        status: 'open', providerTotal: 2400,
+      }),
+      downloadPdf: async () => { throw new Error('Fakturoid nás přibrzdil'); },
+    };
+
+    const v = await vystavDoklad({
+      draft: draftKlubu(), provider, store, cekej: hnedCekej,
+      pdfUloziste: { uloz: async () => 'nikdy' },
+    });
+
+    expect(v.stav).toBe('vystaveno');
+    if (v.stav !== 'vystaveno') return;
+    expect(v.link.pdfPath).toBeUndefined();
+    expect(await store.jeVyfakturovana('a')).toBe(true);
+  });
+
+  it('selhání úložiště taky ne', async () => {
+    const v = await vystavDoklad({
+      draft: draftKlubu(), provider: new MockProvider(), store: new PametovyStore(),
+      cekej: hnedCekej,
+      pdfUloziste: { uloz: async () => { throw new Error('plné úložiště'); } },
+    });
+    expect(v.stav).toBe('vystaveno');
+  });
+});
+
+describe('doklad na nula korun', () => {
+  it('se nevystavuje, i když má řádky', async () => {
+    const provider = new MockProvider();
+    const zdarma = mapujKlubMesicne({
+      subjekt: KLUB, obdobiOd: '2026-08-01', jePlatceDph: false,
+      rezervace: rezervace.map((r) => ({ ...r, sazba: 0, castka: 0 })),
+    });
+
+    const v = await vystavDoklad({ draft: zdarma, provider, store: new PametovyStore(), cekej: hnedCekej });
+    expect(v.stav).toBe('prazdne');
+    expect(provider.volani.createInvoice).toBe(0);
   });
 });

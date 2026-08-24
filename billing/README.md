@@ -131,12 +131,19 @@ ověřuje, aby se případný rozchod ozval u nás, ne až na dokladu u klienta.
 **Prázdný doklad se nevystavuje.** Klub bez zpoplatněných rezervací za měsíc je
 normální stav, ne chyba — a doklad na nula korun je pro účetní horší než žádný.
 
-**POST se po 5xx neopakuje.** 500 neříká „nestalo se nic", ale „nevím, jak to
+**Zápis se neopakuje nikdy — ani po 5xx, ani po 401, ani po výpadku sítě.** 500 neříká „nestalo se nic", ale „nevím, jak to
 dopadlo" — Fakturoid mohl doklad založit a spadnout až při skládání odpovědi.
 Retry by vystavil druhý doklad, protože `custom_id` u Fakturoidu není unikátní
 klíč, jen naše značka. Správná cesta po selhaném POSTu je nechat ho spadnout
 a spolehnout se na zámek 2 v příštím běhu. 429 se naopak opakuje vždycky:
-znamená „odmítnuto, nezpracováno". Rozhoduje o tom `smiSeOpakovat` v `http.ts`.
+znamená „odmítnuto, nezpracováno". Rozhoduje o tom `smiSeOpakovat` v `http.ts`,
+a platí to i pro opakování po 401 a pro odmítnutý `fetch` (`ECONNRESET`) —
+u čtení se opakují, u zápisu ne.
+
+Na úrovni CELÉHO vystavení se naopak opakovat smí (`lzeOpakovat` vrací `true`
+pro 5xx i síťovou chybu). Je to bezpečné **jen díky zámkům 2 a 3**: nový běh se
+nejdřív zeptá, jestli doklad nevznikl, a porovná jeho řádky s dnešním podkladem.
+Kdyby některý z těch zámků padl, změní se to `true` v duplicitní fakturu.
 
 **Tři zámky, ne dva.** Zámek 1 (lokální, bez sítě) chytí, že rezervace už doklad
 nese; zámek 2 (dotaz k providerovi před POSTem) chytí doklad, který vznikl, ale
@@ -146,14 +153,40 @@ je rozhodne. Nad databází to musí být jeden atomický příkaz, ne „SELECT
 nic, tak INSERT" — vzor je `UPDATE … WHERE invoice_id IS NULL RETURNING`
 v `create_invoice_draft_club`.
 
-**Nalezenému dokladu se nevěří naslepo.** Když zámek 2 doklad najde, porovná se
-jeho celková částka s dnešním podkladem. Důvod: doklad vznikl ze VČEREJŠÍCH
-rezervací, ale vazba by se zapsala na dnešní `sourceReservationIds` — takže
-rezervace, která mezitím přibyla, by se označila za vyfakturovanou, ačkoli na
-dokladu není, a už nikdy by se nevyfakturovala. Při rozdílu nad 0,50 Kč se vrátí
-stav `nesedi` a **vazba se nezapíše** — rozdíl patří člověku, ne automatice.
+**Nalezenému dokladu se nevěří naslepo — a porovnávají se ŘÁDKY, ne částka.**
+Když zámek 2 doklad najde, vznikl ze VČEREJŠÍCH rezervací, ale vazba by se
+zapsala na dnešní `sourceReservationIds`: rezervace, která mezitím přibyla,
+by se označila za vyfakturovanou, ačkoli na dokladu není, a už nikdy by se
+nevyfakturovala.
+
+Porovnávat jen součet tu nestačí, a selhalo by to přesně v normálním provozu:
+klub trénuje týdně za stejnou sazbu, takže doklad na rezervaci „a" a doklad
+na rezervaci „b" mají **tutéž částku**. Popis řádku nese datum a čas, takže
+rezervace rozliší. Při rozdílu se vrací stav `nesedi` a **vazba se nezapíše** —
+rozdíl patří člověku, ne automatice. Bez řádků od providera se spadne na
+slabší kontrolu částkou (tolerance 0,50 Kč).
+
+**Kontrolní součet se ověřuje i po vystavení.** Co jsme poslali == co provider
+vytiskl. Rozpor se vrací jako `varovani` na výsledku; doklad už existuje, takže
+ho nejde vzít zpět, ale **tichý rozpor u peněz je horší než hlasitý**. PR 4 ho
+musí někam vypsat.
+
+**PDF nesmí shodit vystavení.** Výjimka při stahování (429, výpadek sítě, plné
+úložiště) by shodila celé `vystavDoklad` — jenže vazba je v tu chvíli už zapsaná,
+takže příští běh doklad podle zámku 1 přeskočí a PDF by nedobral **nikdo**.
+Doklad má číslo a platí i bez PDF; stahování je dobírání, ne vystavování.
+
+**Doklad na nula korun se nevystavuje.** Sazba 0 na jednotlivém řádku je platná
+(hodina zdarma uvnitř placeného dokladu), celý doklad na nulu ne — automatika
+v repu to má stejně (`amount > 0` v `automatika.sql`).
 
 ## Odloženo vědomě
+
+**Tvar hlavičky rate limitu není ověřený.** Přesnou podobu, kterou Fakturoid v3
+posílá u 429, jsme neviděli na živé odpovědi. `prodlevaPoLimitu` proto čte tři
+podoby (`Retry-After`, `X-RateLimit-Reset`, parametrické `X-RateLimit: …; t=42`)
+a když nesedí ani jedna, spadne na exponenciální backoff. **Ověřit při prvním
+živém 429** a zúžit. Do té doby je to odolnost, ne znalost.
 
 **Timeout požadavků (`AbortController`).** `http.ts` nemá horní mez čekání, takže
 zaseknuté spojení drží Edge funkci až do jejího vlastního limitu. Zvyšuje to

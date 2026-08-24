@@ -184,6 +184,25 @@ const naRadek = (r: BillableReservation, popis: (r: BillableReservation) => stri
   };
 };
 
+/**
+ * Tatáž rezervace dvakrát na vstupu = dvojnásobná částka na dokladu.
+ *
+ * Zámek 1 to nechytí — ptá se, jestli rezervace UŽ nese doklad, ne jestli je
+ * v tomhle podkladu dvakrát. A `sourceReservationIds` by ji obsahovaly dvakrát,
+ * takže by to prošlo i dál. Je to chyba volajícího, ale zaplatil by ji klient.
+ */
+const overBezDuplicit = (rezervace: readonly BillableReservation[]): void => {
+  const videne = new Set<string>();
+  for (const r of rezervace) {
+    if (videne.has(r.id)) {
+      throw new BillingValidationError(
+        `Rezervace ${r.id} je v podkladu dvakrát — doklad by na ni zněl dvojnásobně.`, 'rezervace',
+      );
+    }
+    videne.add(r.id);
+  }
+};
+
 /** Rezervace jdou na doklad chronologicky; při shodě času rozhoduje id, ať je pořadí stabilní. */
 const chronologicky = (a: BillableReservation, b: BillableReservation): number =>
   a.start_at === b.start_at ? a.id.localeCompare(b.id) : a.start_at.localeCompare(b.start_at);
@@ -205,6 +224,7 @@ export const mapujKomercniAkci = (vstup: {
   dueInDays?: number;
   issuedOn?: string | Date;
 }): InvoiceDraft | null => {
+  overBezDuplicit(vstup.rezervace);
   const rezervace = [...vstup.rezervace].sort(chronologicky);
   if (rezervace.length === 0) return null;
 
@@ -235,6 +255,7 @@ export const mapujKlubMesicne = (vstup: {
   dueInDays?: number;
   issuedOn?: string | Date;
 }): InvoiceDraft | null => {
+  overBezDuplicit(vstup.rezervace);
   const rezervace = [...vstup.rezervace].sort(chronologicky);
   if (rezervace.length === 0) return null;
 

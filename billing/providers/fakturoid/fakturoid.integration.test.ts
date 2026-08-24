@@ -47,8 +47,11 @@ const live = jeAno(env.FAKTUROID_LIVE) && potvrzeno;
  * Identifikátor běhu. Musí být STABILNÍ uvnitř běhu (jinak by se netestovala
  * idempotence) a JINÝ mezi běhy (jinak by druhý běh narazil na doklad z prvního
  * a netestoval by vystavení).
+ *
+ * Vteřiny jsou tu podstatné: s minutovým rozlišením by dva běhy do jedné minuty
+ * dostaly týž identifikátor a druhý by spadl na „expected 'existoval' to be 'vystaveno'".
  */
-const BEH = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+const BEH = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
 const TEST_KLUB_ID = `test-klub-${BEH}`;
 
 const rezervace: BillableReservation[] = [

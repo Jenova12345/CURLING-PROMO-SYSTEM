@@ -18,7 +18,12 @@ const casti = (okamzik: Date): Casti => {
   const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone: PRAHA,
     year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', hour12: false,
+    hour: '2-digit', minute: '2-digit',
+    // `hourCycle: 'h23'`, ne `hour12: false`. To druhé umí v některých runtimech
+    // vrátit „24:00" místo „00:00" — a oprava hodiny na „00" by pak seděla
+    // k ŠPATNÉMU DATU (24:00 dne 4. je 00:00 dne 5.). `h23` vrací 0–23 rovnou
+    // a datum k tomu sedí samo.
+    hourCycle: 'h23',
   }).formatToParts(okamzik);
 
   const najdi = (typ: Intl.DateTimeFormatPartTypes): string =>
@@ -26,10 +31,7 @@ const casti = (okamzik: Date): Casti => {
 
   return {
     rok: najdi('year'), mesic: najdi('month'), den: najdi('day'),
-    // `hour12: false` umí v některých runtimech vrátit „24" místo „00" pro půlnoc.
-    // Není to teoretické: rezervace do 24:00 je běžná (otevírací doba do 22:00,
-    // ale údržba jede přes půlnoc) a „24:00–01:00" by na dokladu vypadalo jako chyba.
-    hodina: najdi('hour') === '24' ? '00' : najdi('hour'),
+    hodina: najdi('hour'),
     minuta: najdi('minute'),
   };
 };

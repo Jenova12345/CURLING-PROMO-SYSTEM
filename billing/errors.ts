@@ -43,6 +43,15 @@ export class BillingRateLimitError extends BillingError {
 }
 
 /**
+ * Spojení vůbec nedošlo (odmítnutý fetch, DNS, reset).
+ *
+ * U ČTENÍ se opakovat smí. U ZÁPISU je to ten nejhorší stav: nevíme, jestli
+ * požadavek doletěl — proto ho `http.ts` neopakuje a spoléhá se na zámek 2
+ * v příštím běhu.
+ */
+export class BillingNetworkError extends BillingError {}
+
+/**
  * Provider odpověděl chybou, kterou neumíme zařadit.
  * `status` rozhoduje o opakování: 5xx ano, 4xx ne.
  */
@@ -60,6 +69,11 @@ export class BillingProviderError extends BillingError {
 /** Má se chyba zkusit znovu? Jediné místo, kde se to rozhoduje. */
 export const lzeOpakovat = (chyba: unknown): boolean => {
   if (chyba instanceof BillingRateLimitError) return true;
+  if (chyba instanceof BillingNetworkError) return true;
+  // 5xx a výpadek sítě se opakují na úrovni CELÉHO vystavení, ne jednoho requestu.
+  // Je to bezpečné jen díky zámkům 2 a 3: nový běh se nejdřív zeptá, jestli doklad
+  // nevznikl (`findExistingInvoice`), a porovná jeho řádky s dnešním podkladem.
+  // Kdyby některý z těch zámků padl, tahle „true" se změní v duplicitní fakturu.
   if (chyba instanceof BillingProviderError) return chyba.status >= 500;
   // Validace ani autentizace se neopakují — a neznámou chybu radši taky ne:
   // opakovat něco, čemu nerozumíme, znamená riskovat duplicitní doklad.
