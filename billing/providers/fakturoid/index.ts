@@ -203,6 +203,7 @@ export class FakturoidProvider implements InvoiceProvider {
     // hodnotu a přepsal tím to, co tam případně vyplnil člověk.
     if (party.registrationNo) telo.registration_no = party.registrationNo;
     if (party.vatNo) telo.vat_no = party.vatNo;
+    if (party.email) telo.email = party.email;
     if (party.street) telo.street = party.street;
     if (party.city) telo.city = party.city;
     if (party.zip) telo.zip = party.zip;
@@ -305,4 +306,55 @@ export class FakturoidProvider implements InvoiceProvider {
     }
     return new Uint8Array(await odpoved.arrayBuffer());
   }
+
+  // ---------------------------------------------------------------------------
+  // Odeslání odběrateli
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Odešle doklad e-mailem: `POST /invoices/{id}/message.json`.
+   *
+   * NENÍ TO `fire.json?event=deliver`. Ten byl z API v3 ODSTRANĚN ve prospěch
+   * Invoice Messages; `fire.json` dnes umí jen `mark_as_sent`, `cancel`,
+   * `undo_cancel`, `lock`, `unlock` a `mark_as_uncollectible` — tedy změny stavu,
+   * ne odeslání. Kdo by sáhl po `mark_as_sent`, označí doklad za odeslaný,
+   * aniž by ho kdokoli dostal.
+   *
+   * `replace_with_defaults` necháváme na výchozím `true`: adresu i text vezme
+   * Fakturoid z odběratele a z nastavení účtu. My e-mail většinou nemáme —
+   * `public.subjects` pro něj sloupec nemá.
+   *
+   * Odpovědi: 204 = zařazeno k odeslání. 403 = účet na free tarifu, e-maily
+   * zakázané kvůli stížnostem na spam, nebo vyčerpaná denní kvóta. 422 = špatná
+   * data, typicky CHYBĚJÍCÍ E-MAIL u odběratele.
+   */
+  async sendInvoice(providerInvoiceId: string, komu: { email?: string }): Promise<void> {
+    const telo: Record<string, unknown> = {};
+    if (komu.email) telo.email = komu.email;
+
+    const odpoved = await this.#volej(
+      `/invoices/${encodeURIComponent(providerInvoiceId)}/message.json`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(telo) },
+    );
+
+    if (odpoved.status === 204 || odpoved.status === 200) return;
+
+    if (odpoved.status === 403) {
+      throw new BillingProviderError(
+        'Fakturoid odmítl odeslat e-mail (403). Bývá to free tarif, vyčerpaná denní kvóta, ' +
+        'nebo zakázané odesílání kvůli stížnostem na spam.', 403,
+      );
+    }
+    if (odpoved.status === 422) {
+      throw new BillingProviderError(
+        `Fakturoid nemá kam doklad ${providerInvoiceId} odeslat (422). Nejčastěji chybí ` +
+        'e-mail u odběratele — v našich `subjects` se e-mail neukládá, takže ho musí ' +
+        'mít vyplněný Fakturoid.', 422,
+      );
+    }
+    throw new BillingProviderError(
+      `Odeslání dokladu ${providerInvoiceId} selhalo (${odpoved.status}).`, odpoved.status,
+    );
+  }
+
 }

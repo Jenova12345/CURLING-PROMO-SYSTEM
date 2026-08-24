@@ -154,7 +154,7 @@ describe('PDF — 204 znamená „ještě se generuje“, ne chybu', () => {
   it('opakuje, dokud PDF nepřijde, a uloží ho', async () => {
     const provider = new MockProvider({ pdfNeniKrat: 2 });
     const store = new PametovyStore();
-    const uloz = vi.fn(async (klic: string) => `invoices/${klic}.pdf`);
+    const uloz = vi.fn(async (klic: string) => ({ cesta: `invoices/${klic}.pdf` }));
 
     const v = await vystavDoklad({
       draft: draftKlubu(), provider, store, cekej: hnedCekej,
@@ -171,7 +171,7 @@ describe('PDF — 204 znamená „ještě se generuje“, ne chybu', () => {
     // Doklad má číslo a je vystavený — PDF si dobere další běh fronty.
     const provider = new MockProvider({ pdfNeniKrat: 99 });
     const store = new PametovyStore();
-    const uloz = vi.fn(async () => 'nikdy');
+    const uloz = vi.fn(async () => ({ cesta: 'nikdy' }));
 
     const v = await vystavDoklad({
       draft: draftKlubu(), provider, store, cekej: hnedCekej, pdfUloziste: { uloz },
@@ -218,11 +218,11 @@ describe('pořadí kroků', () => {
     });
 
     const puvodni = store.zapisVazbu.bind(store);
-    store.zapisVazbu = async (v) => { poradi.push('vazba'); return puvodni(v); };
+    store.zapisVazbu = async (d, r, m) => { poradi.push('vazba'); return puvodni(d, r, m); };
 
     await vystavDoklad({
       draft: draftKlubu(), provider, store, cekej: hnedCekej,
-      pdfUloziste: { uloz: async () => 'p' },
+      pdfUloziste: { uloz: async () => ({ cesta: 'p' }) },
     });
 
     expect(poradi).toEqual(['vazba', 'pdf']);
@@ -403,7 +403,8 @@ describe('kontrolní součet po vystavení', () => {
     const v = await vystavDoklad({ draft: draftKlubu(), provider: lzivy, store, cekej: hnedCekej });
     expect(v.stav).toBe('vystaveno');
     if (v.stav !== 'vystaveno') return;
-    expect(v.varovani).toMatch(/KONTROLNÍ SOUČET NESEDÍ/);
+    expect(v.varovani?.map((x) => x.kod)).toEqual(['kontrolni_soucet']);
+    expect(v.varovani?.[0].zprava).toMatch(/KONTROLNÍ SOUČET NESEDÍ/);
     // Doklad existuje, takže se vazba zapsat MUSÍ — jinak by ho nikdo neevidoval.
     expect(await store.jeVyfakturovana('a')).toBe(true);
   });
@@ -434,7 +435,7 @@ describe('PDF nesmí shodit vystavení', () => {
 
     const v = await vystavDoklad({
       draft: draftKlubu(), provider, store, cekej: hnedCekej,
-      pdfUloziste: { uloz: async () => 'nikdy' },
+      pdfUloziste: { uloz: async () => ({ cesta: 'nikdy' }) },
     });
 
     expect(v.stav).toBe('vystaveno');
@@ -518,7 +519,9 @@ describe('okno mezi zámkem 2 a claimem', () => {
     expect(v.stav).toBe('nesedi');
 
     // Claim nesmí zůstat viset — jinak by klub nešlo vyfakturovat ani po nápravě.
-    expect(await store.zkusZabrat('klub-' + KLUB.id + '-202608', ['a', 'b'])).toBe(true);
+    // Claim musí být volný — kdyby zůstal viset, klub by nešlo vyfakturovat
+    // ani po nápravě.
+    expect(await store.zkusZabrat(draftKlubu()!, { nasSoucet: 2400, rezim: 'koncept' })).toBe(true);
   });
 
   it('chyba při druhém dotazu taky claim uvolní', async () => {
@@ -533,7 +536,9 @@ describe('okno mezi zámkem 2 a claimem', () => {
 
     await expect(vystavDoklad({ draft: draftKlubu(), provider, store, cekej: hnedCekej }))
       .rejects.toThrow('Fakturoid je mimo');
-    expect(await store.zkusZabrat('klub-' + KLUB.id + '-202608', ['a', 'b'])).toBe(true);
+    // Claim musí být volný — kdyby zůstal viset, klub by nešlo vyfakturovat
+    // ani po nápravě.
+    expect(await store.zkusZabrat(draftKlubu()!, { nasSoucet: 2400, rezim: 'koncept' })).toBe(true);
   });
 });
 
@@ -551,7 +556,7 @@ describe('dobirPdf — skutečná cesta k chybějícímu PDF', () => {
 
     const cesta = await dobirPdf({
       link: v.link, provider, store, cekej: hnedCekej,
-      pdfUloziste: { uloz: async (klic) => `invoices/${klic}.pdf` },
+      pdfUloziste: { uloz: async (klic) => ({ cesta: `invoices/${klic}.pdf` }) },
     });
 
     expect(cesta).toBe(`invoices/klub-${KLUB.id}-202608.pdf`);
@@ -566,7 +571,7 @@ describe('dobirPdf — skutečná cesta k chybějícímu PDF', () => {
 
     expect(await dobirPdf({
       link: v.link, provider, store, cekej: hnedCekej,
-      pdfUloziste: { uloz: async () => 'nikdy' },
+      pdfUloziste: { uloz: async () => ({ cesta: 'nikdy' }) },
     })).toBeNull();
   });
 });
@@ -583,10 +588,251 @@ describe('selhání PDF se nespolkne', () => {
 
     const v = await vystavDoklad({
       draft: draftKlubu(), provider, store: new PametovyStore(), cekej: hnedCekej,
-      pdfUloziste: { uloz: async () => 'nikdy' },
+      pdfUloziste: { uloz: async () => ({ cesta: 'nikdy' }) },
     });
 
     if (v.stav !== 'vystaveno') throw new Error('čekal jsem vystavení');
-    expect(v.varovani).toMatch(/plné úložiště/);
+    // Cizí text (Storage, Postgres) patří JEN do `interni` — v `zprava` je naše
+    // věta, protože hlášky odjinud nesou cesty a názvy tabulek.
+    expect(v.varovani?.[0].kod).toBe('pdf');
+    expect(v.varovani?.[0].zprava).not.toMatch(/plné úložiště/);
+    expect(v.varovani?.[0].interni).toMatch(/plné úložiště/);
+  });
+});
+
+describe('režim vystavení', () => {
+  const jenOdeslani = (poslano: string[], selze?: Error) => fakeProvider({
+    createInvoice: async () => ({
+      providerInvoiceId: 'i1', number: '20260001', variableSymbol: '20260001',
+      status: 'open', providerTotal: 2400,
+    }),
+    sendInvoice: async (id) => {
+      if (selze) throw selze;
+      poslano.push(id);
+    },
+  });
+
+  it('DEFAULT je koncept — e-mail se NEPOSÍLÁ', async () => {
+    // Rozjezdový režim: doklad se u Fakturoidu jen založí a člověk ho odklikne.
+    const poslano: string[] = [];
+    const v = await vystavDoklad({
+      draft: draftKlubu(), provider: jenOdeslani(poslano),
+      store: new PametovyStore(), cekej: hnedCekej,
+    });
+
+    expect(v.stav).toBe('vystaveno');
+    expect(poslano).toEqual([]);
+  });
+
+  it('režim odeslat pošle e-mail a zapíše to', async () => {
+    const poslano: string[] = [];
+    const store = new PametovyStore();
+    const v = await vystavDoklad({
+      draft: draftKlubu(), provider: jenOdeslani(poslano), store,
+      cekej: hnedCekej, rezim: 'odeslat',
+    });
+
+    expect(v.stav).toBe('vystaveno');
+    expect(poslano).toEqual(['i1']);
+    expect((await store.najdiPodleKlice(`klub-${KLUB.id}-202608`))?.odeslanoAt).toBeTruthy();
+  });
+
+  // Doklad v tu chvíli u providera EXISTUJE a má číslo. Kdyby selhání odeslání
+  // shodilo vystavení, uvolnil by se claim a příští běh by se doklad pokusil
+  // vystavit znovu.
+  it('selhání odeslání NESHODÍ vystavení, jen varuje', async () => {
+    const store = new PametovyStore();
+    const v = await vystavDoklad({
+      draft: draftKlubu(), provider: jenOdeslani([], new Error('chybí e-mail u odběratele')),
+      store, cekej: hnedCekej, rezim: 'odeslat',
+    });
+
+    expect(v.stav).toBe('vystaveno');
+    if (v.stav !== 'vystaveno') return;
+    expect(v.varovani?.[0].kod).toBe('odeslani');
+    expect(v.varovani?.[0].zprava).toMatch(/NEODESLAL/);
+    expect(v.varovani?.[0].interni).toMatch(/chybí e-mail/);
+    expect(await store.jeVyfakturovana('a')).toBe(true);
+  });
+
+  it('provider, který odesílat neumí, to řekne nahlas', async () => {
+    const v = await vystavDoklad({
+      draft: draftKlubu(),
+      provider: fakeProvider({
+        createInvoice: async () => ({
+          providerInvoiceId: 'i1', number: '20260001', variableSymbol: '20260001',
+          status: 'open', providerTotal: 2400,
+        }),
+      }),
+      store: new PametovyStore(), cekej: hnedCekej, rezim: 'odeslat',
+    });
+
+    if (v.stav !== 'vystaveno') throw new Error('čekal jsem vystavení');
+    expect(v.varovani?.[0].zprava).toMatch(/provider odesílání neumí/);
+  });
+});
+
+describe('pořadí: značka „odesláno" se staví PŘED odesláním', () => {
+  // Opačné pořadí vyřadí pojistku „podruhé se neposílá" úplně: pád mezi
+  // odesláním a zápisem nechá doklad neoznačený a příští běh pošle e-mail znovu.
+  it('při druhém běhu se e-mail neposílá znovu', async () => {
+    const poslano: string[] = [];
+    const store = new PametovyStore();
+    const provider = fakeProvider({
+      createInvoice: async () => ({
+        providerInvoiceId: 'i1', number: '20260001', variableSymbol: '20260001',
+        status: 'open', providerTotal: 2400,
+      }),
+      findExistingInvoice: async () => null,
+      sendInvoice: async (id) => { poslano.push(id); },
+    });
+
+    await vystavDoklad({ draft: draftKlubu(), provider, store, cekej: hnedCekej, rezim: 'odeslat' });
+    // Druhý běh zastaví zámek 1, ale i kdyby se dostal dál, značka drží.
+    await vystavDoklad({ draft: draftKlubu(), provider, store, cekej: hnedCekej, rezim: 'odeslat' });
+
+    expect(poslano).toEqual(['i1']);
+  });
+
+  it('když značka nešla postavit, e-mail se NEPOSÍLÁ vůbec', async () => {
+    const poslano: string[] = [];
+    const store = new PametovyStore();
+    // Store, který tvrdí „už bylo odesláno".
+    store.oznacOdeslano = async () => false;
+
+    const v = await vystavDoklad({
+      draft: draftKlubu(),
+      provider: fakeProvider({
+        createInvoice: async () => ({
+          providerInvoiceId: 'i1', number: '20260001', variableSymbol: '20260001',
+          status: 'open', providerTotal: 2400,
+        }),
+        sendInvoice: async (id) => { poslano.push(id); },
+      }),
+      store, cekej: hnedCekej, rezim: 'odeslat',
+    });
+
+    expect(v.stav).toBe('vystaveno');
+    expect(poslano).toEqual([]);
+  });
+
+  // Cena opačného okraje: doklad zůstane označený jako odeslaný, ačkoli nedorazil.
+  // Musí to být HLASITÉ, jinak by se na to nikdy nepřišlo.
+  it('selhání odeslání řekne, že se má poslat ručně', async () => {
+    const v = await vystavDoklad({
+      draft: draftKlubu(),
+      provider: fakeProvider({
+        createInvoice: async () => ({
+          providerInvoiceId: 'i1', number: '20260001', variableSymbol: '20260001',
+          status: 'open', providerTotal: 2400,
+        }),
+        sendInvoice: async () => { throw new Error('403 kvóta vyčerpána'); },
+      }),
+      store: new PametovyStore(), cekej: hnedCekej, rezim: 'odeslat',
+    });
+
+    if (v.stav !== 'vystaveno') throw new Error('čekal jsem vystavení');
+    expect(v.varovani?.[0].zprava).toMatch(/ručně z Fakturoidu/);
+    expect(v.varovani?.[0].zprava).toMatch(/automaticky nezopakuje/);
+  });
+});
+
+describe('zotavení po ztracené odpovědi — zápis NÁLEZU bez claimu', () => {
+  /**
+   * Store, který se chová jako databáze, ne jako všeprijímající paměť.
+   *
+   * PROČ TENHLE TEST EXISTUJE: `PametovyStore.zapisVazbu` zapíše bezpodmínečně,
+   * takže scénář zotavení procházel zeleně i tehdy, když ostrá cesta padala.
+   * RPC `fakturoid_zapis_vazbu` totiž v základní větvi vyžaduje ŽIVÝ NEVYSTAVENÝ
+   * CLAIM — a ten v týhle cestě neexistuje, protože ho předchozí běh po selhaném
+   * POSTu správně uvolnil. Bez druhé větve („zapiš nález") by doklad zůstal
+   * u Fakturoidu navždy nezaevidovaný a KAŽDÝ další běh by skončil stejně.
+   */
+  class PrisnyStore extends PametovyStore {
+    zapisy: Array<{ klic: string; rezervace: string[]; nasSoucet: number }> = [];
+
+    async zapisVazbu(draft: typeof DRAFT_T, result: never, meta: never): Promise<void> {
+      const m = meta as unknown as { nasSoucet: number };
+      // Databáze bez kontextu řádek založit NEMŮŽE — sloupce jsou NOT NULL.
+      if (!draft.type || !draft.party.ourSubjectId || draft.sourceReservationIds.length === 0) {
+        throw new Error('Nešlo zapsat do evidence: chybí kontext dokladu.');
+      }
+      this.zapisy.push({
+        klic: draft.idempotencyKey,
+        rezervace: [...draft.sourceReservationIds],
+        nasSoucet: m.nasSoucet,
+      });
+      return super.zapisVazbu(draft, result, meta);
+    }
+  }
+  const DRAFT_T = draftKlubu()!;
+
+  it('nález se zapíše i s kontextem a vazbami na rezervace', async () => {
+    const store = new PrisnyStore();
+    const provider = fakeProvider({
+      // Doklad u providera JE, ale u nás po něm není ani stopa: claim se uvolnil.
+      findExistingInvoice: async () => ({
+        providerInvoiceId: 'i-ztracene', number: '20260001', variableSymbol: '20260001',
+        status: 'open', providerTotal: 2400,
+        providerLines: draftKlubu()!.lines.map((l) => ({ ...l })),
+      }),
+    });
+
+    const v = await vystavDoklad({ draft: draftKlubu(), provider, store, cekej: hnedCekej });
+
+    expect(v.stav).toBe('existoval');
+    expect(store.zapisy).toHaveLength(1);
+    // TOHLE je pointa: bez rezervací by po zotavení zůstal zámek 1 mrtvý
+    // a příští běh by vystavil DRUHÝ doklad.
+    expect(store.zapisy[0].rezervace).toEqual(['a', 'b']);
+    expect(store.zapisy[0].nasSoucet).toBe(2400);
+    expect(await store.jeVyfakturovana('a')).toBe(true);
+    expect(await store.jeVyfakturovana('b')).toBe(true);
+  });
+
+  it('po zotavení už druhý běh doklad nevystaví', async () => {
+    const store = new PrisnyStore();
+    let vytvoreno = 0;
+    const provider = fakeProvider({
+      findExistingInvoice: async () => ({
+        providerInvoiceId: 'i-ztracene', number: '20260001', variableSymbol: '20260001',
+        status: 'open', providerTotal: 2400,
+        providerLines: draftKlubu()!.lines.map((l) => ({ ...l })),
+      }),
+      createInvoice: async () => { vytvoreno++; throw new Error('sem se to nesmí dostat'); },
+    });
+
+    await vystavDoklad({ draft: draftKlubu(), provider, store, cekej: hnedCekej });
+    const druhy = await vystavDoklad({ draft: draftKlubu(), provider, store, cekej: hnedCekej });
+
+    expect(druhy.stav).toBe('preskoceno');   // zámek 1 už drží
+    expect(vytvoreno).toBe(0);
+  });
+});
+
+describe('rozpor kontrolního součtu se ukládá, ne jen vrací', () => {
+  it('varování jde i do evidence', async () => {
+    let ulozeneVarovani: string | undefined;
+    const store = new PametovyStore();
+    const puvodni = store.zapisVazbu.bind(store);
+    store.zapisVazbu = async (d, r, m) => {
+      ulozeneVarovani = (m as { varovani?: string }).varovani;
+      return puvodni(d, r, m);
+    };
+
+    await vystavDoklad({
+      draft: draftKlubu(),
+      provider: fakeProvider({
+        createInvoice: async () => ({
+          providerInvoiceId: 'i1', number: '20260001', variableSymbol: '20260001',
+          status: 'open', providerTotal: 9999,      // my posíláme 2 400 Kč
+        }),
+      }),
+      store, cekej: hnedCekej,
+    });
+
+    // Bez tohohle by „KONTROLNÍ SOUČET NESEDÍ" žilo jen v HTTP odpovědi —
+    // admin zavře záložku a je pryč.
+    expect(ulozeneVarovani).toMatch(/KONTROLNÍ SOUČET NESEDÍ/);
   });
 });

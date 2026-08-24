@@ -421,3 +421,9 @@ s3_secret_key = "env(S3_SECRET_KEY)"
 [functions.ares-lookup]
 # Vyžadovat přihlášení (JWT) — ARES lookup jen pro přihlášené uživatele.
 verify_jwt = true
+
+[functions.fakturoid-invoice]
+# Zakládá doklady v OSTRÉ číselné řadě u Fakturoidu. Přihlášení je povinné —
+# a funkce si nezávisle na tomhle nastavení ověřuje ještě roli admina, protože
+# spoléhat u fakturace na jedinou kontrolu mimo repo se nevyplácí.
+verify_jwt = true

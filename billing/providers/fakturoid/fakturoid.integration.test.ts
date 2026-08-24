@@ -100,7 +100,7 @@ describe.skipIf(!live)('Fakturoid — živý testovací účet', () => {
           // Kontrola, že to je opravdu PDF, ne chybová stránka s HTTP 200.
           expect(new TextDecoder().decode(pdf.slice(0, 5))).toBe('%PDF-');
           ulozene.push(klic);
-          return `test/${klic}.pdf`;
+          return { cesta: `test/${klic}.pdf` };
         },
       };
 

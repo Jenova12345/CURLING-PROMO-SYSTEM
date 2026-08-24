@@ -695,3 +695,61 @@ describe('příznak „nevíme, jak zápis dopadl“', () => {
     expect(jeZapisNejisty(new Error('x'))).toBe(false);
   });
 });
+
+describe('odeslání dokladu odběrateli', () => {
+  const odesli = async (status: number, email?: string) => {
+    const { fn, volani } = mockFetch([TOKEN_OK, () => odpoved(status, '')]);
+    const p = new FakturoidProvider({ config: CONFIG, fetch: fn, cekej: hnedCekej });
+    const vysledek = await p.sendInvoice('555', { email }).then(() => 'ok').catch((e) => e);
+    return { vysledek, volani };
+  };
+
+  // NENÍ to fire.json?event=deliver — ten byl z API v3 ODSTRANĚN ve prospěch
+  // Invoice Messages. Kdo by sáhl po `mark_as_sent`, označí doklad za odeslaný,
+  // aniž by ho kdokoli dostal.
+  it('volá message.json, ne fire.json', async () => {
+    const { vysledek, volani } = await odesli(204);
+    expect(vysledek).toBe('ok');
+    expect(volani[1].url).toContain('/invoices/555/message.json');
+    expect(volani[1].url).not.toContain('fire.json');
+    expect(volani[1].init?.method).toBe('POST');
+  });
+
+  it('e-mail pošle jen tehdy, když ho máme — jinak si ho Fakturoid dosadí sám', async () => {
+    expect(JSON.parse((await odesli(204)).volani[1].init?.body ?? '{}')).toEqual({});
+    expect(JSON.parse((await odesli(204, 'klub@example.cz')).volani[1].init?.body ?? '{}'))
+      .toEqual({ email: 'klub@example.cz' });
+  });
+
+  it('403 vysvětlí, že jde o tarif nebo kvótu', async () => {
+    const { vysledek } = await odesli(403);
+    expect(vysledek).toBeInstanceOf(BillingProviderError);
+    expect((vysledek as Error).message).toMatch(/free tarif|kvóta/);
+  });
+
+  // Tohle je nejpravděpodobnější selhání v provozu: `public.subjects` sloupec
+  // pro e-mail nemá, takže ho musí mít vyplněný Fakturoid.
+  it('422 řekne rovnou, že nejspíš chybí e-mail u odběratele', async () => {
+    const { vysledek } = await odesli(422);
+    expect((vysledek as Error).message).toMatch(/chybí\s+e-mail u odběratele/);
+  });
+});
+
+describe('režim vystavení v konfiguraci', () => {
+  it('default je koncept', () => {
+    expect(nactiConfig(ENV).rezim).toBe('koncept');
+    expect(nactiConfig({ ...ENV, FAKTUROID_MODE: '' }).rezim).toBe('koncept');
+  });
+
+  it('odeslat se dá zapnout', () => {
+    expect(nactiConfig({ ...ENV, FAKTUROID_MODE: 'odeslat' }).rezim).toBe('odeslat');
+    expect(nactiConfig({ ...ENV, FAKTUROID_MODE: 'ODESLAT' }).rezim).toBe('odeslat');
+  });
+
+  // Překlep se NESMÍ přeložit na default. „odselat" by tiše znamenalo koncept
+  // a nikdo by se nedivil, proč se nic neodesílá.
+  it('překlep je chyba, ne tichý default', () => {
+    expect(() => nactiConfig({ ...ENV, FAKTUROID_MODE: 'odselat' })).toThrow(BillingValidationError);
+    expect(() => nactiConfig({ ...ENV, FAKTUROID_MODE: 'auto' })).toThrow(/koncept.*odeslat/);
+  });
+});

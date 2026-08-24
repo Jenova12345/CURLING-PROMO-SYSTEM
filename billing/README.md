@@ -27,6 +27,7 @@ vůbec, což je horší.
 | `store.ts` | Port `InvoiceLinkStore` (vazba rezervace ↔ doklad) + paměťová implementace. |
 | `format.ts` | Datum a čas na řádku dokladu — vždy v pražském čase. |
 | `errors.ts` | Typované chyby a jediné místo, kde se rozhoduje o opakování. |
+| `supabaseStore.ts` | `InvoiceLinkStore` nad Postgresem — evidence odeslaných dokladů. |
 | `providers/mock.ts` | Provider pro testy a vývoj bez klíčů. |
 | `providers/fakturoid/config.ts` | Načtení a validace `FAKTUROID_*` z prostředí. |
 | `providers/fakturoid/http.ts` | Hlavičky, rate limit, překlad chyb. Vlastní typy místo DOM. |
@@ -227,20 +228,80 @@ musí je přeložit na obecnou hlášku a podrobnost nechat v logu.
 (název, IČO, DIČ, sídlo). Patří k tomu zpracovatelská smlouva a záznam o činnostech
 zpracování. **Pro PM, ne pro kód.**
 
+## Varianta S2 — jak se to rozhodlo
+
+**Rozhodnutí PM 24. 8. 2026: jede se S2.** Ostrý doklad vystavuje Fakturoid, náš
+interní engine se na ostré doklady přestává používat (jeho vyřazení je samostatný
+pozdější ticket).
+
+Praktický dopad na tuhle vrstvu:
+
+**Zámek 1 se ptá VÝHRADNĚ na fakturoidí vazbu.** Rezervace může mít interní
+`reservations.invoice_id` a **stejně má jít do Fakturoidu** — o odeslání rozhoduje
+jen existence řádku v `fakturoid_invoices`. Kdyby se zámek ptal na
+`reservations.invoice_id`, nevyfakturovala by se ani jedna rezervace, která už
+prošla interním enginem.
+
+**Do `reservations` tahle cesta nezapisuje vůbec nic.** Tím odpadá i konflikt
+s guardem `app.trusted_booking`.
+
+## Režim vystavení
+
+`FAKTUROID_MODE=koncept` (default) nebo `odeslat`.
+
+⚠️ **Fakturoid API stav „koncept" NEZNÁ.** Doklad vytvořený přes
+`POST /invoices.json` je plnohodnotný a **už má číslo v ostré řadě**. „Koncept"
+u nás proto znamená **„vystaveno, ale neodesláno"** — doklad u Fakturoidu je,
+jen se neposlal e-mail. Není to nezávazný návrh a omyl nejde tiše smazat.
+
+Odesílá se přes **`POST /invoices/{id}/message.json`**, ne přes
+`fire.json?event=deliver` — ten byl z API v3 **odstraněn** ve prospěch Invoice
+Messages. Kdo by sáhl po `mark_as_sent`, označí doklad za odeslaný, **aniž by ho
+kdokoli dostal**.
+
+Překlep v hodnotě se **nepřeloží na default**: `FAKTUROID_MODE=odselat` je chyba,
+ne tiše koncept.
+
+## Odesílání: značka se staví PŘED odesláním
+
+`oznacOdeslano` se volá **před** `sendInvoice`, ne po něm. Opačné pořadí vyřadí
+pojistku „podruhé se neposílá" úplně: pád mezi odesláním a zápisem nechá doklad
+neoznačený a příští běh pošle e-mail **znovu**.
+
+Cena je opačný okraj — když odeslání selže, doklad zůstane označený jako odeslaný,
+ačkoli nedorazil. Je to ale **hlasité**: varování rovnou říká, že se má poslat
+ručně z Fakturoidu. Tichá duplicita by byla horší než hlasitý neúspěch.
+
+## Chyby: co do logu a co na obrazovku
+
+Hlášky téhle vrstvy nesou **sazby a částky** — `mapping.ts` je do nich dává
+schválně, aby šel rozpor diagnostikovat. Podle CLAUDE.md je ale neadmin vidět
+nesmí, takže poslat `err.message` do odpovědi nebo do toastu je tichý únik.
+
+```ts
+const { kod, zprava, interni } = proUzivatele(chyba);
+console.error('[fakturoid]', kod, interni);   // log
+return json({ error: zprava, kod }, 500);     // klient
+```
+
+`uzivatelskaZprava()` vrací pevné texty, do kterých se sazba nemá jak dostat.
+`kodChyby()` dá strojový kód, ať se UI umí zachovat bez čtení textu.
+
+**Totéž platí pro varování.** `Varovani` má `zprava` (naše věta, smí nést částky —
+ty admin vidět může) a `interni` (**jen do logu**). Cizí text — hláška Postgresu,
+Storage nebo providera — jde vždycky do `interni`: bývají v ní názvy tabulek,
+cesty a vnitřnosti, které v prohlížeči nemají co dělat.
+
+**Odpověď se skládá pole po poli, nikdy „vrať to celé".** `VysledekVystaveni`
+nese `result.providerLines[].unitPrice`, tedy sazbu. `return json(vysledek)` je
+proto zakázaný tvar — přežil by i den, kdy se endpoint otevře víc lidem.
+
 ## Otevřené věci
 
-**D1 — cílový stav (čeká na potvrzení s klientem).** Pracovní směr je **S1**:
-Fakturoid je výstupní kanál, naše doklady zůstávají zdroj pravdy. Dokud to není
-potvrzené, `billing/` persistuje přes port `InvoiceLinkStore` s paměťovou
-implementací a **nesahá na migrace ani na `reservations.invoice_id`**.
-
-Jediné místo, kde se D1 projeví, je význam `jeVyfakturovana` v `store.ts`:
-- **S1** — „už má interní doklad" ≠ „nemá jít do Fakturoidu"; ptát se musí na
-  vazbu k **provideru**.
-- **S2** — interní a providerská vazba splývají.
-
-Paměťová implementace odpovídá „tahle fakturační cesta už to poslala", což platí
-ve všech variantách — proto na D1 nesahá a nefixuje ji.
+**E-mail odběratele.** `public.subjects` sloupec pro e-mail **nemá**, takže pro
+režim `odeslat` ho musí mít vyplněný Fakturoid — jinak vrátí 422. Pro `koncept`
+to nevadí; adresu doplní člověk. `InvoiceParty.email` je připravené na den, kdy
+sloupec přibude.
 
 **Follow-up: strukturovaná adresa z ARESu.** `subjects.address` je jeden textový
 řádek, protože `ares-lookup` bere z ARESu jen `sidlo.textovaAdresa` a zbytek

@@ -57,6 +57,12 @@ export interface SubjectForBilling {
   dic: string | null;
   /** Jeden textový řádek — ARES vrací `sidlo.textovaAdresa`, nic strukturovaného. */
   address: string | null;
+  /**
+   * Volitelný — `public.subjects` sloupec pro e-mail dnes NEMÁ.
+   * Je tu proto, aby se dal doplnit jednou migrací, až bude potřeba automatické
+   * odesílání; do té doby zůstává `undefined` a doklad rozesílá člověk.
+   */
+  email?: string | null;
 }
 
 /**
@@ -97,6 +103,9 @@ export const mapujSubjekt = (
 
   const adresa = (subjekt.address ?? '').trim();
   if (adresa) party.street = adresa;
+
+  const email = (subjekt.email ?? '').trim();
+  if (email) party.email = email;
 
   return party;
 };
@@ -236,6 +245,10 @@ export const mapujKomercniAkci = (vstup: {
     dueInDays: vstup.dueInDays ?? SPLATNOST_DNI,
     ...(vstup.issuedOn ? { issuedOn: datumProApi(vstup.issuedOn) } : {}),
     sourceReservationIds: rezervace.map((r) => r.id),
+    eventId: vstup.eventId,
+    // U akce je „období" její den — od prvního začátku po poslední konec.
+    obdobiOd: datumProApi(rezervace[0].start_at),
+    obdobiDo: datumProApi(rezervace[rezervace.length - 1].start_at),
   };
 };
 
@@ -250,6 +263,8 @@ export const mapujKlubMesicne = (vstup: {
   subjekt: SubjectForBilling;
   /** První den fakturovaného měsíce, `RRRR-MM-DD`. Z něj se bere `RRRRMM` do klíče. */
   obdobiOd: string;
+  /** Konec období. Nevyplněné = poslední fakturovaná rezervace. */
+  obdobiDo?: string;
   rezervace: readonly BillableReservation[];
   jePlatceDph: boolean;
   dueInDays?: number;
@@ -267,6 +282,8 @@ export const mapujKlubMesicne = (vstup: {
     dueInDays: vstup.dueInDays ?? SPLATNOST_DNI,
     ...(vstup.issuedOn ? { issuedOn: datumProApi(vstup.issuedOn) } : {}),
     sourceReservationIds: rezervace.map((r) => r.id),
+    obdobiOd: vstup.obdobiOd,
+    obdobiDo: vstup.obdobiDo ?? datumProApi(rezervace[rezervace.length - 1].start_at),
   };
 };
 

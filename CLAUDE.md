@@ -96,7 +96,20 @@ tří gatů.** Platí i pro drobné úpravy — u peněz není „malá změna".
 
 Když se součty rozejdou, změna neprochází — bez ohledu na to, jak dobře vypadá kód.
 
-## Kde právě jsme (aktualizováno 13. 8. 2026)
+## Kde právě jsme (aktualizováno 24. 8. 2026)
+
+**Etapa 3 — napojení na Fakturoid (varianta S2).** Ostrý doklad vystavuje
+Fakturoid, náš systém do něj posílá jen podklady. Interní fakturační engine se
+na ostré doklady přestává používat; jeho vyřazení je samostatný pozdější ticket.
+
+> **Než začneš cokoli kolem fakturace, přečti `docs/ETAPA3-STAV.md`.**
+> Pak `billing/README.md` (pravidla vrstvy). `docs/ETAPA2-STAV.md` níž popisuje
+> interní engine, který Etapa 3 nahrazuje — je pořád platný jako popis toho,
+> co v databázi je, ne jako popis toho, kam se jde.
+
+---
+
+## Kde jsme byli (Etapa 2, aktualizováno 13. 8. 2026)
 
 **Etapa 2 — fakturační modul.** Fáze A je hotová (A1–A5), z fáze B je hotové
 B1+B2 (základ dokladu) a B5+B6 (RPC „faktura na klik" a **kontrolní součet**),

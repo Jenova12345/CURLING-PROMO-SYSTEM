@@ -16,7 +16,7 @@
 // Paměťová implementace níž odpovídá „tahle fakturační cesta už to poslala",
 // což je pravda ve všech třech variantách — proto na D1 nesahá.
 
-import type { InvoiceResult } from './types.ts';
+import type { InvoiceDraft, InvoiceResult } from './types.ts';
 
 /** Zapsaná vazba jednoho dokladu. */
 export interface InvoiceLink {
@@ -25,6 +25,25 @@ export interface InvoiceLink {
   result: InvoiceResult;
   /** Kde v našem úložišti leží kopie PDF. Doplní se, až se PDF podaří stáhnout. */
   pdfPath?: string;
+  /** Kdy se doklad odeslal odběrateli. `undefined` = neodeslaný. */
+  odeslanoAt?: string;
+  /** Uložený rozpor kontrolního součtu. */
+  varovani?: string;
+}
+
+/** Co si evidence potřebuje zapsat v okamžiku claimu, kromě samotného draftu. */
+export interface ClaimMeta {
+  /** Náš součet zaokrouhlený na koruny — druhá strana kontrolního součtu. */
+  nasSoucet: number;
+  /** `koncept` | `odeslat` — v jakém režimu se doklad zakládá. */
+  rezim: string;
+}
+
+/** Co se zapisuje spolu s odpovědí providera. */
+export interface ZapisMeta extends ClaimMeta {
+  providerSubjectId?: string;
+  /** Rozpor kontrolního součtu. Ukládá se, aby nezůstal jen v HTTP odpovědi. */
+  varovani?: string;
 }
 
 export interface InvoiceLinkStore {
@@ -44,7 +63,7 @@ export interface InvoiceLinkStore {
    * ne „SELECT, a když nic, tak INSERT". Vzor je v repu:
    * `UPDATE … WHERE invoice_id IS NULL RETURNING` v `create_invoice_draft_club`.
    */
-  zkusZabrat(idempotencyKey: string, reservationIds: readonly string[]): Promise<boolean>;
+  zkusZabrat(draft: InvoiceDraft, meta: ClaimMeta): Promise<boolean>;
 
   /**
    * Uvolní claim, když vystavení selhalo.
@@ -57,10 +76,26 @@ export interface InvoiceLinkStore {
   uvolniZabrani(idempotencyKey: string): Promise<void>;
   /** Lokální odpověď na klíč idempotence. Nenahrazuje dotaz k providerovi, předchází mu. */
   najdiPodleKlice(idempotencyKey: string): Promise<InvoiceLink | null>;
-  /** Zápis po vytvoření dokladu. Musí být atomický vůči souběžnému běhu. */
-  zapisVazbu(vazba: InvoiceLink): Promise<void>;
+  /**
+   * Zápis po vytvoření NEBO nalezení dokladu.
+   *
+   * Bere celý `draft`, ne jen hotovou vazbu, protože musí umět DVA stavy:
+   * dorovnat živý claim (běžná cesta) a zapsat NÁLEZ, u kterého už žádný claim
+   * neexistuje (zotavení po ztracené odpovědi — claim se tehdy správně uvolnil).
+   * Ve druhém případě je potřeba celý kontext dokladu, protože se zakládá řádek
+   * od začátku i s vazbami na rezervace.
+   */
+  zapisVazbu(draft: InvoiceDraft, result: InvoiceResult, meta: ZapisMeta): Promise<void>;
   /** Doplnění cesty k PDF, až se stáhne (u providera se generuje asynchronně). */
-  zapisPdf(idempotencyKey: string, pdfPath: string): Promise<void>;
+  zapisPdf(idempotencyKey: string, pdfPath: string, sha256?: string): Promise<void>;
+
+  /**
+   * Označí doklad za odeslaný odběrateli.
+   *
+   * Vrací `false`, když už odeslaný byl — volající pak e-mail neposílá znovu.
+   * Dvakrát odeslaná faktura je pro klienta stejně matoucí jako dvakrát vystavená.
+   */
+  oznacOdeslano(idempotencyKey: string): Promise<boolean>;
 }
 
 /**
@@ -81,7 +116,9 @@ export class PametovyStore implements InvoiceLinkStore {
     return this.podleRezervace.has(reservationId);
   }
 
-  async zkusZabrat(idempotencyKey: string, reservationIds: readonly string[]): Promise<boolean> {
+  async zkusZabrat(draft: InvoiceDraft, _meta: ClaimMeta): Promise<boolean> {
+    const idempotencyKey = draft.idempotencyKey;
+    const reservationIds = draft.sourceReservationIds;
     if (this.zabrane.has(idempotencyKey)) return false;
     // Zabraná rezervace pod JINÝM klíčem znamená, že tytéž hodiny právě fakturuje
     // někdo jiný — typicky komerční akce (`akce-…`) proti měsíčnímu běhu (`klub-…`).
@@ -105,7 +142,14 @@ export class PametovyStore implements InvoiceLinkStore {
     return this.podleKlice.get(idempotencyKey) ?? null;
   }
 
-  async zapisVazbu(vazba: InvoiceLink): Promise<void> {
+  async zapisVazbu(draft: InvoiceDraft, result: InvoiceResult, meta: ZapisMeta): Promise<void> {
+    const { pdf: _pdf, ...bezPdf } = result;
+    const vazba: InvoiceLink = {
+      idempotencyKey: draft.idempotencyKey,
+      reservationIds: [...draft.sourceReservationIds],
+      result: bezPdf,
+      ...(meta.varovani ? { varovani: meta.varovani } : {}),
+    };
     this.podleKlice.set(vazba.idempotencyKey, vazba);
     for (const id of vazba.reservationIds) {
       this.podleRezervace.set(id, vazba.idempotencyKey);
@@ -115,6 +159,13 @@ export class PametovyStore implements InvoiceLinkStore {
   async zapisPdf(idempotencyKey: string, pdfPath: string): Promise<void> {
     const vazba = this.podleKlice.get(idempotencyKey);
     if (vazba) this.podleKlice.set(idempotencyKey, { ...vazba, pdfPath });
+  }
+
+  async oznacOdeslano(idempotencyKey: string): Promise<boolean> {
+    const vazba = this.podleKlice.get(idempotencyKey);
+    if (!vazba || vazba.odeslanoAt) return false;
+    this.podleKlice.set(idempotencyKey, { ...vazba, odeslanoAt: new Date().toISOString() });
+    return true;
   }
 
   /** Jen pro testy — kolik dokladů se doopravdy založilo. */

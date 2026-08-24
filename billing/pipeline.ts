@@ -25,8 +25,30 @@ import type { InvoiceLink, InvoiceLinkStore } from './store.ts';
 
 /** Kam se ukládá kopie PDF (v provozu Supabase Storage). */
 export interface PdfUloziste {
-  /** Vrací cestu, pod kterou se soubor uložil. */
-  uloz(idempotencyKey: string, pdf: Uint8Array): Promise<string>;
+  /**
+   * Uloží soubor a vrátí, kam.
+   *
+   * `sha256` je volitelný — kdo ho spočítá, ať ho vrátí sem. Zapisuje se
+   * JEDNÍM voláním spolu s cestou; dřív ho psala zvlášť Edge funkce a hned nato
+   * ho druhý zápis z pipeline přepsal na NULL.
+   */
+  uloz(idempotencyKey: string, pdf: Uint8Array): Promise<{ cesta: string; sha256?: string }>;
+}
+
+export type RezimVystaveni = 'koncept' | 'odeslat';
+
+/**
+ * Varování k vystavenému dokladu.
+ *
+ * ROZDĚLENO NA DVĚ ČÁSTI SCHVÁLNĚ. `zprava` je naše vlastní věta a smí nést
+ * částky — ty admin podle CLAUDE.md vidět může. `interni` může nést CIZÍ text
+ * (hláška Postgresu, Storage, providera) a patří **jen do logu**: bývají v ní
+ * názvy tabulek, cesty a vnitřnosti, které v prohlížeči nemají co dělat.
+ */
+export interface Varovani {
+  kod: 'kontrolni_soucet' | 'zaokrouhleni' | 'pdf' | 'odeslani';
+  zprava: string;
+  interni?: string;
 }
 
 export type VysledekVystaveni =
@@ -35,7 +57,7 @@ export type VysledekVystaveni =
   /** Není co fakturovat (0 řádků). Normální stav, ne chyba. */
   | { stav: 'prazdne' }
   /** Zámek 2 zabral — doklad u providera už byl. Vazba se jen dorovnala. */
-  | { stav: 'existoval'; link: InvoiceLink; varovani?: string }
+  | { stav: 'existoval'; link: InvoiceLink; varovani?: Varovani[] }
   /**
    * Doklad u providera existuje, ale NEODPOVÍDÁ dnešnímu podkladu.
    * Vazba se záměrně NEZAPSALA — kouká na to člověk.
@@ -45,7 +67,7 @@ export type VysledekVystaveni =
    * Doklad vznikl teď. `varovani` nese rozpor kontrolního součtu proti providerovi —
    * PR 4 ho MUSÍ někam vypsat, tichý rozpor u peněz je horší než hlasitý.
    */
-  | { stav: 'vystaveno'; link: InvoiceLink; varovani?: string };
+  | { stav: 'vystaveno'; link: InvoiceLink; varovani?: Varovani[] };
 
 /**
  * O kolik smí celková částka u providera odskočit od naší, aby to ještě bylo
@@ -77,6 +99,14 @@ export const vystavDoklad = async (vstup: {
   /** Injektovatelné čekání, ať testy neběží v reálném čase. */
   cekej?: (ms: number) => Promise<void>;
   pdfPokusu?: number;
+  /**
+   * `koncept` (default) — doklad se u providera jen založí, e-mail se NEPOSÍLÁ.
+   * `odeslat` — po založení se doklad rovnou odešle odběrateli.
+   *
+   * Rozjezdový režim je `koncept`: člověk si doklady týden prohlíží, než se
+   * pustí automatické odesílání.
+   */
+  rezim?: RezimVystaveni;
 }): Promise<VysledekVystaveni> => {
   const { draft, provider, store } = vstup;
   const cekej = vstup.cekej ?? spat;
@@ -127,14 +157,20 @@ export const vystavDoklad = async (vstup: {
     const nesedi = proc0Nesedi(draft, uProvidera);
     if (nesedi) return { stav: 'nesedi', duvod: nesedi, result: uProvidera };
 
-    const { link, pdfChyba } = await dorovnej(store, draft, uProvidera, vstup.pdfUloziste, provider, cekej, vstup.pdfPokusu);
-    return { stav: 'existoval', link, ...(pdfChyba ? { varovani: pdfChyba } : {}) };
+    const soucet = zkontrolujSoucet(draft, uProvidera);
+    const { link, pdfChyba } = await dorovnej(
+      store, draft, uProvidera, vstup.pdfUloziste, provider, cekej, vstup.pdfPokusu,
+      { varovani: soucet },
+    );
+    const varovani = [soucet, pdfChyba].filter((v): v is Varovani => v != null);
+    return { stav: 'existoval', link, ...(varovani.length ? { varovani } : {}) };
   }
 
   // ---- ZÁMEK 3 — atomický claim -------------------------------------------
   // Zámky 1 a 2 jsou jen ČTENÍ, takže dva souběžné běhy (cron a admin ve stejnou
   // vteřinu) jimi projdou oba. Teprve claim je rozhodne.
-  if (!await store.zkusZabrat(draft.idempotencyKey, draft.sourceReservationIds)) {
+  const rezim = vstup.rezim ?? 'koncept';
+  if (!await store.zkusZabrat(draft, { nasSoucet: roundCzk(soucetRadku(draft.lines)), rezim })) {
     return {
       stav: 'preskoceno',
       duvod: `Doklad ${draft.idempotencyKey} právě vystavuje jiný běh.`,
@@ -161,11 +197,16 @@ export const vystavDoklad = async (vstup: {
         await store.uvolniZabrani(draft.idempotencyKey);
         return { stav: 'nesedi', duvod: nesedi, result: poClaimu };
       }
-      const { link, pdfChyba } = await dorovnej(store, draft, poClaimu, vstup.pdfUloziste, provider, cekej, vstup.pdfPokusu);
-      return { stav: 'existoval', link, ...(pdfChyba ? { varovani: pdfChyba } : {}) };
+      const soucet = zkontrolujSoucet(draft, poClaimu);
+      const { link, pdfChyba } = await dorovnej(
+        store, draft, poClaimu, vstup.pdfUloziste, provider, cekej, vstup.pdfPokusu,
+        { varovani: soucet, rezim },
+      );
+      const varovani = [soucet, pdfChyba].filter((v): v is Varovani => v != null);
+      return { stav: 'existoval', link, ...(varovani.length ? { varovani } : {}) };
     }
   } catch (chyba) {
-    await store.uvolniZabrani(draft.idempotencyKey);
+    await uvolniTise(store, draft.idempotencyKey);
     throw chyba;
   }
 
@@ -173,14 +214,23 @@ export const vystavDoklad = async (vstup: {
   try {
     const { providerSubjectId } = await provider.ensureSubject(draft.party);
     const vysledek = await provider.createInvoice(draft, providerSubjectId);
-    const { link, pdfChyba } = await dorovnej(store, draft, vysledek, vstup.pdfUloziste, provider, cekej, vstup.pdfPokusu);
-    const varovani = [zkontrolujSoucet(draft, vysledek), pdfChyba].filter(Boolean).join(' ');
-    return { stav: 'vystaveno', link, ...(varovani ? { varovani } : {}) };
+    // Kontrolní součet se počítá PŘED zápisem, ať ho jde uložit do evidence.
+    const soucet = zkontrolujSoucet(draft, vysledek);
+    const { link, pdfChyba } = await dorovnej(
+      store, draft, vysledek, vstup.pdfUloziste, provider, cekej, vstup.pdfPokusu,
+      { providerSubjectId, varovani: soucet, rezim },
+    );
+    const odeslaniChyba = await odesliPokudMa(provider, store, draft, vysledek, rezim);
+    const varovani = [soucet, pdfChyba, odeslaniChyba]
+      // `!= null` schválně (dvě rovnítka): `dorovnej` bez úložiště `pdfChyba`
+      // vůbec nevrací, takže je `undefined` — a `!== null` by ho propustilo dál.
+      .filter((v): v is Varovani => v != null);
+    return { stav: 'vystaveno', link, ...(varovani.length ? { varovani } : {}) };
   } catch (chyba) {
     // Claim se pouští: po selhaném POSTu NEVÍME, jestli doklad vznikl. Rozhodne
     // až příští běh — zámek 2 ho buď najde, nebo ne. Držet claim navždy by
     // fakturaci toho klubu zablokovalo, dokud by nepřišel člověk.
-    await store.uvolniZabrani(draft.idempotencyKey);
+    await uvolniTise(store, draft.idempotencyKey);
     throw chyba;
   }
 };
@@ -240,23 +290,51 @@ const proc0Nesedi = (draft: InvoiceDraft, u: InvoiceResult): string | null => {
  * ale rozpor se nesmí ztratit. Je to ta rovnice, kterou po fakturaci vyžaduje
  * CLAUDE.md, jen proti externímu systému: co jsme poslali == co vytiskl.
  */
-const zkontrolujSoucet = (draft: InvoiceDraft, u: InvoiceResult): string | null => {
+const zkontrolujSoucet = (draft: InvoiceDraft, u: InvoiceResult): Varovani | null => {
+  const oznaceni = u.number || u.providerInvoiceId;
+
   if (u.providerTotal === undefined) {
-    return `Doklad ${u.number || u.providerInvoiceId} vznikl, ale provider nevrátil celkovou ` +
-      'částku — kontrolní součet se neověřil.';
+    return {
+      kod: 'kontrolni_soucet',
+      zprava: `Doklad ${oznaceni} vznikl, ale provider nevrátil celkovou částku — ` +
+        'kontrolní součet se neověřil.',
+    };
   }
+
   const nase = roundCzk(soucetRadku(draft.lines));
   const rozdil = Number((u.providerTotal - nase).toFixed(2));
+
   if (Math.abs(rozdil) > TOLERANCE_KC) {
-    return `KONTROLNÍ SOUČET NESEDÍ: doklad ${u.number || u.providerInvoiceId} zní na ` +
-      `${u.providerTotal} Kč, my jsme poslali ${nase} Kč (rozdíl ${rozdil} Kč).`;
+    return {
+      kod: 'kontrolni_soucet',
+      zprava: `KONTROLNÍ SOUČET NESEDÍ: doklad ${oznaceni} zní na ${u.providerTotal} Kč, ` +
+        `my jsme poslali ${nase} Kč (rozdíl ${rozdil} Kč).`,
+    };
   }
   // Do půl koruny je to rozdíl zaokrouhlovacích pravidel — čekaný, ale ne němý.
   if (rozdil !== 0) {
-    return `Zaokrouhlení se liší o ${rozdil} Kč (doklad ${u.providerTotal} Kč, ` +
-      `náš podklad ${nase} Kč). V mezích, ale stojí za zápis.`;
+    return {
+      kod: 'zaokrouhleni',
+      zprava: `Zaokrouhlení se liší o ${rozdil} Kč (doklad ${u.providerTotal} Kč, ` +
+        `náš podklad ${nase} Kč). V mezích, ale stojí za zápis.`,
+    };
   }
   return null;
+};
+
+/**
+ * Uvolní claim, ale nikdy tím nepřebije původní chybu.
+ *
+ * `uvolniZabrani` sahá na síť a může selhat samo. Bez tohohle obalu by se pak
+ * ven dostala chyba z uvolňování místo té od providera — a ta původní, kvůli
+ * které se sem vůbec došlo, by zmizela.
+ */
+const uvolniTise = async (store: InvoiceLinkStore, klic: string): Promise<void> => {
+  try {
+    await store.uvolniZabrani(klic);
+  } catch {
+    // Claim zůstane držený do zásahu člověka. Je to lepší než ztratit důvod.
+  }
 };
 
 /** Zapíše vazbu a pokusí se doplnit PDF. Zápis vazby má přednost před PDF. */
@@ -268,7 +346,8 @@ const dorovnej = async (
   provider: InvoiceProvider,
   cekej: (ms: number) => Promise<void>,
   pokusu?: number,
-): Promise<{ link: InvoiceLink; pdfChyba?: string }> => {
+  meta?: { providerSubjectId?: string; varovani?: Varovani | null; rezim?: RezimVystaveni },
+): Promise<{ link: InvoiceLink; pdfChyba?: Varovani }> => {
   // `pdf` se z výsledku VYHAZUJE, než se vazba uloží. Bajty patří do úložiště
   // souborů, ne do řádku v databázi — `JSON.stringify(Uint8Array)` z nich udělá
   // objekt číslovaných klíčů („{"0":37,"1":80,…}") a nafoukne záznam o stovky kB.
@@ -278,7 +357,14 @@ const dorovnej = async (
     reservationIds: [...draft.sourceReservationIds],
     result: bezPdf,
   };
-  await store.zapisVazbu(link);
+  await store.zapisVazbu(draft, bezPdf, {
+    nasSoucet: roundCzk(soucetRadku(draft.lines)),
+    rezim: meta?.rezim ?? 'koncept',
+    providerSubjectId: meta?.providerSubjectId,
+    // Rozpor kontrolního součtu se ukládá DO EVIDENCE, ne jen do HTTP odpovědi.
+    // Admin zavře záložku a „KONTROLNÍ SOUČET NESEDÍ" by byl navždy pryč.
+    varovani: meta?.varovani?.zprava,
+  });
 
   if (!uloziste) return { link };
 
@@ -289,19 +375,33 @@ const dorovnej = async (
   try {
     const pdf = result.pdf ?? await stahniPdf(provider, result.providerInvoiceId, cekej, pokusu);
     if (!pdf) {
-      return { link, pdfChyba: `PDF dokladu ${result.number || result.providerInvoiceId} se zatím generuje.` };
+      return {
+        link,
+        pdfChyba: {
+          kod: 'pdf',
+          zprava: `PDF dokladu ${result.number || result.providerInvoiceId} se zatím generuje.`,
+        },
+      };
     }
 
-    const cesta = await uloziste.uloz(draft.idempotencyKey, pdf);
-    await store.zapisPdf(draft.idempotencyKey, cesta);
+    const { cesta, sha256 } = await uloziste.uloz(draft.idempotencyKey, pdf);
+    await store.zapisPdf(draft.idempotencyKey, cesta, sha256);
     return { link: { ...link, pdfPath: cesta } };
   } catch (chyba) {
     // Důvod se NESMÍ spolknout: doklad je vystavený a bez PDF, což někdo musí
     // vidět. Dobrat ho pak jde přes `dobirPdf` — vystavování se tím nezdržuje.
+    //
+    // Cizí text (Storage, Postgres, provider) jde JEN do `interni`. Do `zprava`
+    // patří naše věta: hlášky odjinud nesou názvy tabulek, cesty a vnitřnosti,
+    // které v prohlížeči nemají co dělat.
     return {
       link,
-      pdfChyba: `PDF dokladu ${result.number || result.providerInvoiceId} se nepodařilo stáhnout: ` +
-        `${chyba instanceof Error ? chyba.message : String(chyba)}`,
+      pdfChyba: {
+        kod: 'pdf',
+        zprava: `PDF dokladu ${result.number || result.providerInvoiceId} se nepodařilo stáhnout. ` +
+          'Doklad platí i bez něj, PDF se dobere později.',
+        interni: chyba instanceof Error ? chyba.message : String(chyba),
+      },
     };
   }
 };
@@ -359,7 +459,63 @@ export const dobirPdf = async (vstup: {
   );
   if (!pdf) return null;
 
-  const cesta = await pdfUloziste.uloz(link.idempotencyKey, pdf);
-  await store.zapisPdf(link.idempotencyKey, cesta);
+  const { cesta, sha256 } = await pdfUloziste.uloz(link.idempotencyKey, pdf);
+  await store.zapisPdf(link.idempotencyKey, cesta, sha256);
   return cesta;
+};
+
+/**
+ * Odešle doklad odběrateli, pokud je zapnutý režim `odeslat`.
+ *
+ * Vrací text varování, nebo `null`. SELHÁNÍ ODESLÁNÍ NESMÍ SHODIT VYSTAVENÍ —
+ * doklad v tu chvíli u providera existuje a má číslo. Kdyby se odsud vyhodila
+ * výjimka, `vystavDoklad` by v `catch` uvolnil claim a příští běh by se pokusil
+ * vystavit doklad znovu; zámek 2 by ho sice našel, ale celá cesta by se
+ * zbytečně tvářila jako neúspěch.
+ *
+ * Podruhé se neodesílá: `oznacOdeslano` vrátí `false`, když už datum odeslání
+ * je, a e-mail se v tom případě vůbec nevolá.
+ */
+const odesliPokudMa = async (
+  provider: InvoiceProvider,
+  store: InvoiceLinkStore,
+  draft: InvoiceDraft,
+  result: InvoiceResult,
+  rezim: RezimVystaveni,
+): Promise<Varovani | null> => {
+  if (rezim !== 'odeslat') return null;
+
+  if (!provider.sendInvoice) {
+    return {
+      kod: 'odeslani',
+      zprava: `Režim „odeslat" je zapnutý, ale provider odesílání neumí — ` +
+        `doklad ${result.number} zůstal neodeslaný.`,
+    };
+  }
+
+  // ZNAČKA SE STAVÍ PŘED ODESLÁNÍM, ne po něm. Opačné pořadí by pojistku
+  // „podruhé se neposílá" vyřadilo úplně: pád mezi odesláním a zápisem by nechal
+  // doklad neoznačený a příští běh by e-mail poslal znovu. Dvakrát doručená
+  // faktura je pro klienta stejně matoucí jako dvakrát vystavená.
+  //
+  // Cena je opačný okraj: když odeslání selže, doklad zůstane označený jako
+  // odeslaný, ačkoli nedorazil. Je to ale HLASITÉ — varování níž říká rovnou,
+  // že se má poslat ručně z Fakturoidu. Tichá duplicita by byla horší než
+  // hlasitý neúspěch.
+  if (!await store.oznacOdeslano(draft.idempotencyKey)) {
+    return null;   // už byl odeslaný dřív — nic se neděje
+  }
+
+  try {
+    await provider.sendInvoice(result.providerInvoiceId, { email: draft.party.email });
+    return null;
+  } catch (chyba) {
+    return {
+      kod: 'odeslani',
+      zprava: `Doklad ${result.number} se vystavil, ale NEODESLAL. ` +
+        'Je označený jako odeslaný, takže se automaticky nezopakuje — ' +
+        'pošlete ho prosím ručně z Fakturoidu.',
+      interni: chyba instanceof Error ? chyba.message : String(chyba),
+    };
+  }
 };

@@ -32,6 +32,15 @@ export interface InvoiceParty {
   registrationNo?: string;
   /** DIČ. Posílá se JEN u plátce DPH — u neplátce nemá na dokladu co dělat. */
   vatNo?: string;
+  /**
+   * E-mail, na který se doklad odesílá.
+   *
+   * ⚠️ `public.subjects` dnes sloupec pro e-mail NEMÁ, takže se sem reálně nic
+   * nedostane a provider si vystačí s tím, co má u odběratele vyplněné sám.
+   * Pro režim „koncept" to stačí (adresu doplní člověk), pro automatické
+   * odeslání ne. Viz `billing/README.md`, sekce Otevřené věci.
+   */
+  email?: string;
   street?: string;
   city?: string;
   zip?: string;
@@ -74,6 +83,16 @@ export interface InvoiceDraft {
   issuedOn?: string;
   /** Rezervace, ze kterých doklad vznikl. Po vystavení se na ně zapíše vazba. */
   sourceReservationIds: string[];
+
+  // ---- Kontext dokladu (rozšíření nad původní zadání) ----------------------
+  // Není to nic providerského — je to „co je tenhle doklad zač". Potřebuje to
+  // naše evidence (`fakturoid_invoices`), aby šlo doklad dohledat podle akce
+  // a období, a další provider by tytéž údaje chtěl taky.
+  /** U komerční akce její `events.id`. */
+  eventId?: string;
+  /** Období, za které se fakturuje, `RRRR-MM-DD`. */
+  obdobiOd?: string;
+  obdobiDo?: string;
 }
 
 /** Stav dokladu tak, jak ho hlásí provider. Úmyslně volný — každý ho pojmenuje po svém. */
@@ -122,4 +141,15 @@ export interface InvoiceProvider {
   createInvoice(draft: InvoiceDraft, providerSubjectId: string): Promise<InvoiceResult>;
   /** `null` znamená „ještě se generuje" (u Fakturoidu HTTP 204), ne chybu. */
   downloadPdf(providerInvoiceId: string): Promise<Uint8Array | null>;
+
+  /**
+   * Odešle hotový doklad odběrateli e-mailem.
+   *
+   * VOLITELNÉ SCHVÁLNĚ: ne každý provider umí odesílat, a jádro musí fungovat
+   * i bez toho — v režimu „koncept" se tahle metoda nezavolá vůbec.
+   *
+   * Selhání odeslání NESMÍ shodit vystavení: doklad v tu chvíli existuje a má
+   * číslo. Volající to zachytí a vrátí jako varování.
+   */
+  sendInvoice?(providerInvoiceId: string, komu: { email?: string }): Promise<void>;
 }

@@ -1,0 +1,310 @@
+# Etapa 3 — Fakturoid · STAV
+
+**Aktualizováno:** 24. 8. 2026 · **Větev:** `main`
+
+> **Nepushnuto.** Commity leží lokálně, push a merge zůstávají na vyžádání
+> (pravidlo repa). Frontend se z GitHubu nasazuje sám, takže push je rozhodnutí,
+> ne rutina.
+
+Předávací dokument. Kdo přebírá práci, ať čte tohle první — pak
+`billing/README.md` (pravidla vrstvy) a `docs/ETAPA2-STAV.md` (interní fakturace,
+kterou tahle etapa nahrazuje).
+
+---
+
+## 0. Kam to celé míří
+
+**Ostrý doklad vystavuje Fakturoid, ne my.** Náš systém do něj posílá jen
+podklady z rezervací. Číselná řada, PDF, QR platba, DPH režim, storno i evidence
+úhrad jsou od téhle chvíle věc Fakturoidu.
+
+Rozhraní je **provider-agnostické**: iDoklad nebo cokoli dalšího přibude jako
+nová implementace `InvoiceProvider`, aniž se sáhne na jádro.
+
+---
+
+## 1. Rozhodnutí PM — platná, nepřerozhodovat
+
+| Věc | Rozhodnutí | Kdy |
+|---|---|---|
+| **S2, ne S1** | Fakturoid vystavuje ostrý doklad. Interní engine (`invoice_counter`, PDF, QR, storno) se na ostré doklady **přestává používat**, zůstává max. jako interní přehled. | 24. 8. 2026 |
+| **Vyřazení interního enginu** | Samostatný **pozdější ticket**. Na existující fakturaci a na guard `app.trusted_booking` se teď NESAHÁ. | 24. 8. 2026 |
+| **Zámek 1 pod S2** | Ptá se **výhradně** na vazbu k provideru (`fakturoid_invoices`), nezávisle na `reservations.invoice_id`. Rezervace může mít interní doklad a **stejně jde do Fakturoidu**. | 24. 8. 2026 |
+| **Fakturoid path nepíše do `reservations`** | Vůbec nic. Tím odpadá konflikt s guardem. | 24. 8. 2026 |
+| **Režim vystavení** | Default **`koncept`** (rozjezd ~týden), přepínač `odeslat`. | 24. 8. 2026 |
+| **D2 — klíč akce** | `akce-{eventId}`, ne `akce-{reservationId}`. Jedna akce má běžně obě dráhy. | 24. 8. 2026 |
+| **D3 — adresa** | Interim: celý `subjects.address` do `street`, `city`/`zip` prázdné. | 24. 8. 2026 |
+| Splatnost | 14 dní (`BILLING_DUE_DAYS`) | dřívější |
+| Režim DPH | Neplátce — řádky bez `vat_rate`, DIČ se neposílá | dřívější |
+
+---
+
+## 2. Hotovo
+
+| PR | Co přineslo |
+|---|---|
+| **PR 1** `8c6df48` | Jádro: `InvoiceProvider`, mapování, idempotence, pipeline, port `InvoiceLinkStore` |
+| **PR 2** `34b255e` | `FakturoidProvider`: OAuth, hlavičky, rate limit, mapování |
+| **PR 3** `ea10d53` | Integrační testy proti testovacímu účtu + měření zaokrouhlení |
+| — `8dcee24` | Nálezy code review: kontrola řádků místo částky, izolace PDF, síťové chyby |
+| — `0e7eb29` | Druhé kolo review: zavření okna mezi zámkem 2 a claimem |
+| **PR 4** | Migrace `fakturoid_invoices`, `SupabaseStore`, Edge funkce, režim vystavení, oddělení chyb |
+
+**Kód žije v `billing/`, schválně MIMO `src/`.** Do `src/` sahá Vite bundle
+a `FAKTUROID_CLIENT_SECRET` nesmí mít ani teoretickou cestu do prohlížeče.
+Hlídá to `billing/hranice.test.ts` — `npm run lint` je v tomhle repu červený už
+na HEADu, takže jako brána nefunguje a ESLint pravidlo by nikdo neuviděl.
+
+---
+
+## 3. Jak to funguje
+
+```
+Edge funkce fakturoid-invoice
+  ├─ ověří admina (anon klient + has_role)      ← 401 / 403
+  ├─ fakturoid_podklady_klub / _akce            ← co se fakturuje
+  ├─ mapujKlubMesicne / mapujKomercniAkci       ← InvoiceDraft
+  └─ vystavDoklad(draft, FakturoidProvider, SupabaseStore)
+       ├─ ZÁMEK 1  jeVyfakturovana              ← už má fakturoidí vazbu?
+       ├─ ZÁMEK 2  findExistingInvoice          ← nevznikl už u providera?
+       ├─ ZÁMEK 3  zkusZabrat                   ← atomický claim v DB
+       ├─ ZÁMEK 2 PODRUHÉ                       ← zavírá okno mezi 2 a 3
+       ├─ ensureSubject → createInvoice
+       ├─ kontrolní součet proti providerovi    ← varovani
+       ├─ PDF do Storage (selhání ≠ neúspěch)
+       └─ režim `odeslat` → message.json
+```
+
+### Tři zámky, ne jeden
+
+Zámky 1 a 2 jsou **jen čtení**, takže cron a admin, kteří kliknou ve stejnou
+vteřinu, projdou oběma. Rozhodne až zámek 3 — a ten je **v databázi**, jedním
+příkazem `INSERT … ON CONFLICT (idempotency_key) DO NOTHING RETURNING`.
+Nikdy „SELECT, a když nic, tak INSERT": to je závod, ne zámek.
+
+Idempotence stojí na **schématu**, ne na kódu:
+- částečný UNIQUE na `idempotency_key` (WHERE `uvolneno_at IS NULL`),
+- UNIQUE na `reservation_id` v `fakturoid_invoice_reservations`.
+
+### Nalezenému dokladu se nevěří naslepo
+
+Když zámek 2 doklad najde, porovnají se **řádky**, ne částka. Porovnávat součet
+selže přesně v normálním provozu: klub trénuje týdně za stejnou sazbu, takže
+doklad na rezervaci „a" a doklad na „b" mají **tutéž částku**. Rezervace „b" by
+se označila za vyfakturovanou a **nevyfakturovala by se nikdy**.
+
+Při rozdílu se vrací stav `nesedi` a **vazba se nezapíše** — rozdíl patří
+člověku, ne automatice.
+
+---
+
+## 4. Poučení, které stálo nejvíc — čtyři cesty k duplicitní faktuře
+
+Za tři kola bran se v téhle vrstvě našly **čtyři různé** cesty k duplicitnímu
+dokladu. Kdo na ni sáhne, ať ví, o co jde:
+
+| # | Cesta | Zavřeno čím |
+|---|---|---|
+| ① | Zámky 1 a 2 jsou jen čtení — dva souběžné běhy projdou oběma | zámek 3, atomický claim |
+| ② | Retry POSTu po 5xx (doklad vznikl, provider spadl při skládání odpovědi) | 5xx se opakuje jen u GET/HEAD (`smiSeOpakovat`) |
+| ③ | Nalezenému dokladu se věřilo podle **částky** — u klubu se stejnou sazbou nerozliší rezervace | porovnání **řádků** |
+| ④ | Okno mezi zámkem 2 a claimem: A uvolní claim po selhaném POSTu, B ho dostane | zámek 2 se čte **i po claimu** |
+
+**429 se naopak opakovat SMÍ i u POSTu** — znamená „odmítnuto, nezpracováno".
+
+---
+
+## 4b. Co chytily brány u PR 4
+
+Migrační brána **nepustila napoprvé**. Stálo to za to:
+
+| Závažnost | Nález |
+|---|---|
+| 🔴 | `fakturoid_je_vyfakturovana` a `fakturoid_najdi_podle_klice` byly `SECURITY DEFINER` s `GRANT` pro `authenticated` a **bez guardu**. `najdi_podle_klice` vrací `public_url` — veřejný odkaz Fakturoidu na PDF, který funguje **bez přihlášení** — a klíč se dá uhodnout (`klub-{subjectId}-{RRRRMM}`, `subjects.id` přečte přes RLS každý). Únik celého dokladu komukoli přihlášenému. |
+| 🔴 | `fakturoid_zapis_pdf` měl `WHERE` jen na `idempotency_key`. Se stejným klíčem ale může existovat víc řádků (částečný UNIQUE pokrývá jen `uvolneno_at IS NULL`), takže by přepsal `pdf_path` na všech historických uvolněných claimech. |
+| 🟡 | Vratnost měla **špatné signatury** — `DROP FUNCTION` se špatným seznamem typů je tichý no-op, takže by dvě funkce revert přežily. `DEFAULT` parametr signaturu nezkracuje. |
+| 🟡 | Pohled `fakturoid_invoices_list` neměl `REVOKE`/`GRANT` → výchozí práva Supabase a rozbitý regresní test `security_hardening_test.sql`. |
+| 🟡 | Soft delete hlavičky nechával vazby → rezervace **trvale nefakturovatelné** a nikde to nebylo vidět. |
+| 🟡 | Chyběly audit triggery (CLAUDE.md §3, precedent u `invoices`). |
+
+Bezpečnostní brána našla nezávisle týž blokér s guardem a přidala dvě střední:
+
+- **`varovani` a fallback vracely surový cizí text.** `varovani` skládalo hlášky
+  Postgresu a Storage, `return json(vysledek)` u stavu `nesedi` posílal celý
+  `InvoiceResult` včetně `providerLines[].unitPrice`, tedy **sazbu**. Dosažitelné
+  to bylo jen adminovi, ale tvar „vrať to celé" přežije i den, kdy se endpoint
+  otevře víc lidem. `Varovani` má teď `zprava` (naše věta) a `interni` (jen log);
+  odpověď se skládá pole po poli.
+- **`sendInvoice` se volalo PŘED `oznacOdeslano`**, takže pojistka „podruhé se
+  neposílá" se v té cestě neuplatnila — pád mezi odesláním a zápisem by poslal
+  e-mail znovu. Pořadí obrácené; cenou je, že selhané odeslání nechá doklad
+  označený, ale varování rovnou říká, že se má poslat ručně.
+
+**Navíc tři věci, které jsem si našel sám:**
+- Edge funkce předávala token volajícího do klienta se **servisním klíčem**.
+  Když hlavička chybí, supabase-js spadne zpět na servisní klíč a požadavek
+  projde s plnými právy **bez volajícího**. Vzor v `invoice-zip` to dělá správně:
+  anon klient pro ověření role, servisní až pro práci.
+- Režim šlo přebít polem v těle požadavku. Rozjezdový `koncept` má smysl jen
+  tehdy, když ho nejde obejít jedním polem v JSONu — rozeslaná faktura se nedá
+  vzít zpět. Jediný zdroj je teď `FAKTUROID_MODE`.
+- Filtr varování psal `!== null`, jenže `dorovnej` bez úložiště `pdfChyba`
+  nevrací vůbec — `undefined` tedy propadlo dál. Chytily to testy.
+
+## 4c. Co našlo až SPUŠTĚNÍ migrace
+
+Migrace prošla `supabase db reset` čistě napoprvé. **Ale spuštění testů nad ní
+odhalilo díru, kterou tři brány čtením kódu nenašly** — a byla to ta nejhorší
+v celém PR.
+
+### Guard vracel NULL, ne false
+
+`fakturoid_smi_volat()` měl tvar:
+
+```sql
+SELECT has_role(auth.uid(), 'admin')
+    OR current_setting('request.jwt.claims', true)::jsonb->>'role' = 'service_role'
+    OR (auth.uid() IS NULL AND session_user IN ('postgres','supabase_admin'));
+```
+
+Mimo PostgREST není `request.jwt.claims` nastavené, takže `current_setting(…, true)`
+vrátí NULL a porovnání je taky NULL. A pak:
+
+```
+false OR NULL OR false  →  NULL
+NOT NULL                →  NULL
+IF NULL THEN RAISE      →  NEPROVEDE SE
+```
+
+**Guard tedy tiše propustil.** Změřeno na živé databázi: pod rolí `authenticated`
+vracel NULL, `fakturoid_je_vyfakturovana` odpověděla místo chyby a
+`fakturoid_zkus_zabrat` se dostala až na cizí klíč — tedy **běžný přihlášený
+uživatel by založil claim**.
+
+Oprava: každá větev obalená `COALESCE(…, false)`, plus `IF NOT COALESCE(guard, false)`
+jako pás i šle.
+
+**Proč to brány nechytily:** čtou kód, a ten vypadá správně. Vidět to jde jen
+během — a jen přes **věrný kanál**. Pod `psql -U postgres` projde větev pro cron
+(`session_user` je `postgres`), takže test tvrdí zavřeno o dveřích, vedle kterých
+je otevřené okno. Je to přesně pravidlo 8 v CLAUDE.md, jen o patro hlouběji.
+
+### Týž vzorec je i v Etapě 2 — tam je zavřený granty
+
+`claim_invoice_pdf`, `finish_invoice_pdf` a `fail_invoice_pdf`
+(`20260818090000_pdf_fronta.sql`) mají **stejnou konstrukci** a stejnou NULL díru.
+Dosažitelná ale není: `authenticated` na ně nemá `EXECUTE`, takže se zastaví
+o `permission denied` dřív, než se ke guardu dojde. Ověřeno spuštěním.
+
+⚠️ **Kdyby jim někdo někdy udělil `EXECUTE` pro `authenticated`, díra se otevře.**
+Fakturoidí funkce ten grant mají (admin je volá z webu) — proto tam byla živá.
+Opravit i Etapu 2 je **samostatný ticket**; sem podle zadání sahat nemám.
+
+## 5. „Koncept" u Fakturoidu není koncept
+
+**Fakturoid API stav koncept NEZNÁ.** Doklad vytvořený přes `POST /invoices.json`
+je plnohodnotný a **už má číslo v ostré řadě**.
+
+`FAKTUROID_MODE=koncept` u nás proto znamená **„vystaveno, ale neodesláno"** —
+doklad u Fakturoidu je, jen se neposlal e-mail; člověk si ho prohlédne a odešle
+sám. Není to nezávazný návrh a **omyl nejde tiše smazat**.
+
+Odesílá se přes **`POST /invoices/{id}/message.json`**, ne přes
+`fire.json?event=deliver` — ten byl z API v3 **odstraněn** ve prospěch Invoice
+Messages. `fire.json` dnes umí jen `mark_as_sent`, `cancel`, `undo_cancel`,
+`lock`, `unlock`, `mark_as_uncollectible`. Kdo by sáhl po `mark_as_sent`, označí
+doklad za odeslaný, **aniž by ho kdokoli dostal**.
+
+---
+
+## 6. Co zbývá
+
+### Blokované na klíčích k testovacímu účtu
+
+- **Zaokrouhlovací delta.** Fakturoid si částku zaokrouhluje sám a jeho pravidlo
+  nemusí být naše `round(round(v,2),0)` (R3). Test je připravený, fixtura je
+  schválně ta, na které se to projeví (3 × 1 250,505 Kč: přesně 3 751,53 / naše
+  k úhradě 3 752 / po řádcích chybně 3 753). Deltu **vypíše na doklad**, do
+  0,50 Kč projde, nad to spadne.
+- **Tvar hlavičky rate limitu.** Podobu u 429 jsme neviděli na živé odpovědi.
+  Parser čte tři podoby a spadá na backoff. **Ověřit při prvním živém 429**
+  a zúžit. Je to odolnost, ne znalost.
+
+### Testy
+
+```bash
+# funkční sada — 36 tvrzení
+docker exec -i supabase_db_<project> psql -U postgres -X -q -v ON_ERROR_STOP=1 \
+  < supabase/tests/fakturoid_test.sql
+
+# sada PRÁV — 11 tvrzení, MUSÍ přes authenticator, jinak netestuje nic
+docker exec -e PGPASSWORD=postgres -i supabase_db_<project> \
+  psql -h 127.0.0.1 -U authenticator -d postgres -X -q -v ON_ERROR_STOP=1 \
+  < supabase/tests/fakturoid_prava_test.sql
+
+npx vitest run            # 358 unit testů (175 v billing/)
+npm run typecheck
+deno check --config supabase/functions/deno.json supabase/functions/fakturoid-invoice/index.ts
+```
+
+Migrace ověřena `supabase db reset` — 29 migrací, čistý průběh, obě SQL sady zelené.
+
+### Otevřené a vědomě odložené
+
+- **E-mail odběratele.** `public.subjects` sloupec pro e-mail **nemá**, takže pro
+  režim `odeslat` ho musí mít vyplněný Fakturoid — jinak vrátí 422. Buď ho tam
+  doplní člověk, nebo přibude migrací sloupec. Pro `koncept` to nevadí.
+- **Strukturovaná adresa z ARESu.** `ares-lookup` bere jen
+  `sidlo.textovaAdresa` a `nazevUlice`/`nazevObce`/`psc` zahazuje.
+- **Timeout požadavků** (`AbortController`) — `http.ts` nemá horní mez čekání.
+- **Vyřazení interního enginu** — samostatný ticket (rozhodnutí PM).
+
+### Pro PM, ne pro kód
+
+**Fakturoid je nový zpracovatel osobních údajů** (název, IČO, DIČ, sídlo
+odběratelů). Patří k tomu zpracovatelská smlouva a záznam o činnostech zpracování.
+
+---
+
+## 7. Čemu nevěřit a co si ověřit
+
+Kromě pastí z `docs/ETAPA2-STAV.md`, kapitola 5, přibylo tohle:
+
+- **`deno check billing/…` bez `--config` v kořeni repa hlásí falešné chyby**
+  (`setTimeout`, `TextEncoder`). Deno tam najde `package.json` a přepne se do
+  Node-compat režimu bez webových API. Věrný běh:
+  `deno check --config supabase/functions/deno.json billing/**/*.ts`
+- **TypeScriptové `private` za běhu neexistuje.** `constructor(private volby)`
+  vyrobí enumerable vlastnost, takže `JSON.stringify(provider)` vydá
+  `client_secret`. Proto `#` pole a `toJSON()`; hlídají to testy.
+- **Nepředávej token volajícího do klienta se servisním klíčem.** Když hlavička
+  chybí, supabase-js spadne zpět na servisní klíč a požadavek projde s plnými
+  právy bez volajícího. Vzor je v `invoice-zip`: anon klient pro ověření role,
+  servisní až pro práci.
+- **`lzeOpakovat` NENÍ povolení zopakovat `createInvoice` napřímo.** Chyby
+  z neúspěšného zápisu nesou `zapisNejisty`; opakovat se smí jen celé
+  `vystavDoklad`, kde to zachytí zámky.
+- **Chybová hlášení téhle vrstvy nesou sazby a částky.** Ven jde
+  `uzivatelskaZprava()` / `proUzivatele()`, nikdy `err.message`.
+- **`fakturovatelne_rezervace` má EXECUTE odebrané i `service_role`** — volá se
+  jen z jiné SECURITY DEFINER funkce (`fakturoid_podklady_klub` / `_akce`).
+
+---
+
+## 8. Nasazení — pořadí
+
+1. **Záloha produkční DB** (pravidlo repa, bez ní se nic neaplikuje).
+2. Migrace `20260824120000_fakturoid_vazba.sql` — **nejdřív lokálně**.
+3. Tajemství do **Supabase secrets**, ne do Netlify env (to je pro frontend):
+   ```
+   supabase secrets set --project-ref <ref> \
+     FAKTUROID_SLUG=… FAKTUROID_CLIENT_ID=… FAKTUROID_CLIENT_SECRET=… \
+     FAKTUROID_USER_AGENT='CurlingPromo (kontakt@email)' FAKTUROID_MODE=koncept
+   ```
+4. Deploy funkce `fakturoid-invoice`.
+5. **Týden v režimu `koncept`** — doklady se zakládají, e-maily se neposílají.
+   Teprve pak `FAKTUROID_MODE=odeslat`.
+
+**Integrační testy nikdy nepouštěj s produkčním slugem.** Kromě
+`FAKTUROID_LIVE=true` se musí do `FAKTUROID_TEST_SLUG` opsat jméno účtu, na který
+se smí psát. Doklad v ostré řadě **nejde smazat, jen dobropisovat**.
