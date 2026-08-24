@@ -219,16 +219,66 @@ doklad za odeslaný, **aniž by ho kdokoli dostal**.
 
 ## 6. Co zbývá
 
-### Blokované na klíčích k testovacímu účtu
+### Ověřeno proti živému testovacímu účtu (25. 8. 2026)
 
-- **Zaokrouhlovací delta.** Fakturoid si částku zaokrouhluje sám a jeho pravidlo
-  nemusí být naše `round(round(v,2),0)` (R3). Test je připravený, fixtura je
-  schválně ta, na které se to projeví (3 × 1 250,505 Kč: přesně 3 751,53 / naše
-  k úhradě 3 752 / po řádcích chybně 3 753). Deltu **vypíše na doklad**, do
-  0,50 Kč projde, nad to spadne.
-- **Tvar hlavičky rate limitu.** Podobu u 429 jsme neviděli na živé odpovědi.
-  Parser čte tři podoby a spadá na backoff. **Ověřit při prvním živém 429**
-  a zúžit. Je to odolnost, ne znalost.
+Účet `tomastest`, tarif Zdarma, `vat_mode: non_vat_payer`.
+
+**Zaokrouhlení: Fakturoid nezaokrouhloval VŮBEC.** Nešlo o jiné pravidlo — o žádné.
+Změřeno na fixtuře 3 × 1 250,505 Kč:
+
+```
+[ZAOKROUHLENÍ] přesný součet 3751.53 Kč · naše k úhradě 3752 Kč
+               · Fakturoid 3751.53 Kč · DELTA -0,47 Kč
+```
+
+Doklad tedy zněl na 3 751,53 Kč, kdežto naše R3 dává 3 752 Kč.
+
+> **ROZHODNUTÍ PM 25. 8. 2026: zapnout zaokrouhlení na celé koruny v nastavení
+> Fakturoidu.** Tím se obě strany srovnají a kontrolní součet vychází na nulu.
+> Je to nastavení ÚČTU, ne našeho kódu — kdo bude zakládat další účet (ostrý
+> provoz), **musí ho zapnout znovu**, jinak se doklady rozejdou s „Kdo kolik
+> dluží" až o 0,50 Kč na doklad.
+
+**Tvar hlavičky rate limitu — už to není domněnka.** Odchyceno z živé odpovědi:
+
+```
+x-ratelimit:        default;r=387;t=44
+x-ratelimit-policy: default;q=400;w=60
+```
+
+`r` = zbývající požadavky, `t` = vteřiny do resetu, `q` = kvóta, `w` = okno.
+Limit je **400 požadavků za minutu**. Parser tenhle tvar zvládá a je na to test
+se skutečnou hodnotou.
+
+**403 vrací DVA různé tvary těla** a obě jsou k nezaplacení při ladění:
+
+```
+{"error":"quota_exhausted", …}                   — vyčerpaný limit tarifu
+{"errors":{"bank_account":["Please set up …"]}}  — nedodělané nastavení účtu
+```
+
+Původně sem spadlo 401 i 403 se společnou hláškou „zkontroluj klíče" — a stálo to
+hodinu hledání v klíčích, které byly celou dobu v pořádku. Teď: 401 = přihlášení,
+403 = `BillingProviderError` s kódem chyby nebo jmény vadných polí a s větou, že
+o heslo **nejde**.
+
+**Bez bankovního účtu Fakturoid doklad nevystaví.** `POST /invoices.json` vrátí
+403 s `bank_account`. Patří to do kroků nasazení.
+
+**Konec s tvorbou odběratele na každý běh.** Integrační sada nesla razítko běhu
+i v `custom_id` odběratele, takže každé spuštění sežralo jedno místo v limitu
+tarifu. Odběratel je teď stabilní (`subj-test-klub-curling`); razítko zůstává jen
+na dokladu. Navíc to testuje `ensureSubject` líp — druhý běh ho má NAJÍT.
+
+### Ověřeno end-to-end na reálných datech
+
+Klub CK Ostravské kameny, srpen 2026, 10 rezervací ze seedu → doklad **2026-0002**
+na 19 200 Kč, `rozdil` 0,00, 10 navázaných rezervací, 12 auditních záznamů.
+`reservations.invoice_id` zůstalo nedotčené u všech 36 rezervací.
+
+**Idempotence naživo:** druhý běh nevystavil nic, protože `fakturoid_podklady_klub`
+vrátí po vystavení nula podkladů — duplicita se nedá ani zkusit. Na účtu jsou
+přesně dva doklady, ne tři.
 
 ### Testy
 

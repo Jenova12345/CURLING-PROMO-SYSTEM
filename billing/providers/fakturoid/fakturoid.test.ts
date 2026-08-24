@@ -478,6 +478,18 @@ describe('rozpoznání prodlevy po 429', () => {
     expect(prodlevaPoLimitu(odpoved(429, '', { 'X-RateLimit': 'limit=100; remaining=0; t=42' }), 1)).toBe(42_000);
   });
 
+  // SKUTEČNÝ tvar, odchycený z živé odpovědi Fakturoidu 25. 8. 2026:
+  //   x-ratelimit: default;r=387;t=44
+  //   x-ratelimit-policy: default;q=400;w=60
+  // `r` je zbývající počet, `t` vteřiny do resetu, `q` kvóta, `w` okno.
+  // Dřív to byla domněnka — teď je to změřené.
+  it('zvládne SKUTEČNÝ tvar hlavičky Fakturoidu', () => {
+    expect(prodlevaPoLimitu(odpoved(429, '', { 'X-RateLimit': 'default;r=387;t=44' }), 1)).toBe(44_000);
+    expect(prodlevaPoLimitu(odpoved(429, '', { 'X-RateLimit': 'default;r=0;t=1' }), 1)).toBe(1000);
+    // `r=387` se nesmí splést s `t` — parser bere jen parametr `t`.
+    expect(prodlevaPoLimitu(odpoved(429, '', { 'X-RateLimit': 'default;r=387;t=44' }), 3)).toBe(44_000);
+  });
+
   it('bez použitelné hlavičky spadne na backoff, ne na nulu', () => {
     expect(prodlevaPoLimitu(odpoved(429, ''), 1)).toBe(500);
     expect(prodlevaPoLimitu(odpoved(429, '', { 'Retry-After': 'Wed, 21 Oct 2026 07:28:00 GMT' }), 2)).toBe(1000);
@@ -725,6 +737,27 @@ describe('odeslání dokladu odběrateli', () => {
     const { vysledek } = await odesli(403);
     expect(vysledek).toBeInstanceOf(BillingProviderError);
     expect((vysledek as Error).message).toMatch(/free tarif|kvóta/);
+  });
+
+  // 401 a 403 NEJSOU totéž. Fakturoid vrací 403 i na vyčerpaný limit tarifu,
+  // a hláška „zkontroluj klíče" pak posílá hledat přesně opačným směrem.
+  // Změřeno na živém účtu: token OK, GET OK, POST → 403 quota_exhausted.
+  it('403 z API se NEhlásí jako špatné heslo a nese kód chyby', async () => {
+    const { fn } = mockFetch([TOKEN_OK, () => odpoved(403,
+      '{"error":"quota_exhausted","error_description":"You have reached the limit"}')]);
+    const p = new FakturoidProvider({ config: CONFIG, fetch: fn, cekej: hnedCekej });
+
+    const chyba = await p.findExistingInvoice('klub-abc-202608').catch((e) => e);
+    expect(chyba).toBeInstanceOf(BillingProviderError);
+    expect(chyba).not.toBeInstanceOf(BillingAuthError);
+    expect((chyba as Error).message).toContain('quota_exhausted');
+    expect((chyba as Error).message).toMatch(/NENÍ to špatné heslo/);
+  });
+
+  it('401 se naopak jako špatné heslo hlásí dál', async () => {
+    const { fn } = mockFetch([TOKEN_OK, () => odpoved(401, '')]);
+    const p = new FakturoidProvider({ config: CONFIG, fetch: fn, cekej: hnedCekej });
+    await expect(p.findExistingInvoice('klub-abc-202608')).rejects.toBeInstanceOf(BillingAuthError);
   });
 
   // Tohle je nejpravděpodobnější selhání v provozu: `public.subjects` sloupec

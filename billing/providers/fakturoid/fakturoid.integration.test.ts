@@ -52,7 +52,17 @@ const live = jeAno(env.FAKTUROID_LIVE) && potvrzeno;
  * dostaly týž identifikátor a druhý by spadl na „expected 'existoval' to be 'vystaveno'".
  */
 const BEH = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
-const TEST_KLUB_ID = `test-klub-${BEH}`;
+
+/**
+ * Odběratel je STABILNÍ napříč běhy, doklad ne.
+ *
+ * Dřív nesl razítko běhu i odběratel — a na free tarifu Fakturoidu, kde je
+ * limit odběratelů, to znamenalo, že každý běh sady sežral jedno místo a po pár
+ * spuštěních začalo `ensureSubject` padat na `quota_exhausted`. Ukázalo se to až
+ * naživo. Stabilní `custom_id` navíc testuje `ensureSubject` líp: druhý běh ho
+ * má NAJÍT, ne založit dalšího.
+ */
+const TEST_KLUB_ID = 'test-klub-curling';
 
 const rezervace: BillableReservation[] = [
   { id: `r1-${BEH}`, start_at: '2026-08-04T16:00:00Z', end_at: '2026-08-04T17:30:00Z', sheet_name: 'Dráha 1', event_title: 'Integrační test', hodiny: 1.5, sazba: 833.67, castka: 1250.51 },
@@ -63,7 +73,7 @@ const rezervace: BillableReservation[] = [
 const draft = () => mapujKlubMesicne({
   subjekt: {
     id: TEST_KLUB_ID,
-    name: `TEST Curling Ostrava ${BEH}`,
+    name: 'TEST Curling Ostrava',
     ico: '26512345',
     dic: null,
     address: 'Sportovní 12, 702 00 Ostrava',

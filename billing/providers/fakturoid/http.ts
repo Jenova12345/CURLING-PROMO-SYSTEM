@@ -239,9 +239,41 @@ export const jakoJson = async <T>(
   odpoved: HttpOdpoved,
   volby: { bezTela?: boolean } = {},
 ): Promise<T> => {
-  if (odpoved.status === 401 || odpoved.status === 403) {
+  // 401 A 403 NEJSOU TOTÉŽ. Původně sem spadly obě a obě hlásily „zkontroluj
+  // klíče" — jenže Fakturoid vrací 403 i na `quota_exhausted` (vyčerpaný limit
+  // odběratelů na free tarifu) a na chybějící oprávnění API přístupu.
+  //
+  // Stálo to hodinu hledání ve špatných klíčích na živém účtu: token se vydal
+  // v pořádku, `GET /subjects.json` prošel, a teprve `POST` vrátil 403 s tělem
+  // `{"error":"quota_exhausted"}`. Hláška o klíčích posílala přesně opačným
+  // směrem, než kde byl problém.
+  if (odpoved.status === 401) {
     throw new BillingAuthError(
-      `Fakturoid odmítl přihlášení (${odpoved.status}). Zkontroluj FAKTUROID_CLIENT_ID a FAKTUROID_CLIENT_SECRET.`,
+      'Fakturoid odmítl přihlášení (401). Zkontroluj FAKTUROID_CLIENT_ID a FAKTUROID_CLIENT_SECRET.',
+    );
+  }
+  if (odpoved.status === 403) {
+    const telo = await odpoved.text().catch(() => '');
+
+    // Fakturoid vrací u 403 DVA různé tvary a oba nesou to podstatné:
+    //   {"error":"quota_exhausted", …}                — vyčerpaný limit tarifu
+    //   {"errors":{"bank_account":["Please set up …"]}} — nedodělané nastavení účtu
+    // Do hlášky jde strojový kód a JMÉNA POLÍ, ne jejich obsah: jména jsou
+    // diagnostika, obsah může u jiných endpointů nést údaje odběratele.
+    const kod = /"error"\s*:\s*"([a-z_]+)"/.exec(telo)?.[1];
+    let pole: string[] = [];
+    try {
+      const j = JSON.parse(telo) as { errors?: Record<string, unknown> };
+      if (j.errors && typeof j.errors === 'object') pole = Object.keys(j.errors);
+    } catch { /* tělo není JSON — jména polí prostě nemáme */ }
+
+    const detail = kod ?? (pole.length ? `chybí nebo vadí: ${pole.join(', ')}` : '');
+    throw new BillingProviderError(
+      `Fakturoid požadavek zamítl (403${detail ? `, ${detail}` : ''}). ` +
+      'NENÍ to špatné heslo — bývá to vyčerpaný limit tarifu (odběratelé, doklady, ' +
+      'e-maily), nedodělané nastavení účtu (typicky chybějící bankovní účet), ' +
+      'nebo API přístup bez potřebného oprávnění.',
+      403, zkrat(telo),
     );
   }
   const telo = await odpoved.text();
