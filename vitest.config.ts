@@ -13,6 +13,11 @@ export default defineConfig({
   test: {
     environment: 'node',
     // I .tsx, ať se komponentové testy jednou tiše nepřeskočí.
-    include: ['src/**/*.test.{ts,tsx}'],
+    //
+    // `billing/` je schválně MIMO `src/`: do `src/` sahá Vite bundle a
+    // FAKTUROID_CLIENT_SECRET nesmí mít ani teoretickou cestu do prohlížeče.
+    // Bez téhle druhé položky by se testy fakturační vrstvy tiše nespouštěly —
+    // ne červeně, ale vůbec, což je horší.
+    include: ['src/**/*.test.{ts,tsx}', 'billing/**/*.test.ts'],
   },
 });

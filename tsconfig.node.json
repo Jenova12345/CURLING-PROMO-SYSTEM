@@ -23,5 +23,10 @@
   // a to je důkazní základna rozhodnutí R3, která importuje ze src/lib/money.
   // Změna signatury v money.ts by tedy prošla zeleným typecheckem a skript by
   // se rozbil až za běhu.
-  "include": ["vite.config.ts", "vitest.config.ts", "tailwind.config.ts", "scripts/**/*.ts"]
+  // `billing/**/*.ts` patří sem, ne do tsconfig.app.json: `billing/` je serverová
+  // vrstva mimo `src/`, takže do Vite bundlu nesmí, a tenhle projekt má navíc
+  // `strict: true` — u peněz je to ta správnější mez. `src/lib/money.ts`, které
+  // si `billing/` importuje, se přes `scripts/overit-zaokrouhleni.ts` pod strictem
+  // typuje odjakživa, takže tím nic nového nezpřísňuju.
+  "include": ["vite.config.ts", "vitest.config.ts", "tailwind.config.ts", "scripts/**/*.ts", "billing/**/*.ts"]
 }
