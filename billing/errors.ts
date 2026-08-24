@@ -49,7 +49,15 @@ export class BillingRateLimitError extends BillingError {
  * požadavek doletěl — proto ho `http.ts` neopakuje a spoléhá se na zámek 2
  * v příštím běhu.
  */
-export class BillingNetworkError extends BillingError {}
+export class BillingNetworkError extends BillingError {
+  /** Šlo o ZÁPIS, u kterého nevíme, jestli doletěl. Nezpakovat napřímo. */
+  readonly zapisNejisty: boolean;
+
+  constructor(message: string, options?: { cause?: unknown; zapisNejisty?: boolean }) {
+    super(message, options);
+    this.zapisNejisty = options?.zapisNejisty ?? false;
+  }
+}
 
 /**
  * Provider odpověděl chybou, kterou neumíme zařadit.
@@ -59,14 +67,34 @@ export class BillingProviderError extends BillingError {
   constructor(
     message: string,
     readonly status: number,
-    /** Tělo odpovědi, zkrácené. Pro diagnostiku — NIKDY se z něj nedělá rozhodnutí. */
+    /** Tělo odpovědi, zkrácené a začerněné. Pro diagnostiku — nikdy se z něj nerozhoduje. */
     readonly telo?: string,
+    /**
+     * Šlo o ZÁPIS, u kterého nevíme, jestli se provedl (5xx po POSTu).
+     *
+     * Doklad mohl vzniknout a provider spadnout až při skládání odpovědi.
+     * Zopakovat se smí jen CELÉ `vystavDoklad` (kde to zachytí zámky 2 a 3),
+     * NIKDY `createInvoice` napřímo.
+     */
+    readonly zapisNejisty: boolean = false,
   ) {
     super(message);
   }
 }
 
-/** Má se chyba zkusit znovu? Jediné místo, kde se to rozhoduje. */
+/**
+ * Smí se zopakovat CELÉ `vystavDoklad`? Jediné místo, kde se to rozhoduje.
+ *
+ * POZOR NA ROZSAH: tohle NENÍ povolení zopakovat `createInvoice` napřímo.
+ * U `zapisNejisty` doklad mohl vzniknout, takže bezpečné je jen znovu projít
+ * celým `vystavDoklad`, kde se nejdřív zeptají zámky 2 a 3. Fronta v PR 4,
+ * která by opakovala jednotlivé volání provideru, vyrobí duplicitní fakturu.
+ */
+export const jeZapisNejisty = (chyba: unknown): boolean =>
+  (chyba instanceof BillingProviderError || chyba instanceof BillingNetworkError)
+    ? chyba.zapisNejisty
+    : false;
+
 export const lzeOpakovat = (chyba: unknown): boolean => {
   if (chyba instanceof BillingRateLimitError) return true;
   if (chyba instanceof BillingNetworkError) return true;

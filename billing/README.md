@@ -145,6 +145,24 @@ pro 5xx i síťovou chybu). Je to bezpečné **jen díky zámkům 2 a 3**: nový
 nejdřív zeptá, jestli doklad nevznikl, a porovná jeho řádky s dnešním podkladem.
 Kdyby některý z těch zámků padl, změní se to `true` v duplicitní fakturu.
 
+⚠️ **`lzeOpakovat` NENÍ povolení zopakovat `createInvoice` napřímo.** Chyba
+z neúspěšného zápisu nese příznak `zapisNejisty` (čte se přes `jeZapisNejisty`):
+doklad mohl vzniknout a provider spadnout až při skládání odpovědi. Fronta
+v PR 4 smí opakovat jen celé `vystavDoklad`.
+
+**Chybová těla se začerňují parsováním, ne regexem.** `"[^"]*"` neumí escapovanou
+uvozovku, takže na názvu `Firma "ABC" s.r.o.` — a ty z ARESu chodí — začerní jen
+první půlku, do logu pustí zbytek a rozbije JSON; nekvotované hodnoty (`{"zip":70800}`)
+mine úplně. `zkrat` proto tělo **parsuje a prochází rekurzivně**, a když se
+rozparsovat nedá, do chyby ho nedá vůbec: neznámý tvar nejde spolehlivě začernit.
+
+**Zámek 2 se čte DVAKRÁT — před claimem i po něm.** Mezi prvním dotazem
+a claimem je okno, kterým projde duplicita: běh A i B projdou zámkem 2 (oba
+null), B se zdrží na 429 (čeká se podle hlavičky až minutu), A mezitím zabere
+claim, POSTne doklad, Fakturoid ho **založí** a spadne na 5xx při skládání
+odpovědi → A claim správně uvolní (neví, jak to dopadlo) → B claim dostane
+a POSTne druhý doklad. Jeden GET navíc to okno zavře celé.
+
 **Tři zámky, ne dva.** Zámek 1 (lokální, bez sítě) chytí, že rezervace už doklad
 nese; zámek 2 (dotaz k providerovi před POSTem) chytí doklad, který vznikl, ale
 odpověď se ztratila. Oba jsou ale jen ČTENÍ — když cron a admin kliknou ve stejnou
@@ -171,10 +189,17 @@ vytiskl. Rozpor se vrací jako `varovani` na výsledku; doklad už existuje, tak
 ho nejde vzít zpět, ale **tichý rozpor u peněz je horší než hlasitý**. PR 4 ho
 musí někam vypsat.
 
-**PDF nesmí shodit vystavení.** Výjimka při stahování (429, výpadek sítě, plné
-úložiště) by shodila celé `vystavDoklad` — jenže vazba je v tu chvíli už zapsaná,
-takže příští běh doklad podle zámku 1 přeskočí a PDF by nedobral **nikdo**.
-Doklad má číslo a platí i bez PDF; stahování je dobírání, ne vystavování.
+**PDF nesmí shodit vystavení — a dobírá se `dobirPdf`, ne dalším během.**
+Výjimka při stahování (429, výpadek sítě, plné úložiště) by shodila celé
+`vystavDoklad`, ačkoli vazba je v tu chvíli už zapsaná. Doklad má číslo a platí
+i bez PDF; stahování je dobírání, ne vystavování. Důvod selhání se vrací
+ve `varovani`, nespolkne se.
+
+Pozor na past, kterou tu měl dřív komentář: „PDF dobere další běh fronty"
+**nepopisovalo žádnou existující cestu**. Jakmile vazba existuje, `vystavDoklad`
+se zastaví hned na `najdiPodleKlice` a k PDF se nedostane. Proto je tu
+`dobirPdf(link, …)` jako samostatný vstupní bod — PR 4 ho zavolá pro vazby
+bez `pdfPath`.
 
 **Doklad na nula korun se nevystavuje.** Sazba 0 na jednotlivém řádku je platná
 (hodina zdarma uvnitř placeného dokladu), celý doklad na nulu ne — automatika

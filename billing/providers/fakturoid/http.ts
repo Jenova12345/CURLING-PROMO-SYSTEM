@@ -69,22 +69,43 @@ export const prodlevaPoLimitu = (odpoved: HttpOdpoved, pokus: number): number =>
  * v logu Edge funkce, který podle `errors.ts` čte víc lidí než ten, kdo klíč
  * nastavoval. Diagnostická hodnota je v tom, KTERÉ pole vadí, ne jakou má
  * hodnotu — proto se klíče nechávají a hodnoty zakrývají.
+ *
+ * PROČ NE REGEXEM: `"[^"]*"` neumí escapovanou uvozovku, takže na názvu
+ * `Firma \"ABC\" s.r.o.` (a ty z ARESu reálně chodí) začerní jen první půlku,
+ * do logu pustí `ABC" s.r.o.` a tělo přestane být validní JSON. Nekvotované
+ * hodnoty (`{"zip":70800}`) by minul úplně. Proto se tělo PARSUJE a prochází
+ * rekurzivně — a když se rozparsovat nedá, do chyby se nedává vůbec: neznámý
+ * tvar nejde spolehlivě začernit.
  */
-const CITLIVE_KLICE = [
-  'registration_no', 'vat_no', 'street', 'city', 'zip', 'name',
-  'access_token', 'refresh_token', 'client_secret',
-];
+const CITLIVE_KLICE = new Set([
+  'registration_no', 'vat_no', 'street', 'city', 'zip', 'name', 'full_name',
+  'email', 'phone', 'access_token', 'refresh_token', 'client_secret', 'client_id',
+]);
 
-export const zkrat = (telo: string): string => {
-  let vysledek = telo;
-  for (const klic of CITLIVE_KLICE) {
-    // Nahrazuje jen hodnotu za klíčem, samotný klíč zůstane vidět.
-    vysledek = vysledek.replace(
-      new RegExp(`("${klic}"\\s*:\\s*)"[^"]*"`, 'g'),
-      '$1"‹skryto›"',
+const SKRYTO = '‹skryto›';
+
+const zacerni = (uzel: unknown): unknown => {
+  if (Array.isArray(uzel)) return uzel.map(zacerni);
+  if (uzel !== null && typeof uzel === 'object') {
+    return Object.fromEntries(
+      Object.entries(uzel as Record<string, unknown>).map(
+        ([klic, hodnota]) => [klic, CITLIVE_KLICE.has(klic) ? SKRYTO : zacerni(hodnota)],
+      ),
     );
   }
-  return vysledek.length > 300 ? `${vysledek.slice(0, 300)}…` : vysledek;
+  return uzel;
+};
+
+export const zkrat = (telo: string): string | undefined => {
+  let vycistene: string;
+  try {
+    vycistene = JSON.stringify(zacerni(JSON.parse(telo)));
+  } catch {
+    // Tělo, které není JSON (HTML chybovka, prostý text), se nedá spolehlivě
+    // začernit. Radši nic než náhodný výřez cizích dat v logu.
+    return undefined;
+  }
+  return vycistene.length > 300 ? `${vycistene.slice(0, 300)}…` : vycistene;
 };
 
 export interface KlientVolby {
@@ -165,9 +186,11 @@ export const pozadavek = async (
         await cekej(BACKOFF_MS * 2 ** (pokus - 1));
         continue;
       }
+      // U ZÁPISU je tohle nejhorší možný stav: nevíme, jestli požadavek doletěl.
+      // Příznak nese informaci dál, ať ho fronta v PR 4 nezopakuje napřímo.
       throw new BillingNetworkError(
         `Spojení s Fakturoidem selhalo po ${pokus} ${pokus === 1 ? 'pokusu' : 'pokusech'}.`,
-        { cause: chyba },
+        { cause: chyba, zapisNejisty: !opakovatelny },
       );
     }
     posledni = odpoved;
@@ -202,6 +225,7 @@ export const pozadavek = async (
     `Fakturoid odpověděl ${odpoved.status}${pokusuSkutecne > 1 ? ` i po ${pokusuSkutecne} pokusech` : ''}.`,
     odpoved.status,
     zkrat(await odpoved.text().catch(() => '')),
+    !opakovatelny,
   );
 };
 

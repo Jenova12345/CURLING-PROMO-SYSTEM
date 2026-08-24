@@ -4,11 +4,12 @@ import { FakturoidProvider } from './index.ts';
 import { nactiConfig, zakladUrl } from './config.ts';
 import { basicHlavicka, TOKEN_URL, TokenCache } from './auth.ts';
 import {
-  prodlevaPoLimitu, smiSeOpakovat, type FetchFn, type HttpOdpoved, type HttpPozadavek,
+  prodlevaPoLimitu, smiSeOpakovat, zkrat,
+  type FetchFn, type HttpOdpoved, type HttpPozadavek,
 } from './http.ts';
 import {
   BillingAuthError, BillingNetworkError, BillingProviderError, BillingRateLimitError,
-  BillingValidationError, lzeOpakovat,
+  BillingValidationError, jeZapisNejisty, lzeOpakovat,
 } from '../../errors.ts';
 import type { InvoiceDraft } from '../../types.ts';
 
@@ -620,5 +621,77 @@ describe('prázdná splatnost není nula', () => {
     expect(nactiConfig({ ...ENV, BILLING_DUE_DAYS: '' }).dueDays).toBe(14);
     expect(nactiConfig({ ...ENV, BILLING_DUE_DAYS: '  ' }).dueDays).toBe(14);
     expect(nactiConfig({ ...ENV, BILLING_DUE_DAYS: undefined }).dueDays).toBe(14);
+  });
+});
+
+describe('začernění chybového těla', () => {
+  const zacernene = (o: unknown) => zkrat(JSON.stringify(o));
+
+  it('skryje hodnoty citlivých polí, klíče nechá vidět', () => {
+    const v = zacernene({ errors: { registration_no: '26512345', street: 'Sportovní 12' } });
+    expect(v).toContain('registration_no');
+    expect(v).not.toContain('26512345');
+    expect(v).not.toContain('Sportovní');
+  });
+
+  // Regexem `"[^"]*"` tohle nešlo: na názvu s uvozovkami začernil jen první
+  // půlku, do logu pustil `ABC" s.r.o.` a tělo přestalo být validní JSON.
+  // Názvy s uvozovkami z ARESu reálně chodí.
+  it('zvládne uvozovku uvnitř hodnoty', () => {
+    const v = zacernene({ errors: { name: 'Firma "ABC" s.r.o.', street: 'Ruská 101' } })!;
+    expect(v).not.toContain('ABC');
+    expect(() => JSON.parse(v.replace(/…$/, ''))).not.toThrow();
+  });
+
+  it('zvládne i nekvotované hodnoty a pole', () => {
+    expect(zacernene({ zip: 70800 })).not.toContain('70800');
+    expect(zacernene({ subjects: [{ name: 'Tajný klub' }] })).not.toContain('Tajný klub');
+  });
+
+  it('tělo, které není JSON, se do chyby nedává vůbec', () => {
+    // Neznámý tvar nejde spolehlivě začernit — radši nic než náhodný výřez
+    // cizích dat v logu.
+    expect(zkrat('<html>502 Bad Gateway — user admin@klub.cz</html>')).toBeUndefined();
+  });
+
+  it('nezačerňuje, co začernit nemá — jinak by chyba nešla diagnostikovat', () => {
+    expect(zacernene({ errors: { due: ['musí být číslo'] } })).toContain('musí být číslo');
+  });
+});
+
+describe('příznak „nevíme, jak zápis dopadl“', () => {
+  // Selhaný POST skončí BillingProviderError(500), což lzeOpakovat klasifikuje
+  // jako „opakovat“. Přes celé vystavDoklad je to bezpečné (zámky 2 a 3), ale
+  // fronta, která by zopakovala createInvoice NAPŘÍMO, vyrobí duplicitu.
+  it('5xx po POSTu ho nese, 5xx po GETu ne', async () => {
+    const { fn } = mockFetch([TOKEN_OK, () => odpoved(500, '{}')]);
+    const p = new FakturoidProvider({ config: CONFIG, fetch: fn, cekej: hnedCekej, pokusu: 2 });
+    await p.createInvoice(DRAFT, '7').catch((e) => {
+      expect(jeZapisNejisty(e)).toBe(true);
+    });
+
+    const { fn: fn2 } = mockFetch([TOKEN_OK, () => odpoved(500, '{}')]);
+    const p2 = new FakturoidProvider({ config: CONFIG, fetch: fn2, cekej: hnedCekej, pokusu: 2 });
+    await p2.findExistingInvoice('klub-abc-202608').catch((e) => {
+      expect(jeZapisNejisty(e)).toBe(false);
+    });
+  });
+
+  it('nese ho i síťová chyba u zápisu', async () => {
+    const fn: FetchFn = async (url, init) => {
+      if (url === TOKEN_URL) return TOKEN_OK();
+      if (init?.method === 'POST') throw new TypeError('fetch failed');
+      return odpoved(200, []);
+    };
+    const p = new FakturoidProvider({ config: CONFIG, fetch: fn, cekej: hnedCekej });
+    await p.createInvoice(DRAFT, '7').catch((e) => {
+      expect(e).toBeInstanceOf(BillingNetworkError);
+      expect(jeZapisNejisty(e)).toBe(true);
+    });
+  });
+
+  it('u chyby, která zápis netrápí, je false', () => {
+    expect(jeZapisNejisty(new BillingValidationError('x'))).toBe(false);
+    expect(jeZapisNejisty(new Error('x'))).toBe(false);
   });
 });

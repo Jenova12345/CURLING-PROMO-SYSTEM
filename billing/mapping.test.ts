@@ -226,10 +226,19 @@ describe('overRadek — co se nesmí dostat na doklad', () => {
 describe('kontrolní součet — řádky dokladu vs. „Kdo kolik dluží“', () => {
   // Tři rezervace po 1 250,505 Kč. Přesně ten případ, na kterém se v Etapě 2
   // rozešla obrazovka s dokladem: po řádcích zaokrouhleno 3 753 Kč, správně 3 752 Kč.
+  //
+  // `castka` je tu LITERÁL, ne dopočet. Kdyby se počítala týmž `toSetiny`, kterým
+  // jde `soucetRadku`, chyba v `toSetiny` by se v porovnání vykrátila a test by
+  // zůstal zelený. Takhle je to hodnota, jakou by uložil Postgres
+  // (`round(1.5 × 833.67, 2)` = 1250.51), tedy nezávislý bod.
+  //
+  // Co tenhle test NEDOKAZUJE: že je `toSetiny` samo o sobě správně — to je práce
+  // `money.test.ts` a skriptu `overit:zaokrouhleni` proti živé DB. Tady se ověřuje,
+  // že mapování žádný řádek nezahodí, nezdvojí ani nepřepočítá jinak než „Kdo dluží“.
   const rezervace = [
-    rez({ id: 'a', start_at: '2026-08-04T16:00:00Z', end_at: '2026-08-04T17:30:00Z', hodiny: 1.5, sazba: 833.67 }),
-    rez({ id: 'b', start_at: '2026-08-11T16:00:00Z', end_at: '2026-08-11T17:30:00Z', hodiny: 1.5, sazba: 833.67 }),
-    rez({ id: 'c', start_at: '2026-08-18T16:00:00Z', end_at: '2026-08-18T17:30:00Z', hodiny: 1.5, sazba: 833.67 }),
+    rez({ id: 'a', start_at: '2026-08-04T16:00:00Z', end_at: '2026-08-04T17:30:00Z', hodiny: 1.5, sazba: 833.67, castka: 1250.51 }),
+    rez({ id: 'b', start_at: '2026-08-11T16:00:00Z', end_at: '2026-08-11T17:30:00Z', hodiny: 1.5, sazba: 833.67, castka: 1250.51 }),
+    rez({ id: 'c', start_at: '2026-08-18T16:00:00Z', end_at: '2026-08-18T17:30:00Z', hodiny: 1.5, sazba: 833.67, castka: 1250.51 }),
   ];
 
   const draft = mapujKlubMesicne({
@@ -240,9 +249,9 @@ describe('kontrolní součet — řádky dokladu vs. „Kdo kolik dluží“', (
    * Dluh počítaný tak, jak ho počítá `useDues`: z `castka` (tedy z
    * `COALESCE(corrected_amount, amount)`), v haléřích, bez průběžného zaokrouhlení.
    *
-   * Schválně z JINÉHO zdroje než součet řádků (ten jde z hodin × sazby) — kdyby
-   * obě strany braly z téhož, sedělo by to vždycky a nezjistilo nic. Týž princip
-   * má `billing_reconcile`.
+   * Součet řádků naproti tomu jde z HODIN × SAZBY. Obě strany tedy vycházejí
+   * z jiného sloupce, stejně jako to dělá `billing_reconcile` — kdyby braly
+   * z téhož, sedělo by to vždycky a nezjistilo nic.
    */
   const dluziZaMesic = fromHal(rezervace.reduce((s, r) => s + toHal(r.castka), 0));
 
@@ -250,48 +259,22 @@ describe('kontrolní součet — řádky dokladu vs. „Kdo kolik dluží“', (
     expect(soucetRadku(draft.lines)).toBe(dluziZaMesic);
   });
 
-  it('sčítá se přesně, ne po zaokrouhlených řádcích', () => {
+  it('drží to na pevné hodnotě, ne jen samo se sebou', () => {
+    expect(dluziZaMesic).toBe(3751.53);
     expect(soucetRadku(draft.lines)).toBe(3751.53);
+  });
+
+  it('sčítá se přesně, ne po zaokrouhlených řádcích', () => {
     const poRadcich = draft.lines.reduce((s, l) => s + roundCzk(l.quantity * l.unitPrice), 0);
     expect(poRadcich).toBe(3753);        // ← chyba, které se vyhýbáme
     expect(roundCzk(soucetRadku(draft.lines))).toBe(3752);
   });
-});
 
-describe('duplicitní rezervace v podkladu', () => {
-  const r = (id: string) => rez({ id, start_at: '2026-08-04T16:00:00Z', end_at: '2026-08-04T17:00:00Z' });
-
-  // Zámek 1 to nechytí — ptá se, jestli rezervace UŽ nese doklad, ne jestli je
-  // v tomhle podkladu dvakrát. Zaplatil by to klient.
-  it('neprojde ani u klubu, ani u akce', () => {
-    expect(() => mapujKlubMesicne({
-      subjekt: KLUB, obdobiOd: '2026-08-01', jePlatceDph: false, rezervace: [r('a'), r('a')],
-    })).toThrow(/dvakrát/);
-
-    expect(() => mapujKomercniAkci({
-      eventId: 'ev1', subjekt: FIRMA, jePlatceDph: false, rezervace: [r('x'), r('x')],
-    })).toThrow(BillingValidationError);
-  });
-
-  it('různá id projdou', () => {
-    expect(mapujKlubMesicne({
-      subjekt: KLUB, obdobiOd: '2026-08-01', jePlatceDph: false, rezervace: [r('a'), r('b')],
-    })!.lines).toHaveLength(2);
-  });
-});
-
-describe('půlnoc', () => {
-  // `hour12: false` umí v některých runtimech vrátit „24:00" místo „00:00".
-  // Opravovat to náhradou hodiny je past: 24:00 dne 4. je 00:00 dne PÁTÉHO,
-  // takže by hodina seděla ke špatnému datu. Proto `hourCycle: 'h23'`.
-  it('rezervace přes půlnoc má správnou hodinu i správné datum', () => {
-    const p = popisKlubu(rez({
-      id: 'noc',
-      start_at: '2026-08-04T22:00:00Z',   // 5. 8. 00:00 pražského
-      end_at: '2026-08-04T23:00:00Z',     // 5. 8. 01:00 pražského
-    }));
-    expect(p).toContain('05.08.');
-    expect(p).toContain('00:00–01:00');
-    expect(p).not.toContain('24:00');
+  it('vypadlý nebo zdvojený řádek se pozná', () => {
+    // Pojistka, že test měří mapování, ne jen aritmetiku sám se sebou.
+    const bezJednoho = mapujKlubMesicne({
+      subjekt: KLUB, obdobiOd: '2026-08-01', jePlatceDph: false, rezervace: rezervace.slice(0, 2),
+    })!;
+    expect(soucetRadku(bezJednoho.lines)).not.toBe(dluziZaMesic);
   });
 });

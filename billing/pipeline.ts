@@ -127,8 +127,8 @@ export const vystavDoklad = async (vstup: {
     const nesedi = proc0Nesedi(draft, uProvidera);
     if (nesedi) return { stav: 'nesedi', duvod: nesedi, result: uProvidera };
 
-    const link = await dorovnej(store, draft, uProvidera, vstup.pdfUloziste, provider, cekej, vstup.pdfPokusu);
-    return { stav: 'existoval', link };
+    const { link, pdfChyba } = await dorovnej(store, draft, uProvidera, vstup.pdfUloziste, provider, cekej, vstup.pdfPokusu);
+    return { stav: 'existoval', link, ...(pdfChyba ? { varovani: pdfChyba } : {}) };
   }
 
   // ---- ZÁMEK 3 — atomický claim -------------------------------------------
@@ -141,12 +141,40 @@ export const vystavDoklad = async (vstup: {
     };
   }
 
+  // ---- ZÁMEK 2, PODRUHÉ — a není to opatrnost navíc -----------------------
+  //
+  // Mezi prvním dotazem a claimem je okno, kterým projde duplicita:
+  //   • běh A i B projdou zámkem 2 (oba dostanou null),
+  //   • B se zdrží — třeba na 429, kde se čeká podle X-RateLimit-Reset až minutu,
+  //   • mezitím A zabere claim, POSTne doklad, Fakturoid ho ZALOŽÍ a spadne
+  //     na 5xx při skládání odpovědi → A claim v catch UVOLNÍ (správně: nevíme,
+  //     jak to dopadlo),
+  //   • B teď claim dostane a POSTne DRUHÝ doklad. `custom_id` u Fakturoidu
+  //     není unikátní klíč, takže vzniknou dvě faktury v ostré řadě.
+  //
+  // Jeden GET navíc to okno zavře celé.
+  try {
+    const poClaimu = await provider.findExistingInvoice(draft.idempotencyKey);
+    if (poClaimu) {
+      const nesedi = proc0Nesedi(draft, poClaimu);
+      if (nesedi) {
+        await store.uvolniZabrani(draft.idempotencyKey);
+        return { stav: 'nesedi', duvod: nesedi, result: poClaimu };
+      }
+      const { link, pdfChyba } = await dorovnej(store, draft, poClaimu, vstup.pdfUloziste, provider, cekej, vstup.pdfPokusu);
+      return { stav: 'existoval', link, ...(pdfChyba ? { varovani: pdfChyba } : {}) };
+    }
+  } catch (chyba) {
+    await store.uvolniZabrani(draft.idempotencyKey);
+    throw chyba;
+  }
+
   // ---- Vystavení ----------------------------------------------------------
   try {
     const { providerSubjectId } = await provider.ensureSubject(draft.party);
     const vysledek = await provider.createInvoice(draft, providerSubjectId);
-    const link = await dorovnej(store, draft, vysledek, vstup.pdfUloziste, provider, cekej, vstup.pdfPokusu);
-    const varovani = zkontrolujSoucet(draft, vysledek);
+    const { link, pdfChyba } = await dorovnej(store, draft, vysledek, vstup.pdfUloziste, provider, cekej, vstup.pdfPokusu);
+    const varovani = [zkontrolujSoucet(draft, vysledek), pdfChyba].filter(Boolean).join(' ');
     return { stav: 'vystaveno', link, ...(varovani ? { varovani } : {}) };
   } catch (chyba) {
     // Claim se pouští: po selhaném POSTu NEVÍME, jestli doklad vznikl. Rozhodne
@@ -240,7 +268,7 @@ const dorovnej = async (
   provider: InvoiceProvider,
   cekej: (ms: number) => Promise<void>,
   pokusu?: number,
-): Promise<InvoiceLink> => {
+): Promise<{ link: InvoiceLink; pdfChyba?: string }> => {
   // `pdf` se z výsledku VYHAZUJE, než se vazba uloží. Bajty patří do úložiště
   // souborů, ne do řádku v databázi — `JSON.stringify(Uint8Array)` z nich udělá
   // objekt číslovaných klíčů („{"0":37,"1":80,…}") a nafoukne záznam o stovky kB.
@@ -252,7 +280,7 @@ const dorovnej = async (
   };
   await store.zapisVazbu(link);
 
-  if (!uloziste) return link;
+  if (!uloziste) return { link };
 
   // PDF SE NESMÍ DOTKNOUT PLATNOSTI DOKLADU. Výjimka odsud (429, výpadek sítě,
   // plné úložiště) by shodila celé vystavení — vazba je přitom už zapsaná, takže
@@ -260,13 +288,21 @@ const dorovnej = async (
   // Doklad má číslo a platí i bez PDF (R5); tohle je dobírání, ne vystavování.
   try {
     const pdf = result.pdf ?? await stahniPdf(provider, result.providerInvoiceId, cekej, pokusu);
-    if (!pdf) return link;   // pořád se generuje — dobere ho další běh fronty
+    if (!pdf) {
+      return { link, pdfChyba: `PDF dokladu ${result.number || result.providerInvoiceId} se zatím generuje.` };
+    }
 
     const cesta = await uloziste.uloz(draft.idempotencyKey, pdf);
     await store.zapisPdf(draft.idempotencyKey, cesta);
-    return { ...link, pdfPath: cesta };
-  } catch {
-    return link;
+    return { link: { ...link, pdfPath: cesta } };
+  } catch (chyba) {
+    // Důvod se NESMÍ spolknout: doklad je vystavený a bez PDF, což někdo musí
+    // vidět. Dobrat ho pak jde přes `dobirPdf` — vystavování se tím nezdržuje.
+    return {
+      link,
+      pdfChyba: `PDF dokladu ${result.number || result.providerInvoiceId} se nepodařilo stáhnout: ` +
+        `${chyba instanceof Error ? chyba.message : String(chyba)}`,
+    };
   }
 };
 
@@ -294,4 +330,36 @@ export const stahniPdf = async (
     if (pokus < pokusu) await cekej(PDF_KROK_MS * pokus);
   }
   return null;
+};
+
+/**
+ * Dobere PDF k dokladu, který ho ještě nemá.
+ *
+ * PROČ SAMOSTATNÝ VSTUPNÍ BOD: jakmile vazba existuje, `vystavDoklad` se u ní
+ * zastaví hned na `najdiPodleKlice` a k PDF se vůbec nedostane. Komentář, který
+ * tvrdil „PDF dobere další běh fronty", tedy dřív nepopisoval žádnou existující
+ * cestu — doklad zůstal bez PDF natrvalo. Tohle je ta cesta; PR 4 ji zavolá
+ * pro vazby bez `pdfPath`.
+ *
+ * Vrací cestu k uloženému souboru, nebo `null`, když se PDF pořád generuje.
+ */
+export const dobirPdf = async (vstup: {
+  link: InvoiceLink;
+  provider: InvoiceProvider;
+  store: InvoiceLinkStore;
+  pdfUloziste: PdfUloziste;
+  cekej?: (ms: number) => Promise<void>;
+  pdfPokusu?: number;
+}): Promise<string | null> => {
+  const { link, provider, store, pdfUloziste } = vstup;
+  if (link.pdfPath) return link.pdfPath;
+
+  const pdf = await stahniPdf(
+    provider, link.result.providerInvoiceId, vstup.cekej ?? spat, vstup.pdfPokusu,
+  );
+  if (!pdf) return null;
+
+  const cesta = await pdfUloziste.uloz(link.idempotencyKey, pdf);
+  await store.zapisPdf(link.idempotencyKey, cesta);
+  return cesta;
 };

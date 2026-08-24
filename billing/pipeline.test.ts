@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { PDF_POKUSU, stahniPdf, vystavDoklad } from './pipeline.ts';
+import { PDF_POKUSU, dobirPdf, stahniPdf, vystavDoklad } from './pipeline.ts';
 import { PametovyStore } from './store.ts';
 import { MockProvider } from './providers/mock.ts';
 import {
@@ -26,6 +26,22 @@ const draftKlubu = () => mapujKlubMesicne({
 
 /** Testy nesmí čekat doopravdy — jinak by smyčka kolem 204 trvala vteřiny. */
 const hnedCekej = async () => {};
+
+/**
+ * Provider poskládaný po metodách.
+ *
+ * SCHVÁLNĚ NE `{ ...new MockProvider(), … }`: spread kopíruje jen vlastní
+ * vlastnosti, ne metody z prototypu. TypeScript to přesto typuje jako úplný
+ * `InvoiceProvider`, takže až rozhraní povyroste o pátou metodu, typecheck
+ * projde a test spadne až za běhu na TypeError.
+ */
+const fakeProvider = (prepis: Partial<InvoiceProvider>): InvoiceProvider => ({
+  ensureSubject: async () => ({ providerSubjectId: 's' }),
+  findExistingInvoice: async () => null,
+  createInvoice: async () => { throw new Error('createInvoice se v tomhle testu volat nemá'); },
+  downloadPdf: async () => null,
+  ...prepis,
+});
 
 describe('vystavDoklad — šťastná cesta', () => {
   it('vystaví doklad a zapíše vazbu na všechny zdrojové rezervace', async () => {
@@ -188,18 +204,18 @@ describe('pořadí kroků', () => {
     const store = new PametovyStore();
     const poradi: string[] = [];
 
-    const provider: InvoiceProvider = {
-      ...new MockProvider(),
+    const provider: InvoiceProvider = fakeProvider({
       ensureSubject: async () => ({ providerSubjectId: 's' }),
       findExistingInvoice: async () => null,
       createInvoice: async () => ({
-        providerInvoiceId: 'i1', number: '20260001', variableSymbol: '20260001', status: 'open',
+        providerInvoiceId: 'i1', number: '20260001', variableSymbol: '20260001',
+        status: 'open', providerTotal: 2400,
       }),
       downloadPdf: async () => {
         poradi.push('pdf');
         return new Uint8Array([1]);
       },
-    };
+    });
 
     const puvodni = store.zapisVazbu.bind(store);
     store.zapisVazbu = async (v) => { poradi.push('vazba'); return puvodni(v); };
@@ -253,13 +269,11 @@ describe('ZÁMEK 3 — atomický claim proti souběhu', () => {
 
   it('po selhaném vystavení se claim UVOLNÍ, ať klub nezůstane zablokovaný', async () => {
     const store = new PametovyStore();
-    const padajici: InvoiceProvider = {
-      ...new MockProvider(),
+    const padajici: InvoiceProvider = fakeProvider({
       ensureSubject: async () => ({ providerSubjectId: 's' }),
       findExistingInvoice: async () => null,
       createInvoice: async () => { throw new Error('Fakturoid je mimo'); },
-      downloadPdf: async () => null,
-    };
+    });
 
     await expect(vystavDoklad({ draft: draftKlubu(), provider: padajici, store, cekej: hnedCekej }))
       .rejects.toThrow('Fakturoid je mimo');
@@ -310,15 +324,12 @@ describe('větev „nesedi" — doklad existuje, ale neodpovídá podkladu', () 
 
   it('bez celkové částky od providera se vazba radši nezapíše', async () => {
     const store = new PametovyStore();
-    const bezCastky: InvoiceProvider = {
-      ...new MockProvider(),
+    const bezCastky: InvoiceProvider = fakeProvider({
       ensureSubject: async () => ({ providerSubjectId: 's' }),
       findExistingInvoice: async () => ({
         providerInvoiceId: 'i1', number: '20260001', variableSymbol: '20260001', status: 'open',
       }),
-      createInvoice: async () => { throw new Error('sem se to nesmí dostat'); },
-      downloadPdf: async () => null,
-    };
+    });
 
     const v = await vystavDoklad({ draft: draftKlubu(), provider: bezCastky, store, cekej: hnedCekej });
     expect(v.stav).toBe('nesedi');
@@ -380,16 +391,14 @@ describe('kontrola nalezeného dokladu je podle ŘÁDKŮ, ne podle částky', ()
 describe('kontrolní součet po vystavení', () => {
   it('rozpor proti providerovi se vrátí jako varování, ne mlčky', async () => {
     const store = new PametovyStore();
-    const lzivy: InvoiceProvider = {
-      ...new MockProvider(),
+    const lzivy: InvoiceProvider = fakeProvider({
       ensureSubject: async () => ({ providerSubjectId: 's' }),
       findExistingInvoice: async () => null,
       createInvoice: async () => ({
         providerInvoiceId: 'i1', number: '20260001', variableSymbol: '20260001',
         status: 'open', providerTotal: 9999,        // my posíláme 2 400 Kč
       }),
-      downloadPdf: async () => null,
-    };
+    });
 
     const v = await vystavDoklad({ draft: draftKlubu(), provider: lzivy, store, cekej: hnedCekej });
     expect(v.stav).toBe('vystaveno');
@@ -413,8 +422,7 @@ describe('PDF nesmí shodit vystavení', () => {
     // Vazba je v tu chvíli UŽ zapsaná, takže by příští běh doklad podle zámku 1
     // přeskočil a PDF by nedobral nikdo. Doklad má číslo a platí i bez PDF.
     const store = new PametovyStore();
-    const provider: InvoiceProvider = {
-      ...new MockProvider(),
+    const provider: InvoiceProvider = fakeProvider({
       ensureSubject: async () => ({ providerSubjectId: 's' }),
       findExistingInvoice: async () => null,
       createInvoice: async () => ({
@@ -422,7 +430,7 @@ describe('PDF nesmí shodit vystavení', () => {
         status: 'open', providerTotal: 2400,
       }),
       downloadPdf: async () => { throw new Error('Fakturoid nás přibrzdil'); },
-    };
+    });
 
     const v = await vystavDoklad({
       draft: draftKlubu(), provider, store, cekej: hnedCekej,
@@ -456,5 +464,129 @@ describe('doklad na nula korun', () => {
     const v = await vystavDoklad({ draft: zdarma, provider, store: new PametovyStore(), cekej: hnedCekej });
     expect(v.stav).toBe('prazdne');
     expect(provider.volani.createInvoice).toBe(0);
+  });
+});
+
+describe('okno mezi zámkem 2 a claimem', () => {
+  // Zámek 2 se čte PŘED claimem. Kdyby se po claimu neopakoval, projde tudy
+  // duplicita:
+  //   • běh A i B projdou zámkem 2 (oba null),
+  //   • B se zdrží (429 se u Fakturoidu čeká podle X-RateLimit-Reset až minutu),
+  //   • A zabere claim, POSTne doklad, Fakturoid ho ZALOŽÍ a spadne na 5xx →
+  //     A claim v catch UVOLNÍ (správně: neví, jak to dopadlo),
+  //   • B claim dostane a POSTne DRUHÝ doklad.
+  it('doklad, který vznikl mezi prvním dotazem a claimem, se najde a nezdvojí', async () => {
+    const store = new PametovyStore();
+    let dotazu = 0;
+    let vytvoreno = 0;
+
+    const provider = fakeProvider({
+      // První dotaz (zámek 2) nic nenajde, druhý (po claimu) už ANO —
+      // to je přesně ten doklad, který mezitím založil běh A.
+      findExistingInvoice: async () => {
+        dotazu++;
+        return dotazu === 1 ? null : {
+          providerInvoiceId: 'i-od-A', number: '20260001', variableSymbol: '20260001',
+          status: 'open', providerTotal: 2400,
+          providerLines: draftKlubu()!.lines.map((l) => ({ ...l })),
+        };
+      },
+      createInvoice: async () => { vytvoreno++; throw new Error('sem se to nesmí dostat'); },
+    });
+
+    const v = await vystavDoklad({ draft: draftKlubu(), provider, store, cekej: hnedCekej });
+
+    expect(v.stav).toBe('existoval');
+    expect(vytvoreno).toBe(0);        // ← bez druhého dotazu by tu byla duplicita
+    expect(dotazu).toBe(2);
+  });
+
+  it('když se doklad po claimu najde a NESEDÍ, claim se uvolní', async () => {
+    const store = new PametovyStore();
+    let dotazu = 0;
+    const provider = fakeProvider({
+      findExistingInvoice: async () => {
+        dotazu++;
+        return dotazu === 1 ? null : {
+          providerInvoiceId: 'i-cizi', number: '20260009', variableSymbol: '20260009',
+          status: 'open', providerTotal: 99_999,
+        };
+      },
+    });
+
+    const v = await vystavDoklad({ draft: draftKlubu(), provider, store, cekej: hnedCekej });
+    expect(v.stav).toBe('nesedi');
+
+    // Claim nesmí zůstat viset — jinak by klub nešlo vyfakturovat ani po nápravě.
+    expect(await store.zkusZabrat('klub-' + KLUB.id + '-202608', ['a', 'b'])).toBe(true);
+  });
+
+  it('chyba při druhém dotazu taky claim uvolní', async () => {
+    const store = new PametovyStore();
+    let dotazu = 0;
+    const provider = fakeProvider({
+      findExistingInvoice: async () => {
+        if (++dotazu === 1) return null;
+        throw new Error('Fakturoid je mimo');
+      },
+    });
+
+    await expect(vystavDoklad({ draft: draftKlubu(), provider, store, cekej: hnedCekej }))
+      .rejects.toThrow('Fakturoid je mimo');
+    expect(await store.zkusZabrat('klub-' + KLUB.id + '-202608', ['a', 'b'])).toBe(true);
+  });
+});
+
+describe('dobirPdf — skutečná cesta k chybějícímu PDF', () => {
+  // Jakmile vazba existuje, `vystavDoklad` se zastaví na `najdiPodleKlice`
+  // a k PDF se vůbec nedostane. Bez samostatného vstupního bodu by doklad
+  // zůstal bez PDF natrvalo, ačkoli komentář sliboval opak.
+  it('dobere PDF k vazbě, která ho nemá', async () => {
+    const provider = new MockProvider({ pdfNeniKrat: 1 });
+    const store = new PametovyStore();
+
+    const v = await vystavDoklad({ draft: draftKlubu(), provider, store, cekej: hnedCekej });
+    if (v.stav !== 'vystaveno') throw new Error('čekal jsem vystavení');
+    expect(v.link.pdfPath).toBeUndefined();       // bez úložiště se PDF neřešilo
+
+    const cesta = await dobirPdf({
+      link: v.link, provider, store, cekej: hnedCekej,
+      pdfUloziste: { uloz: async (klic) => `invoices/${klic}.pdf` },
+    });
+
+    expect(cesta).toBe(`invoices/klub-${KLUB.id}-202608.pdf`);
+    expect((await store.najdiPodleKlice(v.link.idempotencyKey))?.pdfPath).toBe(cesta);
+  });
+
+  it('vrátí null, když se PDF pořád generuje', async () => {
+    const provider = new MockProvider({ pdfNeniKrat: 99 });
+    const store = new PametovyStore();
+    const v = await vystavDoklad({ draft: draftKlubu(), provider, store, cekej: hnedCekej });
+    if (v.stav !== 'vystaveno') throw new Error('čekal jsem vystavení');
+
+    expect(await dobirPdf({
+      link: v.link, provider, store, cekej: hnedCekej,
+      pdfUloziste: { uloz: async () => 'nikdy' },
+    })).toBeNull();
+  });
+});
+
+describe('selhání PDF se nespolkne', () => {
+  it('důvod se vrátí ve varování, ne mlčky', async () => {
+    const provider = fakeProvider({
+      createInvoice: async () => ({
+        providerInvoiceId: 'i1', number: '20260001', variableSymbol: '20260001',
+        status: 'open', providerTotal: 2400,
+      }),
+      downloadPdf: async () => { throw new Error('plné úložiště'); },
+    });
+
+    const v = await vystavDoklad({
+      draft: draftKlubu(), provider, store: new PametovyStore(), cekej: hnedCekej,
+      pdfUloziste: { uloz: async () => 'nikdy' },
+    });
+
+    if (v.stav !== 'vystaveno') throw new Error('čekal jsem vystavení');
+    expect(v.varovani).toMatch(/plné úložiště/);
   });
 });
