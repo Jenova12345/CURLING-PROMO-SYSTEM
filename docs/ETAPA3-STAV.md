@@ -234,10 +234,35 @@ Změřeno na fixtuře 3 × 1 250,505 Kč:
 Doklad tedy zněl na 3 751,53 Kč, kdežto naše R3 dává 3 752 Kč.
 
 > **ROZHODNUTÍ PM 25. 8. 2026: zapnout zaokrouhlení na celé koruny v nastavení
-> Fakturoidu.** Tím se obě strany srovnají a kontrolní součet vychází na nulu.
-> Je to nastavení ÚČTU, ne našeho kódu — kdo bude zakládat další účet (ostrý
-> provoz), **musí ho zapnout znovu**, jinak se doklady rozejdou s „Kdo kolik
-> dluží" až o 0,50 Kč na doklad.
+> Fakturoidu.** Je to nastavení ÚČTU, ne našeho kódu — kdo bude zakládat další
+> účet (ostrý provoz), **musí ho zapnout znovu**, jinak se doklady rozejdou
+> s „Kdo kolik dluží" až o 0,50 Kč na doklad, a to tiše.
+
+**Po zapnutí ověřeno na téže fixtuře — kontrolní součet vychází na nulu:**
+
+| | před zapnutím | po zapnutí |
+|---|---|---|
+| doklad | `2026-0001` | `2026-0003` |
+| Fakturoid vrátil | 3 751,53 Kč | **3 752 Kč** |
+| naše k úhradě (R3) | 3 752 Kč | 3 752 Kč |
+| **rozdíl** | −0,47 Kč | **0 Kč** |
+
+```
+posíláme:  3 řádky à 1,5 h × 833,67 Kč
+           přesný součet       3 751,53 Kč
+           naše k úhradě (R3)      3 752 Kč
+Fakturoid: 2026-0003, celkem      3 752 Kč
+KONTROLNÍ SOUČET: 0 Kč      ·      varování z pipeline: žádné
+```
+
+**Fixtura je schválně ta nejnepříjemnější, jakou umíme.** Na 3 × 1 250,505 Kč se
+tři pravidla rozcházejí: přesně 3 751,53 / stupňovitě 3 752 / po řádcích chybně
+3 753. Kdyby Fakturoid zaokrouhloval **po řádcích**, vyšlo by 3 753, delta by
+byla +1 Kč a test by spadl (tolerance je 0,50 Kč). Vyšlo 3 752, takže zaokrouhluje
+**z mezisoučtu, ne po řádcích** — tedy stejně jako naše rozhodnutí R3.
+
+Doklad `2026-0001` na testovacím účtu **nech být**: vedle `2026-0003` je na téže
+fixtuře vidět rozdíl 0,47 Kč, kde jediná změna je to nastavení.
 
 **Tvar hlavičky rate limitu — už to není domněnka.** Odchyceno z živé odpovědi:
 
