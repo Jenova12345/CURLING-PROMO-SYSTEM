@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
-    "overit:zaokrouhleni": "vite-node scripts/overit-zaokrouhleni.ts"
+    "overit:zaokrouhleni": "vite-node scripts/overit-zaokrouhleni.ts",
+    "fakturoid:akce": "vite-node scripts/fakturoid-akce.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
