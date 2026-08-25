@@ -67,15 +67,26 @@ Proto dva oddělené kroky:
 
 Pipeline je na to připravená: po selhaném pokusu se claim uvolní a příští běh
 doklad buď najde (zámek 2), nebo vystaví. **Chybí ale cesta, jak ten příští běh
-spustit** — dnes žádná není. Patří k tomu tedy:
+spustit** — dnes žádná není.
 
-- tlačítko „zkusit znovu" u potvrzené akce bez dokladu, **nebo** fronta
-  (analogie `pdf_fronta` z Etapy 2, která tenhle vzor už v repu má),
-- a **viditelný stav** „potvrzeno, ale nevyfakturováno", ať se na to nezapomene.
+### 🔴 Cesta pro opakování je MUST-HAVE pro go-live
 
-Tohle je součást rozhodnutí 3 (synchronní vystavení), ne samostatný úkol —
-synchronní vystavení bez cesty pro opakování by znamenalo, že jeden výpadek sítě
-nechá akci trvale nevyfakturovanou.
+**Není to volitelné vylepšení a nesmí se odložit „na potom".** Rozhodnutí 6 bez
+ní nedává smysl: synchronní vystavení, které smí selhat, ale nejde zopakovat,
+nechá akci po jednom výpadku sítě **trvale nevyfakturovanou** — a nikdo si toho
+nevšimne, protože akce bude vypadat vyřízeně (potvrzená, směny proplacené).
+Tichá ztráta tržby.
+
+Do provozu se tedy nesmí pustit rozhodnutí 6 bez obojího:
+
+1. **Spouštěč opakování** — tlačítko „zkusit znovu" u potvrzené akce bez dokladu,
+   **nebo** fronta (vzor `pdf_fronta` z Etapy 2 je v repu už hotový).
+2. **Viditelný stav „potvrzeno, ale nevyfakturováno"** — bez něj se na to nepřijde.
+   Musí být vidět v přehledu, ne jen v databázi.
+
+**Kdy se to postaví:** až dorazí přepis schůzky, jako **součást potvrzovacího
+dialogu** (rozhodnutí PM 25. 8. 2026) — ne zvlášť a ne teď. Ale do definice
+hotova pro go-live to patří.
 
 ---
 
@@ -354,4 +365,5 @@ požadavkem A **nezahazuje**, jen se přesouvá: z „vystavit teď" se stane so
 4. **Navrhnout migraci pro rozhodnutí 5** — rozpad `nas_soucet` na dva sloupce
    a přepis `fakturoid_radku_sedi` tak, aby počítal jen led-řádky.
 5. **Navrhnout cestu pro opakování vystavení** (rozhodnutí 6) — tlačítko, nebo
-   fronta po vzoru `pdf_fronta`.
+   fronta po vzoru `pdf_fronta`. 🔴 **MUST-HAVE pro go-live**, ne volitelné.
+   Staví se jako součást potvrzovacího dialogu, až dorazí přepis.
