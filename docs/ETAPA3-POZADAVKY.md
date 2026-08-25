@@ -22,31 +22,60 @@ Dokud to nebude potvrzené, neslouží to jako podklad k implementaci, jen jako 
 | 2 | Je „potvrzeno" stav akce, nebo rezervace? | **Stav AKCE.** Nový životní cyklus `events`. |
 | 3 | Hned, nebo večerní dávka? | **Hned při potvrzení, synchronně.** Pro komerční cestu **odpadá pg_cron**. Měsíční klubový souhrn zůstává na plánované dávce. |
 | 4 | Zahrnuje C vyřazení interního enginu? | **Ano, jeden ticket** — včetně přesměrování `billing_reconcile` na `fakturoid_invoices`. |
+| **5** | Jak se drží součty, když je na dokladu led i extra? | **Dvě čísla zvlášť.** `nas_soucet_led` (== „Kdo dluží") a `nas_soucet_total` = led + extra (== `provider_total`). Kontrola proti provideru jede na **total**, rovnice „Kdo dluží" jen na **led**. |
+| **6** | Co když je při potvrzení Fakturoid nedostupný? | **Potvrzení a vystavení se ODDĚLÍ.** Akce se potvrdí **vždy** a směny/výplaty projdou i bez Fakturoidu. Vystavení je **retryovatelný pokus**. |
 
-### Co z těch odpovědí přímo plyne
+*(5 a 6 doplněny 25. 8. 2026 — vyplynuly z rozboru odpovědí 1 a 3 a PM je potvrdil
+jako rozhodnutí, ne jako otevřené otázky.)*
 
-**K odpovědi 1 — `fakturoid_radku_sedi` se musí přepsat, ne zrušit.** Dnes zní
-`CHECK (radku = cardinality(rezervace))`. Nově musí počítat **jen led-řádky**:
-extra položky do něj nevstupují. Prakticky to znamená rozlišit v evidenci dvě
-skupiny řádků, ne je slít dohromady.
+### Rozhodnutí 5 — dvě čísla, ne jedno
 
-A druhý, méně zjevný důsledek: **`zkontrolujSoucet` dnes porovnává náš součet
-proti `provider_total`.** Jenže `provider_total` od Fakturoidu bude nově
-`led + extra`, kdežto rovnice má být jen za led. Buď se tedy v evidenci drží
-**obě čísla zvlášť** (`nas_soucet_led` a `nas_soucet_extra`), nebo kontrola
-proti provideru přestane sedět — a to tiše, protože rozdíl bude vypadat jako
-zaokrouhlení nebo jako chyba mapování.
+Dnes drží evidence jediné `fakturoid_invoices.nas_soucet` a `zkontrolujSoucet`
+ho porovnává proti `provider_total`. S extra položkami by to přestalo sedět
+**a to tiše**: `provider_total` od Fakturoidu bude `led + extra`, kdežto rovnice
+z CLAUDE.md má být jen za led, takže by rozdíl vypadal jako zaokrouhlení nebo
+jako chyba mapování.
 
-**K odpovědi 3 — potvrzení akce NESMÍ spadnout kvůli Fakturoidu.** Potvrzení je
-podle požadavku A společný spouštěč pro fakturaci **i pro směny**. Když bude
-vystavení synchronní a Fakturoid zrovna nedostupný, nesmí to zablokovat
-i výplaty brigádníků. Návrh proto musí oddělit dva kroky: **akce se potvrdí vždy**,
-a vystavení dokladu je pokus, který smí selhat a jde zopakovat. Jinak by
-provoz haly visel na dostupnosti cizí služby.
+Proto se drží obě čísla:
 
-Tomu odpovídá i to, co v pipeline už je: po selhaném pokusu se claim uvolní
-a příští běh doklad buď najde (zámek 2), nebo vystaví. Musí ale existovat cesta,
-jak ten příští běh spustit — tlačítkem „zkusit znovu", nebo frontou.
+| sloupec | co obsahuje | s čím se porovnává |
+|---|---|---|
+| `nas_soucet_led` | jen řádky odvozené z rezervací | **„Kdo kolik dluží"** (rovnice z CLAUDE.md) |
+| `nas_soucet_total` | led + extra položky | **`provider_total`** od Fakturoidu |
+
+Dopady, které z toho plynou:
+
+- `fakturoid_invoices.nas_soucet` se **rozpadne na dva sloupce** (migrace).
+- **`fakturoid_radku_sedi` se PŘEPÍŠE, ne zruší.** Dnes zní
+  `CHECK (radku = cardinality(rezervace))`; nově musí počítat **jen led-řádky**.
+  Extra položky do něj nevstupují, takže je evidence musí umět rozlišit.
+- `zkontrolujSoucet` v `billing/pipeline.ts` porovnává **total**, ne led.
+- Rovnice „suma faktur == Kdo dluží" se počítá **z led-sloupce**.
+
+### Rozhodnutí 6 — potvrzení akce nesmí viset na cizí službě
+
+Potvrzení je podle požadavku A společný spouštěč pro fakturaci **i pro směny**.
+Kdyby bylo vystavení synchronní a nedělitelné, znamenal by výpadek Fakturoidu,
+že brigádníci nedostanou proplacené směny. **Provoz haly nesmí viset na
+dostupnosti cizí služby.**
+
+Proto dva oddělené kroky:
+
+1. **Akce se potvrdí vždy** — zapíše se stav, odemknou se směny a výplaty.
+   Tenhle krok je čistě náš a nesmí selhat kvůli síti.
+2. **Vystavení dokladu je pokus**, který smí selhat a jde zopakovat.
+
+Pipeline je na to připravená: po selhaném pokusu se claim uvolní a příští běh
+doklad buď najde (zámek 2), nebo vystaví. **Chybí ale cesta, jak ten příští běh
+spustit** — dnes žádná není. Patří k tomu tedy:
+
+- tlačítko „zkusit znovu" u potvrzené akce bez dokladu, **nebo** fronta
+  (analogie `pdf_fronta` z Etapy 2, která tenhle vzor už v repu má),
+- a **viditelný stav** „potvrzeno, ale nevyfakturováno", ať se na to nezapomene.
+
+Tohle je součást rozhodnutí 3 (synchronní vystavení), ne samostatný úkol —
+synchronní vystavení bez cesty pro opakování by znamenalo, že jeden výpadek sítě
+nechá akci trvale nevyfakturovanou.
 
 ---
 
@@ -132,8 +161,8 @@ možná čtení a jsou to dva různé návrhy:
    okamžik, kdy člověk ví, jak to doopravdy proběhlo.)
 6. **Hned, nebo večerní dávka?** ✅ **PM (provizorně): hned při potvrzení,
    synchronně.** Pro komerční cestu odpadá pg_cron; měsíční klubový souhrn
-   zůstává na plánované dávce. **Pozor:** potvrzení akce nesmí selhat kvůli
-   nedostupnosti Fakturoidu — visely by na tom i směny. Viz rozbor nahoře.
+   zůstává na plánované dávce. Potvrzení a vystavení jsou přitom **oddělené
+   kroky** — viz rozhodnutí 6. Součástí je i cesta pro opakování.
 7. **Kdo smí potvrdit?** Jen admin, nebo i provozní/manažer?
 8. **Platí to i pro turnaje a tréninky?** Zadání mluví o komerčních akcích;
    klubové rezervace se fakturují měsíčně a potvrzení nemají.
@@ -204,9 +233,8 @@ z Etapy 2 (agregace DPH), která pořád čeká na účetní klienta.
    „zapůjčení výstroje") s výchozí cenou, nebo pokaždé ručně?
 2. **Vstupuje množství?** Občerstvení pro 12 lidí × cena, nebo jedna paušální částka?
 3. **Jak se extra položky chovají v „Kdo kolik dluží"?** ✅ **PM (provizorně):
-   vyjmout — rovnice zůstává jen za led.** Extra položky se evidují zvlášť
-   a kontrolní součet je nepočítá. Důsledky pro `fakturoid_radku_sedi`
-   a pro porovnání proti `provider_total` jsou rozebrané nahoře.
+   vyjmout — rovnice zůstává jen za led.** Evidence drží dvě čísla
+   (`nas_soucet_led` a `nas_soucet_total`), viz rozhodnutí 5.
 4. **Můžou se přidat i ke klubové měsíční faktuře**, nebo jen ke komerční akci?
 5. **Jde je po vystavení opravit?** Doklad ve Fakturoidu je po vystavení hotový —
    oprava = dobropis.
@@ -323,5 +351,7 @@ požadavkem A **nezahazuje**, jen se přesouvá: z „vystavit teď" se stane so
    - co s existujícími interními doklady (C2),
    - jde-li potvrzení akce vzít zpět a co pak s vystavenou fakturou (A3),
    - kdo smí potvrdit a co s akcí, která se nepotvrdí (A2, A7).
-4. **Navrhnout, jak se v evidenci oddělí led od extra položek** — plyne to
-   z odpovědi 1 a dotýká se to schématu i kontrolního součtu.
+4. **Navrhnout migraci pro rozhodnutí 5** — rozpad `nas_soucet` na dva sloupce
+   a přepis `fakturoid_radku_sedi` tak, aby počítal jen led-řádky.
+5. **Navrhnout cestu pro opakování vystavení** (rozhodnutí 6) — tlačítko, nebo
+   fronta po vzoru `pdf_fronta`.
