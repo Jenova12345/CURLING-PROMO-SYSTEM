@@ -931,6 +931,116 @@ describe('kontrolní součet pod DPH', () => {
     expect(v.varovani).toBeUndefined();
   });
 
+  // ---------------------------------------------------------------------------
+  // ZÁMEK 2 pod DPH
+  //
+  // `proc0Nesedi` používá TÉŽ `castkaKPorovnani`, ale dosud to nic nedrželo:
+  // code review vrátila `proc0Nesedi` na staré `u.providerTotal` a všech 199
+  // testů zůstalo zelených. Mutace, kterou nic nechytí, je chybějící test.
+  // ---------------------------------------------------------------------------
+  it('zámek 2: komerční doklad BEZ řádků se porovná proti základu, ne proti celkem', async () => {
+    const d = draftAkceDph();
+    const nase = soucetRadku(d.lines);          // 2400 — základ bez daně
+    const v = await vystavDoklad({
+      draft: d,
+      // Bez `providerLines` schválně: Fakturoid je posílá vždycky, tohle je
+      // ta defenzivní větev pro den, kdy je nepošle. Jinak by se porovnávaly
+      // řádky a částka by se vůbec nepoužila.
+      provider: fakeProvider({
+        findExistingInvoice: async () => ({
+          providerInvoiceId: 'i9', number: '20260009', variableSymbol: '20260009',
+          status: 'open', providerSubtotal: nase, providerTotal: 2688,
+        }),
+      }),
+      store: new PametovyStore(),
+    });
+    // Kdyby se porovnávalo proti `total`, vyšel by rozdíl 288 Kč (přesně DPH),
+    // doklad by se prohlásil za neodpovídající a vazba by se NEZAPSALA —
+    // fakturace té akce by se zasekla až do zásahu člověka.
+    expect(v.stav).toBe('existoval');
+  });
+
+  it('zámek 2: a skutečná neshoda se pozná dál', async () => {
+    const d = draftAkceDph();
+    const v = await vystavDoklad({
+      draft: d,
+      provider: fakeProvider({
+        findExistingInvoice: async () => ({
+          providerInvoiceId: 'i9', number: '20260009', variableSymbol: '20260009',
+          status: 'open', providerSubtotal: 9999, providerTotal: 11198.88,
+        }),
+      }),
+      store: new PametovyStore(),
+    });
+    expect(v.stav).toBe('nesedi');
+    if (v.stav !== 'nesedi') return;
+    expect(v.duvod).toContain('základ bez DPH');
+  });
+
+  it('u NEPLÁTCE se bere základ, když provider nepošle celkem', async () => {
+    // `types.ts` u `providerSubtotal` slibuje „u neplátce jsou obě čísla stejná
+    // a je jedno, které se použije". Slib, který kód nedrží, je horší než žádný.
+    const d = draftKlubu()!;
+    const nase = soucetRadku(d.lines);
+    const v = await vystavDoklad({
+      draft: d, provider: provider(nase, undefined), store: new PametovyStore(),
+    });
+    expect(v.stav).toBe('vystaveno');
+    if (v.stav !== 'vystaveno') return;
+    expect(v.varovani).toBeUndefined();
+  });
+
+  it('u PLÁTCE se ta záměna NEDĚLÁ — radši varování než tiše špatné porovnání', async () => {
+    const d = draftKlubuDph();
+    const v = await vystavDoklad({
+      draft: d, provider: provider(2142.86, undefined), store: new PametovyStore(),
+    });
+    expect(v.stav).toBe('vystaveno');
+    if (v.stav !== 'vystaveno') return;
+    expect(v.varovani?.map((x) => x.kod)).toEqual(['kontrolni_soucet']);
+  });
+
+  it('doklad z doby PŘED přepnutím na plátce se nepřijme mlčky', async () => {
+    // Otisk řádků o dani neví, takže neplátcovský doklad vypadá jako odpovídající.
+    // Duplicitu kvůli tomu nezakládáme — doklad existuje —, ale u komerční
+    // faktury je rozdíl reálný: dnešní podklad by dal doklad o 12 % vyšší.
+    const d = draftAkceDph();
+    const nase = soucetRadku(d.lines);
+    const v = await vystavDoklad({
+      draft: d, provider: provider(nase, nase), store: new PametovyStore(),
+    });
+    expect(v.stav).toBe('vystaveno');
+    if (v.stav !== 'vystaveno') return;
+    expect(v.varovani?.map((x) => x.kod)).toEqual(['dph_rezim']);
+    expect(v.varovani?.[0].zprava).toContain('před přepnutím režimu');
+  });
+
+  it('draft s režimem cen, ale bez sazby, se vůbec neodešle', async () => {
+    // Fakturoid by chybějící sazbu tiše dosadil z nastavení účtu — a to je
+    // rozhodnutí, které nesmí padnout tam. Kontrolní součet by to neviděl,
+    // porovnává částky, ne sazby.
+    const d = draftAkceDph();
+    const bezSazby = { ...d, lines: d.lines.map(({ vatRate, ...zbytek }) => zbytek) };
+    await expect(vystavDoklad({
+      draft: bezSazby, provider: provider(2400, 2688), store: new PametovyStore(),
+    })).rejects.toThrow(/sazbu/i);
+  });
+
+  it('plátcovský draft projde i přes MockProvider (ať jeho DPH větev není mrtvá)', async () => {
+    // Code review našla, že plátcovskou větev `mockCastky` nevolal ani jeden
+    // test — šlo do ní vložit `throw` a sada zůstala zelená. Mock, který nikdo
+    // neprožene, je jen komentář, co se tváří jako kód.
+    const p = new MockProvider();
+    const d = draftKlubuDph();
+    const v = await vystavDoklad({ draft: d, provider: p, store: new PametovyStore() });
+    expect(v.stav).toBe('vystaveno');
+    if (v.stav !== 'vystaveno') return;
+    // Klub má ceny s daní → celkem se rovná našemu součtu, základ je nižší.
+    expect(v.link.result.providerTotal).toBe(soucetRadku(d.lines));
+    expect(v.link.result.providerSubtotal!).toBeLessThan(v.link.result.providerTotal!);
+    expect(v.varovani).toBeUndefined();
+  });
+
   it('zaokrouhlení do půl koruny je pořád jen poznámka, i pod DPH', async () => {
     const d = draftAkceDph();
     const v = await vystavDoklad({

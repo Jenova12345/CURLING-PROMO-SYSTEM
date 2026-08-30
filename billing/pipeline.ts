@@ -46,7 +46,7 @@ export type RezimVystaveni = 'koncept' | 'odeslat';
  * názvy tabulek, cesty a vnitřnosti, které v prohlížeči nemají co dělat.
  */
 export interface Varovani {
-  kod: 'kontrolni_soucet' | 'zaokrouhleni' | 'pdf' | 'odeslani';
+  kod: 'kontrolni_soucet' | 'zaokrouhleni' | 'dph_rezim' | 'pdf' | 'odeslani';
   zprava: string;
   interni?: string;
 }
@@ -120,6 +120,22 @@ export const vystavDoklad = async (vstup: {
   // uvnitř placeného dokladu), ale celý doklad na nulu je pro účetní horší
   // než žádný. Automatika v repu to má stejně (`amount > 0` v automatika.sql).
   if (roundCzk(soucetRadku(draft.lines)) <= 0) return { stav: 'prazdne' };
+
+  // NEKOHERENTNÍ DRAFT SE NEPOSÍLÁ.
+  //
+  // `pricesIncludeVat` říká, JAK ČÍST cenu, `vatRate` JAKOU sazbou. Jedno bez
+  // druhého je stav, který mapovací vrstva nevyrobí, ale ruční draft ano —
+  // a byl by NEDETEKOVANÝ: Fakturoid by chybějící sazbu tiše dosadil z nastavení
+  // účtu a doklad by odešel s daní, o které jsme nerozhodli my. Kontrolní součet
+  // by to neviděl, protože porovnává částky, ne sazby.
+  if (draft.pricesIncludeVat !== undefined
+      && !draft.lines.some((l) => l.vatRate !== undefined)) {
+    throw new BillingValidationError(
+      'Doklad má režim cen s DPH, ale žádný řádek nemá sazbu. Sazbu by dosadil '
+      + 'Fakturoid podle nastavení účtu — a to je rozhodnutí, které nesmí padnout tam.',
+      'vatRate',
+    );
+  }
 
   if (draft.sourceReservationIds.length === 0) {
     throw new BillingValidationError(
@@ -315,9 +331,21 @@ const castkaKPorovnani = (
       ? undefined
       : { hodnota: u.providerSubtotal, popis: 'základ bez DPH' };
   }
-  return u.providerTotal === undefined
+  // U NEPLÁTCE se bere, co dorazilo. `types.ts` u `providerSubtotal` slibuje
+  // „u neplátce jsou obě čísla stejná a je jedno, které se použije" — a slib,
+  // který kód nedrží, je horší než žádný. Bez fallbacku by doklad, u kterého
+  // provider vrátí základ a ne celkem, skončil varováním „nevrátil celkovou
+  // částku", přestože porovnat se měl s čím.
+  //
+  // U PLÁTCE fallback ZÁMĚRNĚ NENÍ: tam ta dvě čísla stejná nejsou a záměna by
+  // dala rozdíl ve výši daně. Radši varování než tiše špatné porovnání.
+  const celkem = draft.pricesIncludeVat === undefined
+    ? u.providerTotal ?? u.providerSubtotal
+    : u.providerTotal;
+
+  return celkem === undefined
     ? undefined
-    : { hodnota: u.providerTotal, popis: draft.pricesIncludeVat ? 'celkem s DPH' : 'celkem' };
+    : { hodnota: celkem, popis: draft.pricesIncludeVat ? 'celkem s DPH' : 'celkem' };
 };
 
 /**
@@ -352,6 +380,27 @@ const zkontrolujSoucet = (draft: InvoiceDraft, u: InvoiceResult): Varovani | nul
         `(${uProvidera.popis}), my jsme poslali ${nase} Kč (rozdíl ${rozdil} Kč).`,
     };
   }
+  // DOKLAD Z DOBY PŘED PŘEPNUTÍM NA PLÁTCE se nesmí přijmout mlčky.
+  //
+  // Otisk řádků (`proc0Nesedi`) porovnává `name|quantity|unitPrice` a o dani
+  // neví, takže neplátcovský doklad vystavený před přechodem vypadá jako
+  // odpovídající dnešnímu podkladu. Nezakládat kvůli tomu duplicitu je správně
+  // — doklad existuje a re-issue by byl horší —, ale u komerční faktury je
+  // rozdíl reálný: dnešní podklad by dal doklad o 12 % vyšší.
+  //
+  // Poznat se to dá podle toho, že na dokladu není žádná daň (základ = celkem),
+  // zatímco my už fakturujeme jako plátce. Nezastavuje to nic, jen to řekne.
+  if (draft.pricesIncludeVat !== undefined
+      && u.providerSubtotal !== undefined && u.providerTotal !== undefined
+      && u.providerSubtotal === u.providerTotal) {
+    return {
+      kod: 'dph_rezim',
+      zprava: `Doklad ${oznaceni} je bez DPH (základ i celkem ${u.providerTotal} Kč), ` +
+        'ale hala už fakturuje jako plátce. Nejspíš vznikl před přepnutím režimu — ' +
+        'zkontroluj ho ručně, nová faktura se kvůli tomu nevystavuje.',
+    };
+  }
+
   // Do půl koruny je to rozdíl zaokrouhlovacích pravidel — čekaný, ale ne němý.
   if (rozdil !== 0) {
     return {

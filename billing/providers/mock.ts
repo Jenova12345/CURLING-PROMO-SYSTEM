@@ -22,11 +22,18 @@ export interface MockVolby {
 }
 
 /**
- * Základ a celkem tak, jak by je spočítal Fakturoid.
+ * Základ a celkem — HRUBÝ ODHAD, ne simulace Fakturoidu.
  *
- * Zaokrouhluje se na haléře (`round(x, 2)`), protože tak to dělá i skutečný
- * doklad. Kdyby mock počítal přesněji než Fakturoid, testy by procházely
- * i implementaci, která naživo o pár haléřů uteče.
+ * ⚠️ NEPOČÍTÁ TO JAKO SKUTEČNÝ DOKLAD a je potřeba to vědět, než se na tom
+ * postaví tvrzení o haléřích. Fakturoid počítá daň PO ŘÁDCÍCH a po řádcích
+ * i zaokrouhluje, teprve pak sčítá; tohle je jedno násobení nad už
+ * zaokrouhleným součtem. Navíc se tu zaokrouhluje `roundCzk`, tedy na CELÉ
+ * KORUNY — dřívější docstring tvrdil haléře a lhal.
+ *
+ * K čemu to tedy je: aby `MockProvider` vracel obě čísla a testy, které přes
+ * něj pouštějí plátcovský draft, měly kontrolní součet proti čemu porovnat.
+ * Na měření zaokrouhlovací odchylky se to nehodí — od toho je živý integrační
+ * test proti Fakturoidu.
  */
 const mockCastky = (draft: InvoiceDraft): { providerTotal: number; providerSubtotal: number } => {
   const soucet = roundCzk(soucetRadku(draft.lines));
@@ -42,7 +49,6 @@ const mockCastky = (draft: InvoiceDraft): { providerTotal: number; providerSubto
     ? { providerTotal: soucet, providerSubtotal: Number((soucet / koeficient).toFixed(2)) }
     : { providerSubtotal: soucet, providerTotal: Number((soucet * koeficient).toFixed(2)) };
 };
-
 
 export class MockProvider implements InvoiceProvider {
   /** Doklady podle `custom_id` (= náš klíč idempotence). */
@@ -94,6 +100,7 @@ export class MockProvider implements InvoiceProvider {
       //   • ceny BEZ DPH  → základ = součet řádků, celkem = základ × (1 + sazba)
       //   • ceny S DPH    → celkem = součet řádků, základ = celkem ÷ (1 + sazba)
       //   • neplátce      → obě čísla jsou táž
+      // Je to hrubý odhad, ne simulace Fakturoidu — viz docstring `mockCastky`.
       ...mockCastky(draft),
       // Skutečný Fakturoid řádky vrací a jádro je porovnává — bez nich by se
       // testovala jen slabší varianta kontroly (podle částky).

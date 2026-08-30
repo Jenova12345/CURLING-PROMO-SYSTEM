@@ -143,7 +143,20 @@ FAKTUROID_LIVE=true npx vitest run billing/providers/fakturoid/fakturoid.integra
 
 Bez `FAKTUROID_LIVE=true` se **přeskočí**, nespadnou — vývojář bez klíčů má mít
 zelenou sadu, ne červenou, kterou se naučí ignorovat. Založí na testovacím účtu
-jednoho odběratele a jeden doklad na běh, s `custom_id` začínajícím `test-`.
+jednoho odběratele (STABILNÍHO napříč běhy) a **dva doklady na každý běh** —
+jeden klubový (ceny včetně DPH) a jeden komerční (ceny bez DPH). Oba `vat_price_mode`
+se tím ověří naživo.
+
+⚠️ **Doklady po sobě testy NEUKLÍZEJÍ a nikdo je nemaže.** Dřív to byl jeden
+doklad na měsíc (klíč nesl měsíc, ne běh), takže se opakované běhy potkávaly na
+témž dokladu — což byla ta příčina, proč sada padala. Cena za opravu je, že
+teď každý běh dva doklady přidá. Na free tarifu to jde proti kvótě; účet si na
+limit u odběratelů už jednou stěžoval (`quota_exhausted`), proto je odběratel
+stabilní. Až to začne vadit, patří sem teardown.
+
+`custom_id` mají tvar `klub-test-{RRRRMMDDHHMMSS}` a `akce-test-{…}` —
+**prefixem `test-` tedy NEZAČÍNAJÍ**, začínají druhem dokladu. Kdo by účet
+uklízel podle `test-` na začátku, nenajde nic; hledat se musí `%-test-%`.
 
 **`FAKTUROID_LIVE=true` samo nestačí.** Musí se navíc do `FAKTUROID_TEST_SLUG`
 opsat slug účtu, na který se smí psát, a musí sedět s `FAKTUROID_SLUG`. Kdo tu

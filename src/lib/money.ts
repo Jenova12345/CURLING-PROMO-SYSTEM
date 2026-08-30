@@ -9,7 +9,12 @@
 // KANONICKÉ PRAVIDLO (Etapa 2, rozhodnutí R3) — zaokrouhluje se STUPŇOVITĚ:
 //   • řádek dokladu    → kvantizace na haléře, round(hodiny × sazba, 2)
 //   • mezisoučet       → PŘESNÝ součet už kvantizovaných řádků (sám dvoudesetinný)
-//   • základ a daň     → každé zvlášť kvantizované na haléře (až přijde DPH)
+//   • základ a daň     → NEPOČÍTÁME MY. Od přechodu na plátce (blok B) je
+//                        rozpočítává Fakturoid podle `vat_price_mode`; v našem
+//                        kódu se nikde nenásobí sazbou, takže žádná další
+//                        zaokrouhlovací operace nevznikla. Kontrolní součet se
+//                        proto porovnává s tím číslem providera, které odpovídá
+//                        našim řádkům — viz `castkaKPorovnani` v billing/.
 //   • částka k úhradě  → zaokrouhlení na celé koruny AŽ TADY, a to z už
 //                        kvantizované hodnoty, ne ze surové; viditelným řádkem
 //
