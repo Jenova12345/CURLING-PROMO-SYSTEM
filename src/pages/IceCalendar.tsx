@@ -284,6 +284,7 @@ const IceCalendar = () => {
       const roleReqs = Object.fromEntries(
         Object.entries(roleCounts).filter(([_, count]) => count > 0)
       );
+      const maStab = eventType === 'commercial' || eventType === 'recruitment';
 
       await createEvent({
         title: validation.data.title,
@@ -291,9 +292,10 @@ const IceCalendar = () => {
         event_type: validation.data.event_type as Database['public']['Enums']['event_type'],
         start_time: validation.data.start_time,
         end_time: validation.data.end_time,
-        required_staff: getTotalStaff(),
+        // Štáb jen u komerčky a náboru — proč, viz handleUpdateEvent.
+        required_staff: maStab ? getTotalStaff() : 0,
         // Vždycky objekt, nikdy `undefined` — proč, viz handleUpdateEvent.
-        role_reqs: roleReqs,
+        role_reqs: maStab ? roleReqs : {},
       });
 
       toast({
@@ -475,10 +477,26 @@ const IceCalendar = () => {
       // by poslalo 0 a legacy směny by se zrušily. Musí jít původní hodnota.
       const nechatLegacyStab = legacyStab !== null && !rolesTouched;
 
+      // ŠTÁB MAJÍ JEN KOMERČNÍ AKCE A NÁBOR.
+      //
+      // Sekce štábu se pro ostatní typy v dialogu skryje, ale `roleCounts`
+      // ve stavu zůstane — a bez téhle podmínky by se odeslal i při přepnutí
+      // akce na TRÉNINK. Trénink by tím dostal placené volné směny (ověřeno:
+      // 4 × instruktor po 250 Kč/h), na které se brigádníci můžou přihlásit,
+      // a z UI by nešly odebrat, protože sekce štábu je skrytá.
+      //
+      // Táž podmínka je od 27. 8. i v `dorovnej_stab`, takže tohle je první
+      // ze dvou vrstev, ne jediná. A validační objekt výš `required_staff`
+      // podle typu nuluje už dnes — odesílaný payload se tím konečně srovnává
+      // s tím, co se validuje.
+      const maStab = eventType === 'commercial' || eventType === 'recruitment';
+
       // Rozpis podle rolí (nuly se vyhazují — nula a chybějící klíč jsou totéž).
-      const roleReqs = nechatLegacyStab
+      const roleReqs = !maStab
         ? {}
-        : Object.fromEntries(Object.entries(roleCounts).filter(([_, count]) => count > 0));
+        : nechatLegacyStab
+          ? {}
+          : Object.fromEntries(Object.entries(roleCounts).filter(([_, count]) => count > 0));
 
       await updateEvent({
         id: editingEvent.id,
@@ -487,7 +505,7 @@ const IceCalendar = () => {
         event_type: validation.data.event_type as Database['public']['Enums']['event_type'],
         start_time: validation.data.start_time,
         end_time: validation.data.end_time,
-        required_staff: nechatLegacyStab ? legacyStab : getTotalStaff(),
+        required_staff: !maStab ? 0 : nechatLegacyStab ? legacyStab : getTotalStaff(),
         // Vždycky objekt, nikdy `undefined`. `undefined` totiž z payloadu pole
         // vypadne úplně, takže při ÚPRAVĚ akce, kde admin vynuloval všechny
         // role, by v databázi zůstal starý rozpis — a dorovnání štábu
@@ -1343,7 +1361,13 @@ const IceCalendar = () => {
           </div>
 
           <DialogFooter className="flex-shrink-0">
-            <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>
+            {/* `resetForm()` musí být i tady. Zavření přes `setIsEditDialogOpen(false)`
+                NESPUSTÍ `onOpenChange` dialogu, takže by po „Zrušit" zůstal
+                v paměti název, datum i rozpis štábu rozeditované akce — a předvyplnil
+                se do dialogu „Vytvořit novou událost". Předchází to téhle změně,
+                ale u rozpisu štábu to teď váží víc: uložený odhad z jiné akce
+                zakládá skutečné směny. */}
+            <Button variant="outline" onClick={() => { setIsEditDialogOpen(false); resetForm(); }}>
               Zrušit
             </Button>
             <Button onClick={handleUpdateEvent} disabled={isUpdating}>

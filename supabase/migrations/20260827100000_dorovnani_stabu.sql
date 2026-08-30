@@ -222,11 +222,35 @@ DECLARE
   _neruseno    int := 0;
   _prebytek    jsonb := '[]'::jsonb;
   _spatne      text[] := '{}';
+  _cist_cely   boolean;
 BEGIN
   SELECT id, event_type, role_reqs, required_staff INTO _ev
     FROM public.events WHERE id = _event_id;
   IF NOT FOUND THEN
     RETURN NULL;
+  END IF;
+
+  -- Nepoužitelné položky v rozpisu (viz tolerantní čtení níž). Od kapitoly 0
+  -- je hlídá CHECK, takže sem se za normálních okolností nedá dostat.
+  SELECT array_agg(key || '=' || value) INTO _spatne
+    FROM jsonb_each_text(_ev.role_reqs)
+   WHERE _ev.role_reqs IS NOT NULL
+     AND jsonb_typeof(_ev.role_reqs) = 'object'
+     AND (value !~ '^[0-9]+$'
+          OR key <> ALL (enum_range(NULL::public.app_role)::text[]));
+
+  -- ROZPIS, KTERÝ NEJDE PŘEČÍST CELÝ, NENÍ PODKLAD KE ZRUŠENÍ SMĚN.
+  --
+  -- Překlep `{"instruktor": 2}` znamená, že o roli `instructor` rozpis
+  -- neříká nic — ne že ji nechce. Bez téhle zábrany by se četla jako
+  -- „chceme 0" a její volné směny by zmizely, přestože komentář i hláška
+  -- slibují, že se nepoužitelná položka jen PŘESKOČÍ. Ověřeno, než se to
+  -- zavřelo: akce se 2 směnami a překlepem v klíči o obě přišla.
+  --
+  -- Doplňovat se smí dál — přidaná směna nikomu nic nebere.
+  _cist_cely := _spatne IS NULL OR cardinality(_spatne) = 0;
+  IF NOT _cist_cely THEN
+    _jen_doplnit := true;
   END IF;
 
   -- Projít se musí SJEDNOCENÍ rolí požadovaných a rolí, na kterých už směny
@@ -252,11 +276,30 @@ BEGIN
       --
       -- `jsonb_typeof` je tu proto, že `jsonb_each_text` na cokoli jiného než
       -- objekt rovnou vyhodí chybu — a to je právě to, čemu se vyhýbáme.
+      --
+      -- `event_type` PLATÍ PRO OBĚ VĚTVE. Bez toho měla funkce asymetrii:
+      -- rozpis podle rolí se bral bez ohledu na typ akce, kdežto starší cesta
+      -- jen u komerčky. Dokud byl trigger INSERT-only, nebylo to vidět; jakmile
+      -- se rozpis čte i při ÚPRAVĚ, znamenalo to, že přepnutí akce na TRÉNINK
+      -- jí založí PLACENÉ směny. Ověřeno, než se to zavřelo: komerční akce se
+      -- 3 směnami → UPDATE na `training` s rozpisem 4 instruktorů → 4 volné
+      -- směny po 250 Kč/h, na které se brigádníci můžou přihlásit. A z UI je
+      -- nešlo odebrat, protože sekce štábu je pro trénink skrytá.
+      --
+      -- Pravidlo „štáb má jen komerční akce" tu není nové — `create_booking`
+      -- ho drží od Etapy 1 (`CASE WHEN p_kind = 'commercial' THEN p_role_reqs
+      -- ELSE '{}' END`). Tohle jen srovnává druhou cestu do `events`, kterou
+      -- chodí `useEvents.updateEvent` napřímo přes PostgREST.
+      --
+      -- ⚠️ AŽ SE BUDE STAVĚT R7 (trenér k tréninku), musí se to povolit VĚDOMĚ
+      -- a na obou místech naráz — tady i v `create_booking`. Návrh s tím počítá
+      -- (ETAPA3-ROLE-NAVRH, kapitola 9).
       SELECT (key)::public.app_role AS role, (value)::int AS pocet
         FROM jsonb_each_text(_ev.role_reqs)
        WHERE _ev.role_reqs IS NOT NULL
          AND jsonb_typeof(_ev.role_reqs) = 'object'
          AND _ev.role_reqs <> '{}'::jsonb
+         AND _ev.event_type IN ('commercial', 'recruitment')
          AND value ~ '^[0-9]+$'
          AND key = ANY (enum_range(NULL::public.app_role)::text[])
       UNION ALL
@@ -336,18 +379,8 @@ BEGIN
       _event_id, _prebytek;
   END IF;
 
-  -- Nepoužitelné klíče v rozpisu. Za normálních okolností se sem nedá dostat
-  -- (CHECK z kapitoly 0), takže když to zazní, je něco jinak, než se čeká.
-  SELECT array_agg(x) INTO _spatne
-    FROM (SELECT key || '=' || value AS x
-            FROM jsonb_each_text(_ev.role_reqs)
-           WHERE _ev.role_reqs IS NOT NULL
-             AND jsonb_typeof(_ev.role_reqs) = 'object'
-             AND (value !~ '^[0-9]+$'
-                  OR key <> ALL (enum_range(NULL::public.app_role)::text[]))) s;
-
-  IF _spatne IS NOT NULL AND cardinality(_spatne) > 0 THEN
-    RAISE WARNING 'Akce % má v rozpisu nepoužitelné položky, byly přeskočeny: %. Oprav events.role_reqs.',
+  IF NOT _cist_cely THEN
+    RAISE WARNING 'Akce % má v rozpisu nepoužitelné položky: %. Byly přeskočeny a dorovnání kvůli nim NIC NERUŠILO — rozpis, který nejde přečíst celý, není podklad ke zrušení směn. Oprav events.role_reqs.',
       _event_id, _spatne;
   END IF;
 

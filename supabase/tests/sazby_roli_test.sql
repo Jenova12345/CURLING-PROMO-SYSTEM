@@ -149,6 +149,21 @@ BEGIN
     (SELECT sazba FROM public.sazby_roli WHERE role = 'trainer') = 10000,
     'sazba přesně na stropu projde');
   UPDATE public.sazby_roli SET sazba = 600 WHERE role = 'trainer';
+
+  -- Strop je na TŘECH místech a musí být všude stejný: tady v CHECKu,
+  -- v `validate_shift_claim` a v `SAZBA_SMENY_STROP` (src/lib/money.ts).
+  -- Kdyby se rozešly, formulář pustí sazbu, kterou databáze odmítne syrovou
+  -- hláškou o constraintu — přesně ten druh rozporu, který v Etapě 2 vznikl
+  -- mezi `iban_je_platny` a `overIban`. Tady se hlídají dva z těch tří;
+  -- třetí (JS) drží protějšek v money.test.ts.
+  PERFORM pg_temp.tvrd(
+    (SELECT pg_get_constraintdef(oid) FROM pg_constraint
+      WHERE conname = 'sazby_roli_sazba') LIKE '%10000%',
+    'CHECK ceníku drží strop 10 000 (musí sedět se SAZBA_SMENY_STROP v money.ts)');
+  PERFORM pg_temp.tvrd(
+    (SELECT pg_get_constraintdef(oid) FROM pg_constraint
+      WHERE conname = 'shifts_hourly_rate_rozsah') LIKE '%10000%',
+    'a CHECK na směně drží totéž číslo');
 END $$;
 
 -- -----------------------------------------------------------------------------
@@ -328,6 +343,11 @@ END $$;
 -- Pozn. k hledání toho jednoho řádku: `changed_at` je `now()`, tedy čas ZAČÁTKU
 -- TRANSAKCE — všechny auditní řádky z tohohle testu ho mají identický a řadit
 -- podle něj „ten poslední" nedává nic. Hledá se proto podle obsahu.
+-- Claim se nastavuje schválně: bez něj je `auth.uid()` NULL a tvrzení o tom,
+-- KDO změnu udělal, by nešlo napsat smysluplně. Požadavek zákazníka zní
+-- „musí být vidět, kdo co zadával" — samotné CO je jen půlka.
+SET LOCAL request.jwt.claims = '{"sub":"11111111-1111-1111-1111-111111111111"}';
+
 DO $$
 DECLARE _pred int; _po int;
 BEGIN
@@ -343,6 +363,19 @@ BEGIN
        AND (new_data ->> 'sazba')::numeric = 610
        AND (old_data ->> 'sazba')::numeric = 600),
     'audit drží roli, starou i novou sazbu (record_id je NULL — tabulka nemá sloupec id)');
+
+  PERFORM pg_temp.tvrd(EXISTS (
+    SELECT 1 FROM public.audit_log
+     WHERE table_name = 'sazby_roli' AND action = 'update'
+       AND new_data ->> 'role' = 'trainer'
+       AND (new_data ->> 'sazba')::numeric = 610
+       AND changed_by = '11111111-1111-1111-1111-111111111111'),
+    'audit drží i KDO změnu udělal — bez toho je požadavek „kdo co zadával" splněný jen z půlky');
+
+  PERFORM pg_temp.tvrd(
+    (SELECT updated_by FROM public.sazby_roli WHERE role = 'trainer')
+      = '11111111-1111-1111-1111-111111111111',
+    'a razítko updated_by na řádku ceníku sedí na téhož člověka');
 
   UPDATE public.sazby_roli SET sazba = 600 WHERE role = 'trainer';
 END $$;
@@ -494,8 +527,16 @@ BEGIN
          NULL, NULL, '{"instructor": 1}'::jsonb)$q$,
     'jen správce haly', 'člen (role authenticated): komerční akci nezaloží, takže dnes směny nevyrábí');
 
-  -- A co člen SMÍ: klubový trénink. Ten `role_reqs` dostane prázdné, takže
-  -- žádná směna nevznikne — tvrzení o „žádné živé cestě" tím drží.
+  -- A co člen SMÍ: klubový trénink. `create_booking` mu `role_reqs` zahodí,
+  -- takže žádná směna nevznikne.
+  --
+  -- POZOR, CO TOHLE TVRZENÍ NEŘÍKÁ: platí jen pro RPC `create_booking`.
+  -- `useEvents.updateEvent` píše do `events` napřímo přes PostgREST a tuhle
+  -- zábranu obchází — dřív tudy šlo přepnout akci na trénink a nechat jí
+  -- placené směny. Zavírá to od 27. 8. podmínka na `event_type` přímo
+  -- v `dorovnej_stab` (testuje ji dorovnani_stabu_test.sql, kapitola 6).
+  -- Původní znění téhle poznámky tvrdilo, že tím drží „žádná živá cesta",
+  -- a to byla nepravda: certifikovalo to jako bezpečné něco, co nebylo.
   SELECT (public.create_booking(
             ARRAY[(SELECT id FROM public.sheets WHERE active ORDER BY name LIMIT 1)],
             'training', 'TEST členův trénink', '2026-09-02 10:00+02', '2026-09-02 11:00+02',
@@ -507,7 +548,7 @@ BEGIN
   SET LOCAL ROLE authenticated;
 
   PERFORM pg_temp.tvrd(_smen = 0,
-    'člen (role authenticated): trénink projde a štáb nevyrábí (role_reqs se u ne-komerčky zahodí)');
+    'člen (role authenticated): trénink přes create_booking štáb nevyrábí (rozpis se u ne-komerčky zahodí)');
 END $$;
 
 RESET ROLE;

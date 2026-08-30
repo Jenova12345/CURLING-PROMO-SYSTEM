@@ -452,15 +452,21 @@ BEGIN
 
   -- Záporný počet do databáze od kapitoly 0 vůbec nedojde (CHECK, testováno
   -- v 4c). Druhá vrstva je ale pořád na místě: kdyby CHECK někdo shodil,
-  -- `-1` se musí číst jako nula, ne jako požadavek na zrušení směny navíc —
-  -- z toho by vyšel trvale svítící přebytek, který nejde dorovnat.
+  -- `-1` je nepřečtená položka jako každá jiná — a rozpis, který nejde přečíst
+  -- celý, není podklad ke zrušení směn (viz 6c). Dřív se z toho četla nula
+  -- a směny mizely; to bylo horší, protože „mínus jeden instruktor" neznamená
+  -- „žádného nechci", ale „tomuhle rozpisu nerozumím".
   ALTER TABLE public.events DROP CONSTRAINT events_role_reqs_platny;
   UPDATE public.events SET role_reqs = '{"instructor": -1}'::jsonb WHERE id = _a;
-  PERFORM pg_temp.tvrd(pg_temp.smen(_a) = 0, 'i bez CHECKu se záporný počet čte jako nula');
+  PERFORM pg_temp.tvrd(pg_temp.smen(_a) = 3,
+    'i bez CHECKu záporný počet žádnou směnu nezrušil');
   _v := public.dorovnej_stab(_a);
+  PERFORM pg_temp.tvrd((_v ->> 'zruseno')::int = 0
+                       AND jsonb_array_length(_v -> 'spatne') = 1,
+    '… a hlásí se jako nepoužitelná položka, ne jako nedorovnatelný přebytek');
   PERFORM pg_temp.tvrd(jsonb_array_length(_v -> 'prebytek') = 0,
-    '… a nehlásí nedorovnatelný přebytek, který neexistuje');
-  UPDATE public.events SET role_reqs = '{}'::jsonb WHERE id = _a;
+    '… takže žádné trvale svítící falešné varování nevzniká');
+  UPDATE public.events SET role_reqs = '{"instructor": 3}'::jsonb WHERE id = _a;
   ALTER TABLE public.events ADD CONSTRAINT events_role_reqs_platny
     CHECK (public.role_reqs_je_platny(role_reqs));
 END $$;
@@ -484,6 +490,87 @@ BEGIN
 
   UPDATE public.events SET event_type = 'commercial' WHERE id = _a;
   PERFORM pg_temp.tvrd(pg_temp.smen(_a) = 2, 'zpátky na komerční akci se štáb obnovil');
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 6b) ŠTÁB MAJÍ JEN KOMERČNÍ AKCE — i když rozpis přijde odjinud
+--
+-- Tohle je test na díru, která tu byla: `dorovnej_stab` brala rozpis podle rolí
+-- BEZ OHLEDU NA TYP AKCE, kdežto starší cesta jen u komerčky. Dokud byl trigger
+-- INSERT-only, nebylo to vidět. Jakmile se rozpis čte i při ÚPRAVĚ, znamenalo
+-- to, že přepnutí akce na trénink jí založí PLACENÉ směny — na které se
+-- brigádníci můžou přihlásit a které z UI nejdou odebrat, protože sekce štábu
+-- je pro trénink skrytá.
+--
+-- `create_booking` tudy neprojde (rozpis u ne-komerčky zahazuje), ale
+-- `useEvents.updateEvent` píše do `events` napřímo přes PostgREST.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _a uuid;
+BEGIN
+  _a := pg_temp.akce('TEST typ vs štáb', '{"instructor": 2}'::jsonb, 2);
+  PERFORM pg_temp.tvrd(pg_temp.smen(_a) = 2, 'komerční akce štáb má');
+
+  UPDATE public.events SET event_type = 'training' WHERE id = _a;
+  PERFORM pg_temp.tvrd(pg_temp.smen(_a) = 0,
+    'po přepnutí na trénink štáb zmizel — trénink placené směny nedostává');
+
+  -- A rozpis se na tréninku neuplatní, ani když ho tam někdo napíše.
+  UPDATE public.events SET role_reqs = '{"instructor": 4}'::jsonb, required_staff = 4 WHERE id = _a;
+  PERFORM pg_temp.tvrd(pg_temp.smen(_a) = 0,
+    'rozpis zapsaný na trénink NEVYROBÍ směny (dřív vyrobil 4 po 250 Kč/h)');
+
+  -- Turnaj ani údržba taky ne.
+  UPDATE public.events SET event_type = 'tournament' WHERE id = _a;
+  PERFORM pg_temp.tvrd(pg_temp.smen(_a) = 0, 'turnaj štáb nedostane');
+  UPDATE public.events SET event_type = 'maintenance' WHERE id = _a;
+  PERFORM pg_temp.tvrd(pg_temp.smen(_a) = 0, 'údržba ledu taky ne');
+
+  -- Zpátky na komerčku se štáb vrátí — pravidlo je o typu, ne o cestě.
+  UPDATE public.events SET event_type = 'commercial' WHERE id = _a;
+  PERFORM pg_temp.tvrd(pg_temp.smen(_a, 'instructor') = 4,
+    'zpátky na komerční akci se rozpis uplatní');
+
+  -- Nábor je ta druhá povolená hodnota.
+  UPDATE public.events SET event_type = 'recruitment' WHERE id = _a;
+  PERFORM pg_temp.tvrd(pg_temp.smen(_a, 'instructor') = 4, 'nábor štáb má taky');
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 6c) ROZPIS, KTERÝ NEJDE PŘEČÍST CELÝ, NENÍ PODKLAD KE ZRUŠENÍ SMĚN
+--
+-- Tolerantní čtení slibuje, že nepoužitelnou položku „přeskočí". Dřív to
+-- neplatilo: překlep `{"instruktor": 2}` znamenal, že role `instructor` z rozpisu
+-- vypadla, četla se jako „chceme 0" a její volné směny zmizely. Slib o tom, že
+-- se akce nedá zabetonovat, tedy platil za cenu ztráty směn — a ani komentář,
+-- ani hláška to nepřiznávaly.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _a uuid; _v jsonb;
+BEGIN
+  _a := pg_temp.akce('TEST nečitelný rozpis', '{"instructor": 2}'::jsonb, 2);
+  PERFORM pg_temp.tvrd(pg_temp.smen(_a) = 2, 'akce má 2 směny instruktorů');
+
+  ALTER TABLE public.events DROP CONSTRAINT events_role_reqs_platny;
+  UPDATE public.events SET role_reqs = '{"instruktor": 2}'::jsonb WHERE id = _a;
+
+  PERFORM pg_temp.tvrd(pg_temp.smen(_a) = 2,
+    'překlep v klíči směny NEZRUŠIL — rozpis se nedal přečíst celý, tak se nic nebere');
+  PERFORM pg_temp.tvrd(pg_temp.zrusenych(_a) = 0, 'a opravdu se nic nezrušilo');
+
+  _v := public.dorovnej_stab(_a);
+  PERFORM pg_temp.tvrd((_v ->> 'zruseno')::int = 0
+                       AND jsonb_array_length(_v -> 'spatne') = 1,
+    'dorovnání to hlásí v „spatne" a pořád nic neruší');
+
+  -- Doplňovat se smí dál — přidaná směna nikomu nic nebere.
+  UPDATE public.events SET role_reqs = '{"instruktor": 2, "bar_staff": 1}'::jsonb WHERE id = _a;
+  PERFORM pg_temp.tvrd(pg_temp.smen(_a, 'bar_staff') = 1,
+    'čitelná část rozpisu se ale doplní — přidání nikomu nic nebere');
+
+  UPDATE public.events SET role_reqs = '{"instructor": 2}'::jsonb WHERE id = _a;
+  ALTER TABLE public.events ADD CONSTRAINT events_role_reqs_platny
+    CHECK (public.role_reqs_je_platny(role_reqs));
 END $$;
 
 -- -----------------------------------------------------------------------------
@@ -583,6 +670,17 @@ BEGIN
        AND new_data ->> 'status' = 'cancelled'
        AND new_data ->> 'event_id' = _a::text),
     'automatické zrušení směny je v audit_log dohledatelné');
+
+  -- A hlavně KDO. Bez toho je požadavek zákazníka „musí být vidět, kdo co
+  -- zadával" splněný jen z půlky — a u směny, která někomu zmizela, je „kdo"
+  -- ta podstatnější polovina.
+  PERFORM pg_temp.tvrd(EXISTS (
+    SELECT 1 FROM public.audit_log
+     WHERE table_name = 'shifts' AND action = 'update'
+       AND new_data ->> 'status' = 'cancelled'
+       AND new_data ->> 'event_id' = _a::text
+       AND changed_by = '11111111-1111-1111-1111-111111111111'),
+    'audit u zrušené směny drží i KDO ji zrušil');
 END $$;
 
 -- -----------------------------------------------------------------------------

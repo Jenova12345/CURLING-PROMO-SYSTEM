@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   SAZBA_STROP,
+  SAZBA_SMENY_STROP,
   fmtHodin,
   fmtKc,
   fmtSazba,
@@ -486,6 +487,37 @@ describe('parseSazba — sazba z formulářového pole', () => {
     for (const vstup of ['600', '1500', '15000']) {
       expect(parseSazba(vstup).chyba).toBeUndefined();
     }
+  });
+
+  it('umí i nižší strop pro sazbu SMĚNY (10 000 Kč/h)', () => {
+    // Sazba směny je jiná věc než cena ledu: `SAZBA_STROP` (50 000) je cena
+    // hodiny na ledě, `SAZBA_SMENY_STROP` (10 000) je mzda za hodinu práce.
+    // Druhé číslo zrcadlí `sazby_roli_sazba`, `shifts_hourly_rate_rozsah`
+    // a `validate_shift_claim` — kdyby se rozešly, `SazbyRoliCard` by pustil
+    // sazbu, kterou databáze odmítne syrovou hláškou o constraintu.
+    expect(SAZBA_SMENY_STROP).toBe(10_000);
+
+    expect(parseSazba('10000', SAZBA_SMENY_STROP).hodnota).toBe(10_000);
+    expect(parseSazba('10001', SAZBA_SMENY_STROP).chyba).toContain('10 000');
+
+    // TOHLE JE TO PODSTATNÉ TVRZENÍ. Bez předaného stropu projde 20 000 —
+    // takže kdyby někdo parametr zase zahodil a `parseSazba` se vrátila
+    // k `SAZBA_STROP`, testy by musely zčervenat. Dřív by zůstaly zelené
+    // a karta by tiše pouštěla sazby do 50 000 Kč/h.
+    expect(parseSazba('20000').chyba).toBeUndefined();
+    expect(parseSazba('20000', SAZBA_SMENY_STROP).chyba).toContain('10 000');
+
+    // A hláška musí mluvit o TOM stropu, který platí pro dané pole —
+    // „nejvýš 50 000" u sazby brigádníka by poslalo člověka hledat chybu jinam.
+    expect(parseSazba('60000', SAZBA_SMENY_STROP).chyba).not.toContain('50 000');
+
+    // Reálné sazby rolí (150–600) projdou.
+    for (const vstup of ['150', '200', '250', '600']) {
+      expect(parseSazba(vstup, SAZBA_SMENY_STROP).chyba).toBeUndefined();
+    }
+
+    // Výchozí chování se nezměnilo — volající bez parametru dostane cenu ledu.
+    expect(parseSazba(String(SAZBA_STROP)).hodnota).toBe(SAZBA_STROP);
   });
 
   it('nepustí sub-haléřové hodnoty jako „celé koruny"', () => {
