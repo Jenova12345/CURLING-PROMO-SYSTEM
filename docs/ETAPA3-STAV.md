@@ -317,9 +317,24 @@ docker exec -e PGPASSWORD=postgres -i supabase_db_<project> \
   psql -h 127.0.0.1 -U authenticator -d postgres -X -q -v ON_ERROR_STOP=1 \
   < supabase/tests/fakturoid_prava_test.sql
 
-npx vitest run            # 358 unit testů (175 v billing/)
+# GUARD REŽIMU DPH — 5 tvrzení. Hlídá, že po přepnutí na plátce interní engine
+# ani nezaloží koncept, ani nevystaví, a že automatika nic nevyrobí. Bez něj
+# může guard vypadnout a celá sada zůstane zelená (ověřeno mutací).
+docker exec -i supabase_db_<project> psql -U postgres -X -q -v ON_ERROR_STOP=1 \
+  < supabase/tests/vat_mode_guard_test.sql
+
+npm run test:run          # 390 unit testů (bez integračních, viz níž)
 npm run typecheck
 deno check --config supabase/functions/deno.json supabase/functions/fakturoid-invoice/index.ts
+
+# ŽIVÉ testy proti Fakturoidu — zakládají doklady na testovacím účtu a po sobě
+# je uklízejí. `npm run test:run` je ZÁMĚRNĚ nespustí (vyloučené ve
+# vitest.config.ts), aby na cizí účet nesáhly omylem.
+npm run test:fakturoid
+
+# Co zbylo po bězích, které teardown nedoběhly (zabitý proces). Bez --smazat
+# běží nanečisto.
+npx vite-node scripts/fakturoid-uklid-testy.ts
 ```
 
 Migrace ověřena `supabase db reset` — 29 migrací, čistý průběh, obě SQL sady zelené.

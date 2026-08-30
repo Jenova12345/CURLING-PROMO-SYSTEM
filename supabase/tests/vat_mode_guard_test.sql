@@ -35,7 +35,7 @@ BEGIN
 END $$;
 
 -- Admin, jinak se koncept nedá ani založit.
-SELECT set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111111"}', true);
+SET LOCAL request.jwt.claims = '{"sub":"11111111-1111-1111-1111-111111111111"}';
 
 -- Fakturační údaje haly. Bez nich `issue_invoice` odmítne vystavit i pod
 -- neplátcem — a to je JINÉ odmítnutí než to, které se tu testuje. Kontrolní
@@ -98,7 +98,7 @@ BEGIN
   _koncept := public.create_invoice_draft_club(_sub, '2026-07-01', '2026-07-31');
   UPDATE public.billing_settings SET vat_mode = 'platce' WHERE singleton;
   IF _koncept IS NULL THEN
-    RAISE EXCEPTION 'TEST SELHAL: nepodařilo se vyrobit koncept ani pod neplátcem.';
+    RAISE EXCEPTION 'TEST SELHAL: nepodařilo se vyrobit koncept ani pod neplátcem. Nejspíš se koukáš na databázi, kde je červenec 2026 pro „CK Ostravské kameny" už vyfakturovaný — pusť `supabase db reset`.';
   END IF;
 
   -- 3) A TEĎ TO PODSTATNÉ: vystavit ho nejde.

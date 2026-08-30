@@ -30,6 +30,21 @@
 -- z CLAUDE.md) a diff proti nim je 18 PŘIDANÝCH řádků na funkci, nic ubraného.
 -- Ověřeno programově, ne okem.
 --
+-- ⚠️ POZOR NA SOUHRU S `20260818130000_automatika.sql`. Ta do týchž dvou funkcí
+-- propašovala RUNTIME PATCHEM výjimku pro plánovač
+-- (`session_user IN ('postgres','supabase_admin')`) — nepřepisuje je celé, jen
+-- do nich vloží blok, a to jen když tam ještě není
+-- (`CONTINUE WHEN position('session_user' in _def) > 0`).
+--
+-- Na čerstvé databázi tedy běží NEJDŘÍV ona a pak tahle: patch se vloží
+-- a vzápětí ho přepíše tenhle `CREATE OR REPLACE` — týmž textem, protože se
+-- generoval ze schématu, které ten patch už mělo. Výsledek je stejný, ale je to
+-- křehká souhra dvou migrací nad jedním tělem.
+--
+-- CO Z TOHO PLYNE PRO PŘÍŠTÍ ZÁSAH: tělo se musí generovat ze ŽIVÉHO schématu
+-- po aplikaci VŠECH migrací, ne ze znění v `20260813140000_faktury_rpc.sql`.
+-- Kdo vezme to původní, výjimku pro plánovač tiše smaže a rozbije automatiku.
+--
 -- VRATNOST: obě funkce zpátky do znění bez toho bloku. Data se nemění.
 -- =============================================================================
 
