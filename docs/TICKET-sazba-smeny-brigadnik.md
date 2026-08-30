@@ -1,7 +1,21 @@
-# 🔴 Ticket: brigádník si přepíše vlastní hodinovou sazbu
+# 🔴 Ticket: brigádník přepíše hodinovou sazbu na LIBOVOLNÉ směně
 
-**Zapsáno:** 30. 8. 2026 · **Stav:** ⏸ otevřené, NEOPRAVENO
-**Závažnost:** vysoká (peníze, sebeobsluha) · **Původ:** předchází Etapě 3
+**Zapsáno:** 30. 8. 2026 · **Aktualizováno:** 30. 8. 2026 po 2. kole bran
+**Stav:** ⏸ otevřené, NEOPRAVENO
+**Závažnost:** vysoká (peníze, cizí záznamy) · **Původ:** předchází Etapě 3
+
+> ⚠️ **Původní znění tohohle ticketu bylo MÍRNĚJŠÍ, než jaká je skutečnost.**
+> Psalo se v něm „na vlastní zabrané směně". Bezpečnostní brána ve 2. kole
+> ukázala, že omezení na vlastní směnu neexistuje vůbec — jde to i na CIZÍ,
+> včetně směny, kterou má zabranou někdo jiný. Ověřeno:
+>
+> ```
+> SET LOCAL ROLE authenticated;
+> SET LOCAL request.jwt.claims = '{"sub":"33333333-…"}';   -- brigádník
+> UPDATE public.shifts SET hourly_rate = 10000
+>  WHERE id = '<směna instruktora 22222222-…>';            -- UPDATE 1
+> → sazba 250,00 → 10000
+> ```
 
 > Našla to bezpečnostní brána při kontrole ceníku rolí a nezávisle to potvrdila
 > code review. **Není to regrese z Etapy 3** — díra je v repu od baseline. Sem
@@ -17,10 +31,12 @@
 
 ## Co se stane
 
-Brigádník (nebo instruktor, barman, provozní) si na **vlastní zabrané směně**
-přepíše `hourly_rate` až na **10 000 Kč/h**.
+Kdokoli s pracovní rolí (`part_time_staff`, `instructor`, `bar_staff`,
+`manager`) přepíše `hourly_rate` až na **10 000 Kč/h** na **libovolné směně** —
+vlastní, cizí, zabrané někým jiným.
 
-Ověřeno na živé lokální databázi: 150 → 10 000, dotčen 1 řádek, bez chyby.
+Ověřeno na živé lokální databázi obojí: na vlastní `pending` směně 250 → 10 000
+a na CIZÍ `claimed` směně instruktora 250 → 10 000, vždy 1 dotčený řádek.
 
 Pak `src/pages/Shifts.tsx:284` tu podvrženou sazbu **předvyplní adminovi**
 do uzavíracího formuláře:
@@ -36,15 +52,21 @@ a musí si všimnout sám.
 
 Dvě zábrany, ani jedna neřeší sazbu:
 
-1. **RLS politika „Staff can update shifts"**
-   (`supabase/migrations/20260715000000_baseline_production.sql:526`)
-   `WITH CHECK` řeší jen `status` a `claimed_by` — o `hourly_rate` neví nic:
+1. **Na `shifts` jsou DVĚ permisivní UPDATE politiky a permisivní politiky se
+   OR-ují.** Ta úzká („Staff can update shifts") řeší jen `status`
+   a `claimed_by` a o `hourly_rate` neví nic:
 
    ```sql
    (status = 'pending'  AND claimed_by = auth.uid())
    OR (status = 'completed' AND claimed_by = auth.uid())
    OR (status = 'open'  AND claimed_by IS NULL)
    ```
+
+   Jenže vedle ní stojí **„Staff and admins can update shifts"**, jejíž
+   `WITH CHECK` je jen členství v roli, **bez jakéhokoli omezení na řádek**.
+   Protože se politiky OR-ují, ta široká tu úzkou úplně přebíjí — a proto to
+   projde i na cizí směně. Úzká politika vedle široké nezavírá nic; tohle je
+   obecné poučení, ne jen detail téhle tabulky.
 
 2. **Trigger `validate_shift_claim`** kontroluje jen ROZSAH (1–10 000), ne to,
    **kdo** sazbu mění. Rozsah 10 000 je přitom strop pro trenéra, ne pro
@@ -62,9 +84,17 @@ IF NEW.hourly_rate IS DISTINCT FROM OLD.hourly_rate
 END IF;
 ```
 
-**RLS to samo nezavře.** Sloupcový `GRANT UPDATE` bez `hourly_rate` by sice
-zabral, ale jen pro `authenticated` — `service_role` granty obchází. Trigger
-platí na obě cesty, stejně jako u `sazby_roli`.
+**RLS to samo nezavře** — a to ani po zúžení té úzké politiky, dokud vedle ní
+stojí ta široká. Sloupcový `GRANT UPDATE` bez `hourly_rate` by zabral, ale jen
+pro `authenticated`; `service_role` granty obchází. Trigger platí na obě cesty,
+stejně jako u `sazby_roli`. Nejčistší je oprava na všech třech místech naráz:
+zúžit širokou politiku, odebrat sloupcový grant a přidat guard do triggeru.
+
+**Co už na tom Etapa 3 zlepšila** (ani jedno díru nezavírá):
+- `shifts_hourly_rate_rozsah` (migrace 20260827090000) zastropuje škodu na
+  10 000 Kč/h — dřív šlo zapsat 99 999 999.
+- `trg_shifts_audit` (migrace 20260827100000) to poprvé zapíše do `audit_log`
+  se správným `changed_by`, takže je to dohledatelné.
 
 ### Než se to nasadí, ověř data
 

@@ -36,9 +36,15 @@
 --    placená role je produktové rozhodnutí, tedy migrace, ne klik v nastavení.
 --
 --    „Uzavřený" platí bez výhrad pro `authenticated` (granty + RLS) a pro
---    DELETE i TRUNCATE úplně pro každého (guard trigger, tedy i pro
---    `service_role`). INSERT pod `service_role` guard nehlídá — musel by se
---    zakládat až po naplnění tabulky a rozbil by opakovatelnost migrace.
+--    DELETE, TRUNCATE i přepsání sloupce `role` úplně pro každého (guard
+--    triggery, tedy i pro `service_role`).
+--
+--    NA CO GUARDY NEDOSÁHNOU: `service_role` má z výchozích práv Supabase na
+--    téhle tabulce plný INSERT i UPDATE, včetně `created_at` a `updated_by` —
+--    takže `UPDATE sazby_roli SET sazba = …, updated_by = <kdokoli>` pod ní
+--    projde a razítko zalže. Zavřít by to šlo jen dalším guardem, který by
+--    ale musel vzniknout až po naplnění tabulky a rozbil by opakovatelnost
+--    migrace. Dnes je to latentní: na `sazby_roli` nesahá žádná Edge funkce.
 --
 -- 3) ZÁLOŽNÍ SAZBA 150 Kč/h ZŮSTÁVÁ, a to ve dvou případech:
 --    • směna BEZ role (`required_role IS NULL`) — starší cesta přes
@@ -373,6 +379,19 @@ END $$;
 
 -- 6b) DOROVNÁNÍ PRÁZDNÝCH SAZEB — na 150, ne z ceníku
 --
+-- DVĚ VĚCI PŘED NASAZENÍM NA OSTROU DATABÁZI:
+--
+-- 1. `ALTER TABLE … DISABLE TRIGGER` vyžaduje VLASTNICTVÍ tabulky. Lokálně
+--    `shifts` vlastní `postgres`; na cizí instanci to ověř dřív, než migraci
+--    pustíš, jinak umře uprostřed tohohle bloku:
+--      SELECT tableowner FROM pg_tables WHERE schemaname='public' AND tablename='shifts';
+--
+-- 2. Tenhle UPDATE NENÍ V `audit_log`. Auditní trigger na `shifts` zakládá až
+--    navazující migrace 20260827100000 (kapitola 3) a prohodit pořadí nejde —
+--    ta migrace na ceníku závisí. Nic se tím nezhoršuje (`shifts` audit dosud
+--    neměly vůbec), ale jediná stopa po tomhle dorovnání je NOTICE v logu
+--    nasazení. Schovej si ho.
+--
 -- ⚠️ TOHLE JE TO MÍSTO, KDE BY SE DALO NEJSNÁZ PŘEPSAT MINULOST, a proto se
 -- tady ceník ZÁMĚRNĚ NEPOUŽÍVÁ.
 --
@@ -400,9 +419,12 @@ END $$;
 -- Ověřeno: po simulovaném `RAISE EXCEPTION` mezi DISABLE a ENABLE zůstal
 -- `pg_trigger.tgenabled = 'O'`, tedy zapnutý.
 --
--- `ALTER TABLE … DISABLE TRIGGER` navíc bere ACCESS EXCLUSIVE zámek, takže po
--- tu dobu do `shifts` nikdo jiný nezapíše — okno, kterým by prošel nevalidovaný
--- zápis odjinud, nevzniká.
+-- `ALTER TABLE … DISABLE TRIGGER` navíc bere SHARE ROW EXCLUSIVE zámek, který
+-- koliduje s ROW EXCLUSIVE (to je zámek běžného zápisu), takže po tu dobu do
+-- `shifts` nikdo jiný nezapíše — okno, kterým by prošel nevalidovaný zápis
+-- odjinud, nevzniká. Ověřeno obojí: `pg_locks` hlásí `ShareRowExclusiveLock`
+-- a souběžný `UPDATE shifts` z druhého spojení skončil na `lock_timeout`.
+-- (Dřívější znění tvrdilo ACCESS EXCLUSIVE — závěr platil, název byl špatně.)
 DO $$
 DECLARE _bez_sazby int; _po_statusech text;
 BEGIN

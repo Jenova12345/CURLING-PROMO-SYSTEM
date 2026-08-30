@@ -574,6 +574,50 @@ BEGIN
 END $$;
 
 -- -----------------------------------------------------------------------------
+-- 6d) TOLERANTNÍ FILTR MUSÍ ZRCADLIT CHECK CELÝ, i strop 50
+--
+-- Tolerantní čtení je pojistka pro případ, že by CHECK někdo shodil — takže
+-- když zopakuje jen půlku jeho pravidel, není to pojistka, ale falešný pocit
+-- bezpečí. Dvě konkrétní mezery, obě ověřené, než se zavřely:
+--   • `{"instructor": 5000}` založilo jedním UPDATE 5000 směn,
+--   • dvacetimístné číslo regexem `^[0-9]+$` prošlo a spadlo až na `::int`
+--     („out of range for type integer") — tedy přesně tím pádem, kterému se
+--     tolerantní čtení má vyhýbat.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _a uuid; _v jsonb;
+BEGIN
+  _a := pg_temp.akce('TEST tolerance = celý CHECK', '{"instructor": 2}'::jsonb, 2);
+  ALTER TABLE public.events DROP CONSTRAINT events_role_reqs_platny;
+
+  UPDATE public.events SET role_reqs = '{"instructor": 5000}'::jsonb WHERE id = _a;
+  PERFORM pg_temp.tvrd(pg_temp.smen(_a) = 2,
+    'počet nad strop 50 se přeskočí, nezaloží 5000 směn');
+
+  UPDATE public.events SET role_reqs = '{"instructor": 99999999999999999999}'::jsonb WHERE id = _a;
+  PERFORM pg_temp.tvrd(pg_temp.smen(_a) = 2,
+    'číslo mimo rozsah int NESPADNE na castu, jen se přeskočí');
+
+  _v := public.dorovnej_stab(_a);
+  PERFORM pg_temp.tvrd(jsonb_array_length(_v -> 'spatne') = 1,
+    '… a hlásí se jako nepoužitelná položka');
+
+  -- Pohled na tom taky nesmí spadnout: jediná vadná akce by jinak sebrala
+  -- adminovi varování o štábu na VŠECH akcích, ne jen na téhle.
+  -- SUMA, ne `count(*)`: počet řádků se dá spočítat bez vyhodnocení sloupců,
+  -- takže by tenhle test prošel, i kdyby pohled na vadné akci padal. Sečtení
+  -- vynutí, aby se každý dopočítávaný sloupec opravdu spočítal.
+  PERFORM pg_temp.tvrd(
+    (SELECT sum(instruktoru_v_rozpisu + stabu_v_rozpisu + smen_navic + instruktoru_chybi)
+       FROM public.stab_kontrola) IS NOT NULL,
+    'stab_kontrola vadnou akcí nespadne — vyhodnotí se i dopočítávané sloupce');
+
+  UPDATE public.events SET role_reqs = '{"instructor": 2}'::jsonb WHERE id = _a;
+  ALTER TABLE public.events ADD CONSTRAINT events_role_reqs_platny
+    CHECK (public.role_reqs_je_platny(role_reqs));
+END $$;
+
+-- -----------------------------------------------------------------------------
 -- 7) DRÁHY: varování, ne automatická směna (rozhodnutí PM R8)
 --
 -- Tohle je to místo, kde se doslovné znění zadání („směny se dopočítají i při

@@ -55,6 +55,7 @@
 --   DROP FUNCTION IF EXISTS public.dorovnej_stab(uuid, boolean);
 --   ALTER TABLE public.events DROP CONSTRAINT IF EXISTS events_role_reqs_platny;
 --   DROP FUNCTION IF EXISTS public.role_reqs_je_platny(jsonb);
+--   DROP FUNCTION IF EXISTS public.role_reqs_soucet(jsonb);
 --   -- a zpátky původní trigger z baseline:
 --   CREATE TRIGGER create_shifts_for_commercial_event AFTER INSERT ON public.events
 --     FOR EACH ROW EXECUTE FUNCTION public.handle_new_commercial_event();
@@ -81,8 +82,12 @@
 --   • `{"instructor": "dva"}`  → `invalid input syntax for type integer`
 --   • `{"instruktor": 1}`      → `invalid input value for enum app_role`
 --
--- a taková akce by se stala NAVŽDY NEEDITOVATELNOU: každý UPDATE sledovaných
--- sloupců by skončil toutéž chybou. To je horší než původní vada.
+-- a taková akce by se dala upravit jen z půlky: trigger je AFTER UPDATE a rozpis
+-- čte z tabulky, tedy už novou hodnotu, takže UPDATE, který rozpis OPRAVÍ,
+-- projde. Ale úprava `required_staff` nebo `event_type` bez současné opravy
+-- rozpisu skončí toutéž chybou pokaždé. (Dřívější znění tvrdilo „navždy
+-- needitovatelná" — přehánělo to; bezpečnostní brána to nepotvrdila a měla
+-- pravdu. Důvod pro tolerantní čtení to nemění.)
 --
 -- Zavírá se to ze dvou stran:
 --   1. CHECK, aby nová špatná data nevznikla (tady),
@@ -101,6 +106,15 @@
 -- constraint jinou volatilitu nepustí. Je to bezpečné jedním směrem: do enumu
 -- jde hodnoty jen PŘIDÁVAT (`ALTER TYPE … ADD VALUE`), takže rozšíření typu může
 -- constraint jedině zvolnit. Řádek, který platil, platit nepřestane.
+--
+-- JEDNU CESTU TENHLE ARGUMENT NEPOKRÝVÁ: `ALTER TYPE … RENAME VALUE`.
+-- Po přejmenování se constraint NEREVALIDUJE, takže v tabulce tiše zůstanou
+-- porušující řádky a každá úprava takové akce, která zároveň neopraví rozpis,
+-- spadne. Ověřeno: přejmenování `instructor` → `instruktor` nechalo 5 akcí
+-- porušujících CHECK. Není to důvod psát to jinak (přejmenování hodnoty
+-- `app_role` rozbije v týhle codebase mnohem víc věcí a návrh rolí ho
+-- výslovně nedoporučuje, viz ETAPA3-ROLE-NAVRH R3), ale ať to nikdo neobjeví
+-- až za běhu.
 CREATE OR REPLACE FUNCTION public.role_reqs_je_platny(_rozpis jsonb)
  RETURNS boolean
  LANGUAGE plpgsql
@@ -137,6 +151,29 @@ BEGIN
   RETURN true;
 END;
 $$;
+
+-- Součet rozpisu, který nespadne na nepoužitelné položce. Je to vlastní funkce,
+-- a ne dvakrát opsaný poddotaz, protože v pohledu níž se používá na dvou
+-- místech — a dvě kopie téhož pravidla se rozejdou.
+CREATE OR REPLACE FUNCTION public.role_reqs_soucet(_rozpis jsonb)
+ RETURNS int
+ LANGUAGE sql
+ IMMUTABLE
+ SET search_path TO 'public'
+AS $$
+  SELECT COALESCE(sum(value::int)::int, 0)
+    FROM jsonb_each_text(_rozpis)
+   WHERE _rozpis IS NOT NULL
+     AND jsonb_typeof(_rozpis) = 'object'
+     AND value ~ '^([0-9]|[1-4][0-9]|50)$'
+     AND key = ANY (enum_range(NULL::public.app_role)::text[]);
+$$;
+
+COMMENT ON FUNCTION public.role_reqs_soucet(jsonb) IS
+  'Součet požadovaného štábu z events.role_reqs. Nepoužitelné položky přeskočí, aby jediná vadná akce neshodila pohled stab_kontrola.';
+
+REVOKE ALL ON FUNCTION public.role_reqs_soucet(jsonb) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.role_reqs_soucet(jsonb) TO authenticated;
 
 COMMENT ON FUNCTION public.role_reqs_je_platny(jsonb) IS
   'Ověří events.role_reqs: objekt, klíče jsou hodnoty app_role, hodnoty celá čísla 0–50 (VALIDATION_LIMITS.STAFF_COUNT_MAX). Používá se jako CHECK.';
@@ -236,7 +273,7 @@ BEGIN
     FROM jsonb_each_text(_ev.role_reqs)
    WHERE _ev.role_reqs IS NOT NULL
      AND jsonb_typeof(_ev.role_reqs) = 'object'
-     AND (value !~ '^[0-9]+$'
+     AND (value !~ '^([0-9]|[1-4][0-9]|50)$'
           OR key <> ALL (enum_range(NULL::public.app_role)::text[]));
 
   -- ROZPIS, KTERÝ NEJDE PŘEČÍST CELÝ, NENÍ PODKLAD KE ZRUŠENÍ SMĚN.
@@ -269,10 +306,11 @@ BEGIN
       --
       -- ČTE SE TOLERANTNĚ, i když od kapitoly 0 hlídá vstup CHECK. Kdyby ten
       -- CHECK někdo shodil (nebo kdyby se sem data dostala mimo něj), nesmí to
-      -- skončit tím, že se akce stane NEEDITOVATELNOU: cast `'dva'::int` uvnitř
-      -- triggeru by shodil každý UPDATE té akce, tedy i ten, kterým by to šlo
-      -- opravit. Nepoužitelný klíč se proto přeskočí a nahlásí (`spatne` v
-      -- návratové hodnotě + WARNING), místo aby se na něm spadlo.
+      -- skončit tím, že se akci nedá změnit typ ani počet lidí: cast `'dva'::int`
+      -- uvnitř triggeru by shodil každý takový UPDATE. (Oprava rozpisu samotného
+      -- by prošla — trigger je AFTER a čte novou hodnotu.) Nepoužitelný klíč se
+      -- proto přeskočí a nahlásí (`spatne` v návratové hodnotě + WARNING),
+      -- místo aby se na něm spadlo.
       --
       -- `jsonb_typeof` je tu proto, že `jsonb_each_text` na cokoli jiného než
       -- objekt rovnou vyhodí chybu — a to je právě to, čemu se vyhýbáme.
@@ -300,7 +338,16 @@ BEGIN
          AND jsonb_typeof(_ev.role_reqs) = 'object'
          AND _ev.role_reqs <> '{}'::jsonb
          AND _ev.event_type IN ('commercial', 'recruitment')
-         AND value ~ '^[0-9]+$'
+         -- REGEX MUSÍ ZRCADLIT CHECK CELÝ, tedy i strop 50. `^[0-9]+$` samo
+         -- nestačilo hned dvakrát (obojí ověřeno se shozeným CHECKem):
+         --   • `{"instructor": 5000}` založilo 5000 směn jedním UPDATE;
+         --   • 20místné číslo regexem prošlo a spadlo až na `(value)::int`
+         --     („out of range for type integer") — tedy přesně tím pádem,
+         --     kterému se tolerantní čtení snaží vyhnout.
+         -- Mez je schválně v REGEXU, ne jako `value::int <= 50`: v `WHERE` by
+         -- to byl další cast, který může planner vyhodnotit dřív než regex.
+         -- Takhle se v podmínce necastuje vůbec.
+         AND value ~ '^([0-9]|[1-4][0-9]|50)$'
          AND key = ANY (enum_range(NULL::public.app_role)::text[])
       UNION ALL
       -- Starší cesta bez rolí (`events.required_staff`). Pořád se používá
@@ -500,14 +547,21 @@ SELECT
   e.start_time,
 
   COALESCE(d.drah, 0)                              AS drah,
-  COALESCE((e.role_reqs ->> 'instructor')::int, 0) AS instruktoru_v_rozpisu,
+  -- Tolerantně, ze stejného důvodu jako v `dorovnej_stab`: jediná akce
+  -- s nepoužitelným rozpisem by jinak shodila CELÝ pohled, ne jen svůj řádek —
+  -- a admin by přišel o varování o štábu úplně. Ověřeno se shozeným CHECKem:
+  -- „invalid input syntax for type integer" i „out of range for type integer".
+  CASE WHEN (e.role_reqs ->> 'instructor') ~ '^([0-9]|[1-4][0-9]|50)$'
+       THEN (e.role_reqs ->> 'instructor')::int ELSE 0 END
+                                                   AS instruktoru_v_rozpisu,
   COALESCE(s.instruktoru, 0)                       AS instruktoru_smen,
 
   -- Kolik lidí rozpis celkem žádá. U starších akcí bez `role_reqs` se to bere
   -- z `required_staff` — tedy stejnou logikou, jakou má dorovnání.
   CASE
     WHEN e.role_reqs IS NOT NULL AND e.role_reqs <> '{}'::jsonb
-      THEN COALESCE((SELECT sum(value::int) FROM jsonb_each_text(e.role_reqs)), 0)
+         AND e.event_type IN ('commercial', 'recruitment')
+      THEN public.role_reqs_soucet(e.role_reqs)
     WHEN e.event_type IN ('commercial', 'recruitment')
       THEN COALESCE(e.required_staff, 0)
     ELSE 0
@@ -526,7 +580,8 @@ SELECT
   greatest(
     COALESCE(s.aktivnich, 0) - CASE
       WHEN e.role_reqs IS NOT NULL AND e.role_reqs <> '{}'::jsonb
-        THEN COALESCE((SELECT sum(value::int) FROM jsonb_each_text(e.role_reqs)), 0)
+           AND e.event_type IN ('commercial', 'recruitment')
+        THEN public.role_reqs_soucet(e.role_reqs)
       WHEN e.event_type IN ('commercial', 'recruitment')
         THEN COALESCE(e.required_staff, 0)
       ELSE 0
