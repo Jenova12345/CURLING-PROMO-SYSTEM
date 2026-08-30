@@ -1191,6 +1191,85 @@ export type Database = {
           },
         ]
       }
+      sazby_roli: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          popis: string
+          poradi: number
+          poznamka: string | null
+          role: Database["public"]["Enums"]["app_role"]
+          sazba: number
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          popis: string
+          poradi: number
+          poznamka?: string | null
+          role: Database["public"]["Enums"]["app_role"]
+          sazba: number
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          popis?: string
+          poradi?: number
+          poznamka?: string | null
+          role?: Database["public"]["Enums"]["app_role"]
+          sazba?: number
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sazby_roli_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "sazby_roli_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "sazby_roli_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "sazby_roli_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "sazby_roli_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "sazby_roli_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
       settings: {
         Row: {
           club_default_rate: number | null
@@ -1317,7 +1396,12 @@ export type Database = {
           completed_at: string | null
           created_at: string
           event_id: string
-          hourly_rate: number | null
+          // NOT NULL od migrace 20260827090000_sazby_roli. V `Insert` a `Update`
+          // je pole schválně VOLITELNÉ, i když ho generátor vypisuje jako povinné:
+          // sazbu doplňuje z ceníku BEFORE INSERT trigger `set_shift_rate`,
+          // o kterém `supabase gen types` neví. Kdo typy pregeneruje, dostane
+          // chybu na `useEvents.ts` (insert bez sazby) — a tohle je důvod.
+          hourly_rate: number
           hours_worked: number | null
           id: string
           notes: string | null
@@ -1334,7 +1418,7 @@ export type Database = {
           completed_at?: string | null
           created_at?: string
           event_id: string
-          hourly_rate?: number | null
+          hourly_rate?: number
           hours_worked?: number | null
           id?: string
           notes?: string | null
@@ -1351,7 +1435,7 @@ export type Database = {
           completed_at?: string | null
           created_at?: string
           event_id?: string
-          hourly_rate?: number | null
+          hourly_rate?: number
           hours_worked?: number | null
           id?: string
           notes?: string | null

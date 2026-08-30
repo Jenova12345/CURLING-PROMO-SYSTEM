@@ -10,6 +10,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useSettings, type OpeningHours } from '@/hooks/useSettings';
 import { parseSazba } from '@/lib/money';
 import { BillingSettingsCard } from '@/components/settings/BillingSettingsCard';
+import { SazbyRoliCard } from '@/components/settings/SazbyRoliCard';
 
 const DAYS = [['1', 'Pondělí'], ['2', 'Úterý'], ['3', 'Středa'], ['4', 'Čtvrtek'], ['5', 'Pátek'], ['6', 'Sobota'], ['7', 'Neděle']];
 
@@ -110,7 +111,7 @@ const Settings = () => {
     <div className="p-4 md:p-6 space-y-4 md:space-y-6">
       <div>
         <h1 className="text-2xl md:text-3xl font-bold flex items-center gap-2"><SettingsIcon className="h-6 w-6" /> Nastavení</h1>
-        <p className="text-muted-foreground mt-1 text-sm md:text-base">Ceník, otevírací doba a dráhy.</p>
+        <p className="text-muted-foreground mt-1 text-sm md:text-base">Ceník ledu, sazby brigád, otevírací doba a dráhy.</p>
       </div>
 
       {isLoading ? <div className="text-muted-foreground">Načítám…</div> : (
@@ -136,6 +137,8 @@ const Settings = () => {
               <Button onClick={saveRates} disabled={isSaving}>Uložit ceník</Button>
             </CardContent>
           </Card>
+
+          <SazbyRoliCard />
 
           <BillingSettingsCard />
 

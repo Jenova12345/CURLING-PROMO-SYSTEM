@@ -195,12 +195,29 @@ export type VysledekSazby = { hodnota: number | null; chyba?: string };
  */
 export const SAZBA_STROP = 50_000;
 
+/**
+ * Strop hodinové sazby SMĚNY. Nižší než `SAZBA_STROP`, protože jde o jinou věc:
+ * `SAZBA_STROP` je cena ledu, tohle je mzda za hodinu práce.
+ *
+ * Hodnota drží krok s databází — `validate_shift_claim` hlídá 1–10 000 od
+ * baseline, `shifts_hourly_rate_rozsah` a `sazby_roli_sazba` od migrace
+ * 20260827090000. Kdyby formulář pustil víc, databáze by to odmítla technickou
+ * hláškou o constraintu, kterou uživatel nemá jak přeložit.
+ */
+export const SAZBA_SMENY_STROP = 10_000;
+
 // Vlastní tvar místo holého `Number()`. To je totiž mnohem velkorysejší, než
 // se u sazby hodí: `Number('0x10')` je 16 a `Number('1e3')` je 1000, což by
 // prošlo jako „platná sazba" a nikdo by to nečekal.
 const SAZBA_TVAR = /^-?\d+([.,]\d+)?$/;
 
-export function parseSazba(vstup: string): VysledekSazby {
+/**
+ * @param strop Horní mez. Výchozí je `SAZBA_STROP` (cena ledu); pro sazby směn
+ *   se předává `SAZBA_SMENY_STROP`. Bez tohohle parametru by karta se sazbami
+ *   rolí musela mez kontrolovat sama a duplikovat i formátování hlášky — a dvě
+ *   implementace téhož pravidla se vždycky rozejdou.
+ */
+export function parseSazba(vstup: string, strop: number = SAZBA_STROP): VysledekSazby {
   const text = vstup.trim();
   if (!text) return { hodnota: null };
 
@@ -221,7 +238,7 @@ export function parseSazba(vstup: string): VysledekSazby {
   if (!Number.isInteger(cislo)) {
     return { hodnota: null, chyba: 'Sazba se zadává v celých korunách, bez haléřů.' };
   }
-  if (cislo > SAZBA_STROP) {
+  if (cislo > strop) {
     // Hláška schválně mluví o překlepu, ne o „rozsahu": kdo sem narazí, nepřekročil
     // mez datového typu — nejspíš přidal nulu navíc. Text drží stejnou linku jako
     // hláška z databáze (`check_reservation_money`), aby si obě strany odpovídaly.
@@ -231,7 +248,7 @@ export function parseSazba(vstup: string): VysledekSazby {
     // ji sama odmítá jako „číslo s mezerou". Mezera je tu proto obyčejná.
     // Mez se do textu skládá Z KONSTANTY, ne opisuje: hláška s natvrdo napsaným
     // „50 000" by po změně `SAZBA_STROP` tiše lhala.
-    const mez = String(SAZBA_STROP).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    const mez = String(strop).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
     return { hodnota: null, chyba: `Sazba je nejvýš ${mez} Kč/h. Vyšší číslo je skoro jistě překlep.` };
   }
   return { hodnota: cislo };
