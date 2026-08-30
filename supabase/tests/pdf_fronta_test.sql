@@ -14,6 +14,20 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
+-- -----------------------------------------------------------------------------
+-- PŘEDPOKLAD: NEPLÁTCOVSKÝ REŽIM
+--
+-- Fronta PDF visí na INTERNÍM fakturačním enginu, a ten umí jen režim neplátce
+-- (`20260813140000_faktury_rpc.sql` to tvrdě hlídá). Od migrace
+-- `20260830140000_vat_mode_platce.sql` je hala vedená jako PLÁTCE, takže engine
+-- odmítá vystavit cokoli — je to záměr, ostré doklady pod S2 dělá Fakturoid.
+--
+-- Test proto svůj předpoklad říká nahlas. Celý soubor končí ROLLBACKem, takže
+-- se nastavení nikam nepropíše. Až interní engine vypadne, půjde tenhle soubor
+-- smazat celý — netestuje nic, co by pak ještě existovalo.
+-- -----------------------------------------------------------------------------
+UPDATE public.billing_settings SET vat_mode = 'neplatce' WHERE singleton;
+
 CREATE OR REPLACE FUNCTION pg_temp.tvrd(_podminka boolean, _popis text) RETURNS void
  LANGUAGE plpgsql AS $$
 BEGIN

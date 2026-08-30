@@ -21,6 +21,24 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
+-- -----------------------------------------------------------------------------
+-- PŘEDPOKLAD: NEPLÁTCOVSKÝ REŽIM
+--
+-- Tenhle soubor testuje INTERNÍ fakturační engine (`issue_invoice` a spol.),
+-- a ten umí jen režim neplátce — `20260813140000_faktury_rpc.sql` to tvrdě
+-- hlídá. Od migrace `20260830140000_vat_mode_platce.sql` je hala vedená jako
+-- PLÁTCE, takže engine odmítá vystavit cokoli. Je to záměr: ostré doklady pod
+-- S2 vystavuje Fakturoid a interní engine je na vyřazení.
+--
+-- Testy proto svůj předpoklad říkají NAHLAS, místo aby spoléhaly na výchozí
+-- hodnotu, která se právě změnila. Celý soubor končí ROLLBACKem, takže se
+-- nastavení nikam nepropíše.
+--
+-- ⚠️ AŽ INTERNÍ ENGINE VYPADNE, tenhle soubor jde smazat celý — ne opravit.
+-- Netestuje totiž nic, co by pak ještě existovalo.
+-- -----------------------------------------------------------------------------
+UPDATE public.billing_settings SET vat_mode = 'neplatce' WHERE singleton;
+
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM auth.users WHERE id = '11111111-1111-1111-1111-111111111111')
@@ -217,7 +235,13 @@ BEGIN
   PERFORM pg_temp.tvrd(_f.dodavatel_nazev = 'Curling Promo Ostrava z.s.', 'snapshot dodavatele je na dokladu');
   PERFORM pg_temp.tvrd(_f.dodavatel_iban IS NOT NULL, 'snapshot IBANu je na dokladu (potřebuje ho QR)');
   PERFORM pg_temp.tvrd(_f.odberatel_nazev = 'CK Ostravské kameny', 'snapshot odběratele je na dokladu');
-  PERFORM pg_temp.tvrd(_f.vat_mode = 'neplatce', 'režim DPH je zaznamenaný (dnes neplátce)');
+  -- Snapshot režimu na dokladu, ne dnešní nastavení haly. Tvrzení zní na
+  -- neplátce proto, že si ho tenhle soubor sám nastavil (viz předpoklad na
+  -- začátku) — ne proto, že by hala neplátce byla. Od migrace
+  -- 20260830140000 je PLÁTCE, a dřívější znění téhle hlášky („dnes neplátce")
+  -- by po přepnutí produkce dál zeleně tvrdilo svět, který neplatí.
+  PERFORM pg_temp.tvrd(_f.vat_mode = 'neplatce',
+    'doklad si zaznamenal režim DPH platný v době vystavení (tady neplátce, viz předpoklad souboru)');
   PERFORM pg_temp.tvrd((_r ->> 'cislo') = _f.cislo, 'RPC vrátí totéž číslo, jaké je v dokladu');
 END $$;
 

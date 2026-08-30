@@ -374,10 +374,22 @@ Kromě pastí z `docs/ETAPA2-STAV.md`, kapitola 5, přibylo tohle:
    ```
    supabase secrets set --project-ref <ref> \
      FAKTUROID_SLUG=… FAKTUROID_CLIENT_ID=… FAKTUROID_CLIENT_SECRET=… \
-     FAKTUROID_USER_AGENT='CurlingPromo (kontakt@email)' FAKTUROID_MODE=koncept
+     FAKTUROID_USER_AGENT='CurlingPromo (kontakt@email)' FAKTUROID_MODE=koncept \
+     IS_VAT_PAYER=true
    ```
-4. Deploy funkce `fakturoid-invoice`.
-5. **Týden v režimu `koncept`** — doklady se zakládají, e-maily se neposílají.
+4. **DPH: TŘI MÍSTA, JEDEN OKAMŽIK.** Hala je od bloku B plátce (12 % za led)
+   a přepnout se musí všechno naráz, k datu účinnosti registrace:
+   - `IS_VAT_PAYER=true` v secrets (výš) — řídí fakturoidí cestu,
+   - migrace `20260830140000_vat_mode_platce.sql` — přepne
+     `billing_settings.vat_mode` a tím ZAVŘE interní engine (záměr, ne škoda),
+   - **účet ve Fakturoidu** musí být vedený jako plátce.
+
+   Kterékoli z těch tří pozadu znamená doklad v jiném režimu, než v jakém ho
+   hala vystavit chtěla — a to se opravuje dobropisem, ne přepnutím zpátky.
+   Automatiku přitom NEZAPÍNAT, dokud interní engine nevypadne (podrobnosti
+   v hlavičce té migrace).
+5. Deploy funkce `fakturoid-invoice`.
+6. **Týden v režimu `koncept`** — doklady se zakládají, e-maily se neposílají.
    Teprve pak `FAKTUROID_MODE=odeslat`.
 
 **Integrační testy nikdy nepouštěj s produkčním slugem.** Kromě

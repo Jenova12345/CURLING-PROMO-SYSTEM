@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:fakturoid": "vitest run --config vitest.integration.config.ts",
     "overit:zaokrouhleni": "vite-node scripts/overit-zaokrouhleni.ts",
     "fakturoid:akce": "vite-node scripts/fakturoid-akce.ts"
   },

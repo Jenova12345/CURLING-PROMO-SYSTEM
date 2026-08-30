@@ -22,6 +22,24 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
+-- -----------------------------------------------------------------------------
+-- PŘEDPOKLAD: NEPLÁTCOVSKÝ REŽIM
+--
+-- Tenhle soubor testuje INTERNÍ fakturační engine (`issue_invoice` a spol.),
+-- a ten umí jen režim neplátce — `20260813140000_faktury_rpc.sql` to tvrdě
+-- hlídá. Od migrace `20260830140000_vat_mode_platce.sql` je hala vedená jako
+-- PLÁTCE, takže engine odmítá vystavit cokoli. Je to záměr: ostré doklady pod
+-- S2 vystavuje Fakturoid a interní engine je na vyřazení.
+--
+-- Testy proto svůj předpoklad říkají NAHLAS, místo aby spoléhaly na výchozí
+-- hodnotu, která se právě změnila. Celý soubor končí ROLLBACKem, takže se
+-- nastavení nikam nepropíše.
+--
+-- ⚠️ AŽ INTERNÍ ENGINE VYPADNE, tenhle soubor jde smazat celý — ne opravit.
+-- Netestuje totiž nic, co by pak ještě existovalo.
+-- -----------------------------------------------------------------------------
+UPDATE public.billing_settings SET vat_mode = 'neplatce' WHERE singleton;
+
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM auth.users WHERE id = '11111111-1111-1111-1111-111111111111')

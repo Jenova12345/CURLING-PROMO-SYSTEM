@@ -138,7 +138,7 @@ npm run typecheck                # tsc -b (POZOR: `npx tsc --noEmit` netypuje ni
 Integrační testy proti testovacímu účtu:
 
 ```bash
-FAKTUROID_LIVE=true npx vitest run billing/providers/fakturoid/fakturoid.integration
+npm run test:fakturoid
 ```
 
 Bez `FAKTUROID_LIVE=true` se **přeskočí**, nespadnou — vývojář bez klíčů má mít
@@ -147,16 +147,25 @@ jednoho odběratele (STABILNÍHO napříč běhy) a **dva doklady na každý bě
 jeden klubový (ceny včetně DPH) a jeden komerční (ceny bez DPH). Oba `vat_price_mode`
 se tím ověří naživo.
 
-⚠️ **Doklady po sobě testy NEUKLÍZEJÍ a nikdo je nemaže.** Dřív to byl jeden
-doklad na měsíc (klíč nesl měsíc, ne běh), takže se opakované běhy potkávaly na
-témž dokladu — což byla ta příčina, proč sada padala. Cena za opravu je, že
-teď každý běh dva doklady přidá. Na free tarifu to jde proti kvótě; účet si na
-limit u odběratelů už jednou stěžoval (`quota_exhausted`), proto je odběratel
-stabilní. Až to začne vadit, patří sem teardown.
+**Testy po sobě uklízejí samy.** `afterAll` smaže doklady, které ten běh
+založil — a maže je jen tehdy, když klíč nese razítko běhu A `custom_id` sedí
+na přesnou shodu (serverovému filtru se nevěří, viz komentář v testu).
+Odběratel se ZÁMĚRNĚ nemaže: je stabilní napříč běhy a jeho opakované zakládání
+je to, co kdysi vyčerpalo kvótu (`quota_exhausted`).
+
+Co zbylo z doby, kdy se neuklízelo, nebo když teardown neproběhne (zabitý
+proces), posbírá `scripts/fakturoid-uklid-testy.ts`. Bez `--smazat` běží
+nanečisto a jen vypíše, co by smazal.
+
+⚠️ **Mazání je záměrně MIMO `billing/`.** V ostré číselné řadě se doklad
+nemaže, jen dobropisuje — metoda `smazDoklad` na `InvoiceProvider` by byla
+nabitá zbraň ležící na stole. Žije to v testu a ve skriptu, kam se produkční
+bundle nedostane.
 
 `custom_id` mají tvar `klub-test-{RRRRMMDDHHMMSS}` a `akce-test-{…}` —
 **prefixem `test-` tedy NEZAČÍNAJÍ**, začínají druhem dokladu. Kdo by účet
 uklízel podle `test-` na začátku, nenajde nic; hledat se musí `%-test-%`.
+Přesně to dělá `jeTestovaci` v úklidovém skriptu.
 
 **`FAKTUROID_LIVE=true` samo nestačí.** Musí se navíc do `FAKTUROID_TEST_SLUG`
 opsat slug účtu, na který se smí psát, a musí sedět s `FAKTUROID_SLUG`. Kdo tu

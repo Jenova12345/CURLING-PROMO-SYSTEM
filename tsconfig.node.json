@@ -28,5 +28,5 @@
   // `strict: true` — u peněz je to ta správnější mez. `src/lib/money.ts`, které
   // si `billing/` importuje, se přes `scripts/overit-zaokrouhleni.ts` pod strictem
   // typuje odjakživa, takže tím nic nového nezpřísňuju.
-  "include": ["vite.config.ts", "vitest.config.ts", "tailwind.config.ts", "scripts/**/*.ts", "billing/**/*.ts"]
+  "include": ["vite.config.ts", "vitest.config.ts", "vitest.integration.config.ts", "tailwind.config.ts", "scripts/**/*.ts", "billing/**/*.ts"]
 }

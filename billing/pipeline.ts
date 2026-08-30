@@ -270,6 +270,18 @@ const proc0Nesedi = (draft: InvoiceDraft, u: InvoiceResult): string | null => {
   // se označila za vyfakturovanou — a už nikdy by se nevyfakturovala.
   //
   // Popis řádku nese datum a čas, takže je mezi rezervacemi rozlišuje.
+  //
+  // ⚠️ POD DPH TO STOJÍ NA JEDNOM ZMĚŘENÉM FAKTU: Fakturoid v režimu
+  // `from_total_with_vat` vrací `unit_price` TAK, JAK JSME HO POSLALI —
+  // ne přepočtený na základ. Ověřeno naživo 30. 8. 2026 na účtu `tomastest`
+  // přepnutém na plátce: poslali jsme 800, vrátil 800 (a `subtotal` 1785,72
+  // proti `total` 2000). Cestou `findExistingInvoice`, tedy touhle, taky.
+  //
+  // Kdyby to Fakturoid někdy změnil na 714,29, otisk se rozejde u KAŽDÉ
+  // klubové faktury: druhý běh vrátí `nesedi` místo `existoval`, vazba se
+  // nezapíše a opakované vystavení přestane fungovat. Hlídá to integrační test
+  // („vystaví doklad … a při druhém běhu NEvytvoří duplicitu"), ale jen když ho
+  // někdo pustí — `npm run test:fakturoid`.
   if (u.providerLines) {
     const otisk = (l: { name: string; quantity: number; unitPrice: number }) =>
       `${l.name}|${l.quantity}|${l.unitPrice}`;

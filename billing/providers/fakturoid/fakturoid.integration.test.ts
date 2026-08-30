@@ -15,14 +15,19 @@
 // na plátce se z nich stane ověření plátcovského dokladu naživo.
 //
 // Spuštění:
-//   FAKTUROID_LIVE=true npx vitest run billing/providers/fakturoid/fakturoid.integration
-//   (nebo FAKTUROID_LIVE=true v .env)
+//   npm run test:fakturoid
+//
+// Běžný `npm run test:run` je NESPUSTÍ: `vitest.config.ts` je vylučuje, takže
+// na Fakturoid nesáhne, ať je v `.env` cokoli. Přímé `npx vitest run <soubor>`
+// z téhož důvodu skončí na „No test files found" — filtr se aplikuje až na
+// seznam po `exclude`. Vede sem jedině `vitest.integration.config.ts`.
 
 import { loadEnv } from 'vite';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 
 import { FakturoidProvider } from './index.ts';
-import { nactiConfig } from './config.ts';
+import { nactiConfig, zakladUrl } from './config.ts';
+import { TOKEN_URL, basicHlavicka } from './auth.ts';
 import { stahniPdf, vystavDoklad } from '../../pipeline.ts';
 import { PametovyStore } from '../../store.ts';
 import {
@@ -86,7 +91,8 @@ const rezervace: BillableReservation[] = [
  * neplátcovský, ověřují, že se DPH nikam neplete; jakmile ho někdo přepne na
  * plátce, ověří naživo i sazbu a `vat_price_mode`.
  */
-const jePlatceDph = nactiConfig(env as Record<string, string | undefined>).jePlatceDph;
+const config = () => nactiConfig(env as Record<string, string | undefined>);
+const jePlatceDph = config().jePlatceDph;
 
 const subjekt = {
   id: TEST_KLUB_ID,
@@ -94,6 +100,15 @@ const subjekt = {
   ico: '26512345',
   dic: null,
   address: 'Sportovní 12, 702 00 Ostrava',
+};
+
+/** Klíče dokladů, které tenhle běh doopravdy založil. Podle nich se uklízí. */
+const zalozene: string[] = [];
+
+/** Zaeviduje klíč k úklidu a vrátí ho. Bez toho by teardown neměl co mazat. */
+const kUklidu = (klic: string): string => {
+  if (!zalozene.includes(klic)) zalozene.push(klic);
+  return klic;
 };
 
 /**
@@ -109,6 +124,10 @@ const subjekt = {
  * cizí řádek v cizím dokladu, který si testy samy našly.
  *
  * Tvar klíče hlídá `idempotency.test.ts`; tady jde o providera, ne o klíč.
+ *
+ * ⚠️ KDO BY TENHLE PŘEPIS VRÁTIL ZPÁTKY, ať ví, že sáhne i na úklid: teardown
+ * maže jen klíče, které obsahují razítko běhu (viz `smazTestovaciDoklady`).
+ * Stabilní měsíční klíč by se tedy nesmazal — a je to tak schválně.
  */
 const draftKlub = () => {
   const d = mapujKlubMesicne({
@@ -117,23 +136,120 @@ const draftKlub = () => {
     jePlatceDph,
     rezervace,
   });
-  return d ? { ...d, idempotencyKey: `klub-test-${BEH}` } : null;
+  return d ? { ...d, idempotencyKey: kUklidu(`klub-test-${BEH}`) } : null;
 };
 
 /** KOMERČNÍ doklad — ceny BEZ DPH (`vat_price_mode = without_vat`). */
-const draftAkce = () => mapujKomercniAkci({
-  eventId: `test-${BEH}`,
-  subjekt,
-  jePlatceDph,
-  rezervace,
-});
+const draftAkce = () => {
+  const d = mapujKomercniAkci({
+    eventId: `test-${BEH}`,
+    subjekt,
+    jePlatceDph,
+    rezervace,
+  });
+  // Klíč se BERE Z DRAFTU, neskládá ručně. Ruční `akce-${eventId}` by opisoval
+  // tvar z `idempotency.ts` — a kdyby se prefix někdy změnil, teardown by
+  // přestal cokoli nacházet TIŠE (nenalezený doklad není chyba) a doklady by
+  // se zase začaly vršit.
+  if (d) kUklidu(d.idempotencyKey);
+  return d;
+};
 
 /** Zpětná kompatibilita pro testy, kterým je typ dokladu jedno. */
 const draft = draftKlub;
 
+// -----------------------------------------------------------------------------
+// ÚKLID PO BĚHU
+//
+// Testy zakládají na účtu dva doklady na běh. Bez úklidu jich tam za pár týdnů
+// práce na fakturaci leží desítky (napočítalo se 25) a na free tarifu to jde
+// proti kvótě — účet si na limit u odběratelů už jednou stěžoval.
+//
+// ⚠️ MAZÁNÍ ZÁMĚRNĚ NENÍ V `billing/`. Produkční kód nesmí umět doklad smazat,
+// ani omylem: v ostré číselné řadě se doklad NEMAŽE, jen dobropisuje, a metoda
+// `smazDoklad` na `InvoiceProvider` by byla nabitá zbraň ležící na stole.
+// Tady je to holý `fetch` v testovacím souboru, který se do produkčního bundlu
+// nikdy nedostane — a má vlastní pojistku na testovací účet.
+//
+// Odběratel se ZÁMĚRNĚ NEMAŽE: je stabilní napříč běhy a jeho opakované
+// zakládání je to, co kdysi vyčerpalo kvótu.
+// -----------------------------------------------------------------------------
+const smazTestovaciDoklady = async (): Promise<void> => {
+  // CELÉ TĚLO je v `try`, ne jen mazací smyčka. Získání tokenu i `json()` můžou
+  // hodit (spadlá síť, DNS, prázdné tělo) a v `afterAll` by z toho byl pád sady
+  // PO doběhnutých testech — tedy červená, která o jejich výsledku nic neříká.
+  try {
+    if (!live || zalozene.length === 0) return;
+
+    // Pojistka na účet. Je to TÁŽ podmínka jako v `potvrzeno` výš, ne nezávislá
+    // třetí — obojí porovnává `FAKTUROID_SLUG` s `FAKTUROID_TEST_SLUG`. Smysl má
+    // jako obrana proti budoucímu přepisu `live`, ne jako další vrstva.
+    if (config().slug !== povolenyUcet) {
+      console.warn('[ÚKLID] slug se neshoduje s FAKTUROID_TEST_SLUG — nemažu nic.');
+      return;
+    }
+
+    const c = config();
+    const tokenOdpoved = await fetch(TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: basicHlavicka(c.clientId, c.clientSecret),
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'User-Agent': c.userAgent,
+      },
+      body: JSON.stringify({ grant_type: 'client_credentials' }),
+    });
+    if (!tokenOdpoved.ok) {
+      console.warn(`[ÚKLID] token se nepodařilo získat (${tokenOdpoved.status}) — doklady zůstaly.`);
+      return;
+    }
+    const token = ((await tokenOdpoved.json()) as { access_token: string }).access_token;
+    const zaklad = zakladUrl(c.slug);
+    const hlavicky = { Authorization: `Bearer ${token}`, 'User-Agent': c.userAgent, Accept: 'application/json' };
+
+    for (const klic of zalozene) {
+      // ⚠️ RAZÍTKO BĚHU JE PODMÍNKA MAZÁNÍ, ne jen tvar klíče.
+      // Teardown maže podle klíčů, ne podle toho, co doopravdy založil. Kdyby
+      // se `draftKlub` vrátil ke stabilnímu měsíčnímu klíči, smazal by klubu
+      // jeho měsíční doklad. Tahle podmínka tu past zavírá předem.
+      if (!klic.includes(BEH)) {
+        console.warn(`[ÚKLID] ${klic} nenese razítko tohohle běhu — nemažu.`);
+        continue;
+      }
+
+      const r = await fetch(`${zaklad}/invoices.json?custom_id=${encodeURIComponent(klic)}`, { headers: hlavicky });
+      if (!r.ok) continue;
+      const nalezene = await r.json();
+      if (!Array.isArray(nalezene)) continue;
+
+      // ⚠️ SERVEROVÉMU FILTRU SE NEVĚŘÍ. Produkční `findExistingInvoice`
+      // (`index.ts`) si `custom_id` po Fakturoidu znovu ověřuje a při neshodě
+      // hlasitě spadne — s odůvodněním, že kdyby filtr přestal fungovat, vrátil
+      // by první stránku CIZÍCH dokladů. Tady by je ta první stránka SMAZALA,
+      // a to na účtu, kde vedle testovacích leží i doklady, které tam patří.
+      // Slabší pojistka nesmí být zrovna na té cestě, co běží automaticky.
+      for (const f of nalezene.filter((x) => x?.custom_id === klic)) {
+        const d = await fetch(`${zaklad}/invoices/${f.id}.json`, { method: 'DELETE', headers: hlavicky });
+        console.info(`[ÚKLID] ${f.number} (${klic}) → ${d.status}`);
+      }
+    }
+  } catch (e) {
+    // Selhání úklidu NESMÍ shodit sadu: testy už doběhly a jejich výsledek
+    // platí. Nedomazaný doklad je nepořádek, ne chyba měření.
+    console.warn('[ÚKLID] nepodařilo se uklidit:', e instanceof Error ? e.message : e);
+  }
+};
+
 describe.skipIf(!live)('Fakturoid — živý testovací účet', () => {
+  // 60 s, ne výchozích 10: teardown dělá až pět SÉRIOVÝCH volání na Fakturoid
+  // (token + na každý klíč GET a DELETE) a ten je pomalý — proto mají i jednotlivé
+  // testy v tomhle souboru 30–60 s. S výchozím hookem by „Hook timed out in
+  // 10000ms" shodil celou sadu, tedy přesně to, čemu se `try/catch` výš vyhýbá.
+  afterAll(smazTestovaciDoklady, 60_000);
+
   const provider = () => new FakturoidProvider({
-    config: nactiConfig(env as Record<string, string | undefined>),
+    config: config(),
     fetch: globalThis.fetch as never,
   });
 
