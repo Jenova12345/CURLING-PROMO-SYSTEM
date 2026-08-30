@@ -329,6 +329,21 @@ Věci, které se v týhle codebase tvářily jinak, než jsou:
   a jen reference. Používej `npm run typecheck` (`tsc -b`).
 - **`npm run lint` je červený už na HEADu** (66 errors z Etapy 1). Jako brána
   nefunguje — nový error od šumu nikdo nerozezná.
+- **Test NEODLIŠÍ „guard to nedovolil" od „udělal to a odrolloval".** `RAISE`
+  uvnitř plpgsql funkce vrátí CELÝ příkaz, včetně zápisů, které funkce stihla
+  udělat před ním. Tvrzení typu „a nic se přitom nezamklo" tedy platí bez ohledu
+  na to, kde v těle guard stojí — doložila to databázová brána mutací: guard
+  přesunutý až ZA zabrání rezervací nechal test zelený.
+  Dokazatelné je jen „po odmítnutí nezůstalo nic zamčené"; to je slabší tvrzení,
+  ale pravdivé, a jako regresní pojistka stačí. Umístit guard na začátek má jiné
+  důvody (nebrat zbytečně zámky řádků, nemíchat se do pořadí zamykání) —
+  a ty se testem zevnitř jedné transakce neprokážou.
+  Vzor, jak to napsat poctivě: `supabase/tests/vat_mode_guard_test.sql`.
+- **Tvrzení o stavu CELÉ tabulky je falešně červené jinde než na čerstvém seedu.**
+  `IF EXISTS (SELECT 1 FROM reservations WHERE invoice_id IS NOT NULL)` prošlo
+  jen proto, že seed nemá ani jednu vyfakturovanou rezervaci; na demu nebo
+  v půlce měsíce by obvinilo kód, který se zachoval správně. Měř ROZDÍL
+  (`count(*)` před a po), ne stav světa.
 - **`SET LOCAL ROLE authenticated` NESTAČÍ na guardy, které se ptají na `session_user`.**
   Mění `current_user`, ale `session_user` zůstává `postgres` — takže test spadne do
   větve pro cron a tvrdí otevřeno tam, kde je zavřeno. Je to patro pod pravidlem 8
