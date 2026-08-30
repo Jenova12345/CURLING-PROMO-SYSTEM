@@ -269,18 +269,55 @@ const proc0Nesedi = (draft: InvoiceDraft, u: InvoiceResult): string | null => {
   }
 
   // Bez řádků zbývá jen částka — slabší, ale pořád lepší než nic.
+  // Porovnává se týmž pravidlem jako v `zkontrolujSoucet`: u dokladu s cenami
+  // bez DPH proti základu daně, jinak proti celkové částce.
   const nase = roundCzk(soucetRadku(draft.lines));
-  if (u.providerTotal === undefined) {
-    return `Doklad ${oznaceni} existuje, ale provider nevrátil ani řádky, ani celkovou částku, ` +
-      'takže nejde ověřit, že odpovídá dnešnímu podkladu. Vazba se nezapsala.';
+  const castka = castkaKPorovnani(draft, u);
+  if (castka === undefined) {
+    return `Doklad ${oznaceni} existuje, ale provider nevrátil ani řádky, ani částku, se kterou ` +
+      'se dá náš podklad porovnat, takže nejde ověřit, že mu odpovídá. Vazba se nezapsala.';
   }
 
-  const rozdil = Math.abs(u.providerTotal - nase);
+  const rozdil = Math.abs(castka.hodnota - nase);
   if (rozdil > TOLERANCE_KC) {
-    return `Doklad ${oznaceni} zní na ${u.providerTotal} Kč, ale dnešní podklad dává ${nase} Kč ` +
-      `(rozdíl ${rozdil.toFixed(2)} Kč). Vazba se nezapsala.`;
+    return `Doklad ${oznaceni} zní na ${castka.hodnota} Kč (${castka.popis}), ale dnešní podklad ` +
+      `dává ${nase} Kč (rozdíl ${rozdil.toFixed(2)} Kč). Vazba se nezapsala.`;
   }
   return null;
+};
+
+/**
+ * Která částka od providera odpovídá NAŠEMU součtu řádků.
+ *
+ * Tohle je celá podstata DPH v kontrolním součtu a stojí za to ji přečíst
+ * pomalu. `soucetRadku` sečte to, co je na řádcích:
+ *
+ *   • klubová faktura (`pricesIncludeVat = true`) → částka VČETNĚ daně
+ *     → protějšek je `providerTotal`
+ *   • komerční faktura (`pricesIncludeVat = false`) → ZÁKLAD bez daně
+ *     → protějšek je `providerSubtotal`
+ *   • neplátce (`undefined`) → obě čísla jsou stejná, bere se `providerTotal`
+ *
+ * Kdyby se u komerčky porovnal základ s celkovou částkou, rozdíl by vyšel
+ * PŘESNĚ ve výši DPH — u 12 % a dokladu za 5 000 Kč tedy 600 Kč. To by
+ * neprošlo jako zaokrouhlení, spustilo by to poplach „kontrolní součet nesedí"
+ * na každé komerční faktuře, a hledala by se chyba v mapování, která tam není.
+ *
+ * Vrací `undefined`, když provider potřebné číslo nedodal — volající to musí
+ * ohlásit, ne mlčky přeskočit.
+ */
+const castkaKPorovnani = (
+  draft: InvoiceDraft,
+  u: InvoiceResult,
+): { hodnota: number; popis: string } | undefined => {
+  if (draft.pricesIncludeVat === false) {
+    return u.providerSubtotal === undefined
+      ? undefined
+      : { hodnota: u.providerSubtotal, popis: 'základ bez DPH' };
+  }
+  return u.providerTotal === undefined
+    ? undefined
+    : { hodnota: u.providerTotal, popis: draft.pricesIncludeVat ? 'celkem s DPH' : 'celkem' };
 };
 
 /**
@@ -293,30 +330,34 @@ const proc0Nesedi = (draft: InvoiceDraft, u: InvoiceResult): string | null => {
 const zkontrolujSoucet = (draft: InvoiceDraft, u: InvoiceResult): Varovani | null => {
   const oznaceni = u.number || u.providerInvoiceId;
 
-  if (u.providerTotal === undefined) {
+  const uProvidera = castkaKPorovnani(draft, u);
+  if (uProvidera === undefined) {
     return {
       kod: 'kontrolni_soucet',
-      zprava: `Doklad ${oznaceni} vznikl, ale provider nevrátil celkovou částku — ` +
-        'kontrolní součet se neověřil.',
+      zprava: draft.pricesIncludeVat === false
+        ? `Doklad ${oznaceni} vznikl, ale provider nevrátil základ daně — u dokladu ` +
+          's cenami bez DPH se kontrolní součet nedá ověřit proti celkové částce.'
+        : `Doklad ${oznaceni} vznikl, ale provider nevrátil celkovou částku — ` +
+          'kontrolní součet se neověřil.',
     };
   }
 
   const nase = roundCzk(soucetRadku(draft.lines));
-  const rozdil = Number((u.providerTotal - nase).toFixed(2));
+  const rozdil = Number((uProvidera.hodnota - nase).toFixed(2));
 
   if (Math.abs(rozdil) > TOLERANCE_KC) {
     return {
       kod: 'kontrolni_soucet',
-      zprava: `KONTROLNÍ SOUČET NESEDÍ: doklad ${oznaceni} zní na ${u.providerTotal} Kč, ` +
-        `my jsme poslali ${nase} Kč (rozdíl ${rozdil} Kč).`,
+      zprava: `KONTROLNÍ SOUČET NESEDÍ: doklad ${oznaceni} zní na ${uProvidera.hodnota} Kč ` +
+        `(${uProvidera.popis}), my jsme poslali ${nase} Kč (rozdíl ${rozdil} Kč).`,
     };
   }
   // Do půl koruny je to rozdíl zaokrouhlovacích pravidel — čekaný, ale ne němý.
   if (rozdil !== 0) {
     return {
       kod: 'zaokrouhleni',
-      zprava: `Zaokrouhlení se liší o ${rozdil} Kč (doklad ${u.providerTotal} Kč, ` +
-        `náš podklad ${nase} Kč). V mezích, ale stojí za zápis.`,
+      zprava: `Zaokrouhlení se liší o ${rozdil} Kč (doklad ${uProvidera.hodnota} Kč ` +
+        `${uProvidera.popis}, náš podklad ${nase} Kč). V mezích, ale stojí za zápis.`,
     };
   }
   return null;

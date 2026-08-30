@@ -45,13 +45,70 @@ FAKTUROID_CLIENT_ID=       # Nastavení → API, grant client_credentials
 FAKTUROID_CLIENT_SECRET=
 FAKTUROID_USER_AGENT=      # POVINNÉ, jinak 400. Tvar: "CurlingPromo (kontakt@email)"
 BILLING_DUE_DAYS=14
-IS_VAT_PAYER=false
+IS_VAT_PAYER=true           # plátce; led dostane 12 %, viz sekce DPH níž
 FAKTUROID_LIVE=false
 FAKTUROID_TEST_SLUG=      # druhá pojistka, viz níž
 ```
 
 `.env` i `.env.*` drží `.gitignore` (výjimka je jen `.env.example`), takže se
 klíč nedá commitnout omylem. Zkontrolovat se to dá `git check-ignore -v .env`.
+
+## DPH
+
+Přepíná to `IS_VAT_PAYER`. U **neplátce** se neposílá nic — ani `vat_rate` na
+řádku, ani `vat_price_mode` na dokladu, ani DIČ odběratele. Nula by nebyla
+totéž co „mimo režim DPH".
+
+U **plátce** platí:
+
+| | Klubová faktura | Komerční faktura |
+|---|---|---|
+| sazba za led | 12 % (`SAZBA_DPH_LED`) | 12 % |
+| ceny na řádcích | **včetně DPH** | **bez DPH** |
+| `vat_price_mode` u Fakturoidu | `from_total_with_vat` | `without_vat` |
+| protějšek pro kontrolní součet | `total` | `subtotal` |
+
+**Rozhoduje o tom typ dokladu, ne provider.** Nastavuje to mapovací vrstva
+(`mapujKlubMesicne` / `mapujKomercniAkci`) a provider to jen přeloží.
+
+### Proč to má kontrolní součet složitější
+
+`soucetRadku` sečte to, co je na řádcích. Pod DPH to znamená jednou částku
+s daní (klub) a jednou základ bez daně (komerce), takže se u providera musí
+porovnávat proti jinému číslu. Kdyby se základ porovnal s celkovou částkou,
+rozdíl by vyšel **přesně ve výši DPH** — u dokladu za 5 000 Kč tedy 600 Kč.
+To neprojde jako zaokrouhlení a vypadalo by to jako chyba mapování.
+
+Dělá to `castkaKPorovnani` v `pipeline.ts`; rovnice z CLAUDE.md se tím nemění,
+jen se počítá poctivě.
+
+### Co se odsud NEPOSÍLÁ
+
+**DIČ dodavatele.** Bere si ho Fakturoid z nastavení účtu. Poslat ho odsud by
+znamenalo mít ho na dvou místech a nechat je rozejít se. Odběratelské DIČ se
+tahá z ARESu jako dosud — a u spolku bez registrace k DPH prostě není, což je
+běžný stav, ne chyba.
+
+### ⚠️ Dva zdroje pravdy o tom, jestli je hala plátce
+
+`IS_VAT_PAYER` řídí **fakturoidí cestu** (tenhle adresář). Vedle toho žije
+`billing_settings.vat_mode` v databázi, které řídí **interní engine** (PDF
+dokladu, `supabase/functions/_shared/pdfDoklad.ts`). Jsou to dvě nezávislá
+nastavení téže věci.
+
+Pod S2 se ostré doklady vystavují jen fakturoidí cestou, takže to dnes nebolí —
+ale dokud interní engine existuje, dá se přes něj vyrobit doklad ve špatném
+režimu. **Při přepnutí na plátce se musí přepnout obojí**, i kdyby se interní
+engine neměl používat. Sjednocení patří k témuž ticketu jako jeho vyřazení
+(viz `docs/ETAPA3-STAV.md`).
+
+### Sazba je konstanta, ne nastavení
+
+`SAZBA_DPH_LED` žije v `mapping.ts`. Sazba se nemění provozním rozhodnutím, ale
+zákonem — změna proto má být commit, který projde branami a je vidět v historii,
+ne hodnota přepsaná ve formuláři. Konstanta se jmenuje `…_LED` schválně: až
+přibudou volitelné položky (salonek, občerstvení), budou mít sazbu vlastní.
+Občerstvení není sportovní služba.
 
 ## Kam přijdou ostré klíče
 

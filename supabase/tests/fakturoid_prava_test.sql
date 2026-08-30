@@ -54,6 +54,23 @@ DECLARE
   ];
   _odmitnuto boolean;
 BEGIN
+  -- ⚠️ CLAIMY JSOU TU NUTNÉ, jinak je test FALEŠNĚ ČERVENÝ (a byl).
+  --
+  -- `fakturoid_smi_volat()` má třetí větev:
+  --     auth.uid() IS NULL AND session_user IN ('postgres','supabase_admin')
+  -- což je vědomá záchranná cesta pro migrace a psql. Jenže `SET LOCAL ROLE`
+  -- mění `current_user`, NE `session_user` — ten zůstane `postgres`. Bez claimů
+  -- je tedy `auth.uid()` NULL, guard pustí VŠECHNO a každé tvrzení „authenticated
+  -- bez admina NEPROJDE" spadne. Test tak hlásil deset selhání, přestože funkce
+  -- jsou zavřené správně (ověřeno zvlášť: člen s claimy dostane „Nemáte
+  -- oprávnění číst fakturoidí doklady.").
+  --
+  -- Je to zrcadlový obraz pasti z CLAUDE.md, bod 8: tam test tvrdil zavřeno
+  -- o otevřeném okně, tady tvrdil otevřeno o zavřených dveřích. Obojí končí
+  -- tím, že se výsledku přestane věřit.
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"44444444-4444-4444-4444-444444444444"}', true);   -- běžný člen, ne admin
+
   FOREACH _fn IN ARRAY _volani LOOP
     _odmitnuto := false;
     BEGIN
@@ -75,6 +92,11 @@ END $$;
 DO $$
 DECLARE _odmitnuto boolean := false;
 BEGIN
+  -- Anon claimy nemá (nikdo přihlášený není), ale `session_user` je pořád
+  -- `postgres` — viz vysvětlení výš. Bez tohohle by i tenhle blok měřil
+  -- záchrannou cestu pro migrace, ne práva anonyma.
+  PERFORM set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000000"}', true);
+
   BEGIN
     SET LOCAL ROLE anon;
     PERFORM public.fakturoid_je_vyfakturovana(gen_random_uuid());

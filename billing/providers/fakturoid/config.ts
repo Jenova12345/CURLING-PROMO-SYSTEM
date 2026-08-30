@@ -16,7 +16,12 @@ export interface FakturoidConfig {
   userAgent: string;
   /** Splatnost ve dnech (`BILLING_DUE_DAYS`). */
   dueDays: number;
-  /** `IS_VAT_PAYER` — u neplátce se neposílá DIČ ani sazba DPH. */
+  /**
+   * `IS_VAT_PAYER` — u neplátce se neposílá DIČ ani sazba DPH.
+   *
+   * Nesmyslná hodnota je CHYBA, ne default: překlep by tiše znamenal neplátce
+   * a doklady by šly bez daně. To se nepozná v logu, ale u finančního úřadu.
+   */
   jePlatceDph: boolean;
   /** `FAKTUROID_LIVE` — dokud je false, integrační testy se přeskočí. */
   live: boolean;
@@ -42,9 +47,12 @@ const POVINNE = [
   'FAKTUROID_SLUG', 'FAKTUROID_CLIENT_ID', 'FAKTUROID_CLIENT_SECRET', 'FAKTUROID_USER_AGENT',
 ] as const;
 
+const ANO: readonly string[] = ['true', '1', 'yes', 'ano'];
+const NE: readonly string[] = ['false', '0', 'no', 'ne'];
+
 /** „true“/„1“/„yes“ ano, cokoli jiného (i prázdno) ne. */
 const jeAno = (hodnota: string | undefined): boolean =>
-  ['true', '1', 'yes', 'ano'].includes((hodnota ?? '').trim().toLowerCase());
+  ANO.includes((hodnota ?? '').trim().toLowerCase());
 
 export const nactiConfig = (env: Record<string, string | undefined>): FakturoidConfig => {
   const chybi = POVINNE.filter((k) => !(env[k] ?? '').trim());
@@ -87,6 +95,18 @@ export const nactiConfig = (env: Record<string, string | undefined>): FakturoidC
     );
   }
   const rezim: FakturoidRezim = zadanyRezim === 'odeslat' ? 'odeslat' : 'koncept';
+
+  // Táž úvaha jako u FAKTUROID_MODE, a u daňového režimu platí SILNĚJI.
+  // `jeAno` bere jen `true/1/yes/ano`, takže `IS_VAT_PAYER=ture` by mlčky
+  // znamenalo NEPLÁTCE a doklady by šly bez DPH — a přišlo by se na to
+  // u finančního úřadu, ne v logu. Prázdno je default (neplátce), nesmysl chyba.
+  const zadanoDph = (env.IS_VAT_PAYER ?? '').trim().toLowerCase();
+  if (zadanoDph !== '' && !ANO.includes(zadanoDph) && !NE.includes(zadanoDph)) {
+    throw new BillingValidationError(
+      `IS_VAT_PAYER musí být „true" nebo „false" (dostal jsem „${zadanoDph}").`,
+      'IS_VAT_PAYER',
+    );
+  }
 
   return {
     slug: env.FAKTUROID_SLUG!.trim(),

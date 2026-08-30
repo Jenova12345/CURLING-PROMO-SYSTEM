@@ -119,8 +119,36 @@ const main = async () => {
   console.log(`  účet:       ${config.slug}`);
   console.log('  řádky:');
   for (const l of draft.lines) console.log(`     ${l.quantity} ${l.unitName} × ${KC(l.unitPrice)}   ${l.name}`);
-  console.log(`  celkem:     ${KC(roundCzk(soucetRadku(draft.lines)))}`);
-  console.log('  DPH:        neposíláme (neplátce)   ·   číslo a VS přiděluje Fakturoid\n');
+  // DPH SE MUSÍ VYPSAT PODLE SKUTEČNOSTI, ne natvrdo.
+  //
+  // Tenhle výpis je POSLEDNÍ, co operátor vidí, než vznikne doklad v ostré
+  // číselné řadě — a ten se opravuje dobropisem, ne přepnutím zpátky. Dřív tu
+  // stálo natvrdo „neposíláme (neplátce)", takže po zapnutí `IS_VAT_PAYER` by
+  // skript poslal sazbu 12 % a u toho operátorovi napsal, že žádnou DPH
+  // neposílá. Našla to bezpečnostní brána.
+  //
+  // A „celkem" u komerční akce taky lhalo: pod plátcem je `soucetRadku` ZÁKLAD
+  // bez daně, takže operátor viděl 5 000 Kč a odběrateli přišla faktura na
+  // 5 600 Kč. Popisek se proto řídí tím, co `pricesIncludeVat` znamená.
+  const soucet = roundCzk(soucetRadku(draft.lines));
+  const sazba = draft.lines.find((l) => l.vatRate !== undefined)?.vatRate;
+
+  if (sazba === undefined) {
+    console.log(`  celkem:     ${KC(soucet)}`);
+    console.log('  DPH:        neposíláme (neplátce)   ·   číslo a VS přiděluje Fakturoid\n');
+  } else if (draft.pricesIncludeVat) {
+    console.log(`  celkem:     ${KC(soucet)}   (ceny VČETNĚ DPH)`);
+    console.log(`  DPH:        ${sazba} % · ceny na řádcích jsou S DANÍ (vat_price_mode=from_total_with_vat)`);
+    console.log('              číslo a VS přiděluje Fakturoid\n');
+  } else {
+    // Dopočet je JEN pro výpis, na doklad se neposílá — daň počítá Fakturoid.
+    // Proto „≈": naše zaokrouhlení nemusí sedět s jeho na haléř.
+    const sDani = roundCzk(soucet * (1 + sazba / 100));
+    console.log(`  základ:     ${KC(soucet)}   (ceny BEZ DPH)`);
+    console.log(`  s daní:     ≈ ${KC(sDani)}   ← tolik zaplatí odběratel`);
+    console.log(`  DPH:        ${sazba} % · ceny na řádcích jsou BEZ DANĚ (vat_price_mode=without_vat)`);
+    console.log('              číslo a VS přiděluje Fakturoid\n');
+  }
 
   const v = await vystavDoklad({
     draft,

@@ -371,6 +371,20 @@ describe('createInvoice', () => {
     expect(Object.keys(telo.lines[0])).not.toContain('vat_rate');
   });
 
+  it('přečte subtotal jako providerSubtotal — bez něj nejde ověřit komerční doklad', async () => {
+    const { fn } = mockFetch([
+      TOKEN_OK,
+      () => odpoved(201, {
+        id: 556, number: '20260013', variable_symbol: '20260013', status: 'open',
+        custom_id: DRAFT.idempotencyKey, total: '1400.00', subtotal: '1250.00',
+      }),
+    ]);
+    const p = new FakturoidProvider({ config: CONFIG, fetch: fn, cekej: hnedCekej });
+    const v = await p.createInvoice(DRAFT, '42');
+    expect(v.providerTotal).toBe(1400);
+    expect(v.providerSubtotal).toBe(1250);
+  });
+
   it('posílá custom_id (klíč idempotence) a splatnost ve dnech', async () => {
     const { telo } = await vytvor();
     expect(telo.custom_id).toBe('klub-abc-202608');
@@ -382,6 +396,62 @@ describe('createInvoice', () => {
     expect('issued_on' in (await vytvor()).telo).toBe(false);
     const { telo } = await vytvor({ ...DRAFT, issuedOn: '2026-08-24' });
     expect(telo.issued_on).toBe('2026-08-24');
+  });
+
+  // ---------------------------------------------------------------------------
+  // DPH
+  //
+  // Provider o DPH SÁM NEROZHODUJE — jen přeloží, co má v draftu. Rozhodnutí,
+  // že klubový doklad má ceny s daní a komerční bez ní, patří mapovací vrstvě
+  // (`billing/mapping.ts`), a tyhle testy hlídají, že se provider do toho
+  // rozhodování neplete a zároveň ho nezahodí.
+  // ---------------------------------------------------------------------------
+  it('u plátce pošle vat_rate na řádku', async () => {
+    const { telo } = await vytvor({
+      ...DRAFT,
+      lines: [{ ...DRAFT.lines[0], vatRate: 12 }],
+      pricesIncludeVat: true,
+    });
+    expect(telo.lines[0].vat_rate).toBe(12);
+  });
+
+  it('KLUBOVÝ doklad → vat_price_mode = from_total_with_vat (ceny s daní)', async () => {
+    const { telo } = await vytvor({
+      ...DRAFT,
+      lines: [{ ...DRAFT.lines[0], vatRate: 12 }],
+      pricesIncludeVat: true,
+    });
+    // Kdyby tenhle režim chyběl, Fakturoid by klubovou cenu (vedenou včetně DPH)
+    // pochopil jako základ a daň přidal navrch — klub by dostal fakturu o 12 %
+    // vyšší, než jakou mu hala slíbila.
+    expect(telo.vat_price_mode).toBe('from_total_with_vat');
+  });
+
+  it('KOMERČNÍ doklad → vat_price_mode = without_vat (ceny bez daně)', async () => {
+    const { telo } = await vytvor({
+      ...DRAFT,
+      type: 'commercial_event',
+      lines: [{ ...DRAFT.lines[0], vatRate: 12 }],
+      pricesIncludeVat: false,
+    });
+    expect(telo.vat_price_mode).toBe('without_vat');
+  });
+
+  it('u neplátce nepošle ani vat_rate, ani vat_price_mode', async () => {
+    const { telo } = await vytvor();
+    expect('vat_price_mode' in telo).toBe(false);
+    expect(Object.keys(telo.lines[0])).not.toContain('vat_rate');
+  });
+
+  it('DIČ dodavatele se neposílá — bere si ho Fakturoid z nastavení účtu', async () => {
+    const { telo } = await vytvor({
+      ...DRAFT,
+      lines: [{ ...DRAFT.lines[0], vatRate: 12 }],
+      pricesIncludeVat: true,
+    });
+    // Kdyby se posílalo odsud, bylo by na dvou místech a rozešlo by se.
+    expect(Object.keys(telo)).not.toContain('supplier_vat_no');
+    expect(Object.keys(telo)).not.toContain('vat_no');
   });
 
   it('nečíselné id odběratele je chyba u nás, ne request na Fakturoid', async () => {

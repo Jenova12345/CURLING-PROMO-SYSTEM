@@ -4,7 +4,8 @@
 //   • `number` ani `variable_symbol` — přiděluje je Fakturoid. Poslat je znamená
 //     vzít si zpátky odpovědnost za číselnou řadu, což je přesně to, čemu se
 //     napojením vyhýbáme.
-//   • `vat_rate` na řádku — hala je neplátce. Nula by nebyla totéž co „mimo režim“.
+//   • DIČ dodavatele — bere si ho Fakturoid z nastavení účtu. Poslat ho odsud by
+//     znamenalo mít ho na dvou místech a nechat je rozejít se.
 //
 // PÁROVÁNÍ PŘES `custom_id`: u odběratele `subj-{ourSubjectId}`, u dokladu náš
 // klíč idempotence. Díky tomu se dá po ztracené odpovědi zjistit, jestli doklad
@@ -36,6 +37,8 @@ interface FInvoice {
   custom_id: string | null;
   /** Fakturoid posílá částky jako řetězce („3752.00"). */
   total: string | number | null;
+  /** Základ daně, tedy částka BEZ DPH. U neplátce se rovná `total`. */
+  subtotal: string | number | null;
   lines: FLine[] | null;
 }
 
@@ -251,11 +254,24 @@ export class FakturoidProvider implements InvoiceProvider {
         quantity: l.quantity,
         unit_name: l.unitName,
         unit_price: l.unitPrice,
-        // `vat_rate` tu ZÁMĚRNĚ není — u neplátce není nulová sazba totéž
-        // co „mimo režim DPH“ a doklad by to popsal špatně.
+        // U NEPLÁTCE se `vat_rate` neposílá vůbec. Nula by znamenala
+        // „osvobozeno", což je jiný daňový režim než „mimo DPH“, a doklad by to
+        // popsal špatně. Rozhoduje o tom mapovací vrstva, ne provider —
+        // sem se to dostane jen jako vyplněné/nevyplněné pole.
+        ...(l.vatRate !== undefined ? { vat_rate: l.vatRate } : {}),
       })),
     };
     if (draft.issuedOn) telo.issued_on = draft.issuedOn;
+
+    // `vat_price_mode` říká Fakturoidu, JAK ČÍST `unit_price` — jestli je to
+    // základ daně, nebo částka s daní. Bez něj by si doklad vyložil klubové
+    // ceny (vedené včetně DPH) jako základ a připočetl daň navrch, takže by
+    // klub dostal fakturu o 12 % vyšší, než jakou mu hala slíbila.
+    //
+    // Posílá se jen u plátce; u neplátce nemá co určovat.
+    if (draft.pricesIncludeVat !== undefined) {
+      telo.vat_price_mode = draft.pricesIncludeVat ? 'from_total_with_vat' : 'without_vat';
+    }
 
     const doklad = await this.#json<FInvoice>('/invoices.json', {
       method: 'POST',
@@ -279,6 +295,7 @@ export class FakturoidProvider implements InvoiceProvider {
       ...(f.public_html_url ? { publicUrl: f.public_html_url } : {}),
       status: f.status ?? 'unknown',
       ...(cislo(f.total) !== undefined ? { providerTotal: cislo(f.total) } : {}),
+      ...(cislo(f.subtotal) !== undefined ? { providerSubtotal: cislo(f.subtotal) } : {}),
       ...(Array.isArray(f.lines) ? { providerLines: f.lines.map(naRadek).filter(jeRadek) } : {}),
     };
   }

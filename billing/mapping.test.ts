@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  JEDNOTKA, SPLATNOST_DNI, mapujKlubMesicne, mapujKomercniAkci, mapujSubjekt,
+  JEDNOTKA, SAZBA_DPH_LED, SPLATNOST_DNI, mapujKlubMesicne, mapujKomercniAkci, mapujSubjekt,
   popisAkce, popisKlubu, soucetRadku,
   type BillableReservation, type SubjectForBilling,
 } from './mapping.ts';
@@ -276,5 +276,96 @@ describe('kontrolní součet — řádky dokladu vs. „Kdo kolik dluží“', (
       subjekt: KLUB, obdobiOd: '2026-08-01', jePlatceDph: false, rezervace: rezervace.slice(0, 2),
     })!;
     expect(soucetRadku(bezJednoho.lines)).not.toBe(dluziZaMesic);
+  });
+});
+
+// =============================================================================
+// DPH — MECHANISMUS
+//
+// Konkrétní částky ceníku (klub včetně daně, komerce bez ní) přijdou zvlášť.
+// Tady se testuje jen to, CO mapování o dani tvrdí — ne kolik stojí hodina ledu.
+// =============================================================================
+describe('DPH — co mapování rozhoduje', () => {
+  const rez: BillableReservation[] = [{
+    id: 'r1', start_at: '2026-08-04T16:00:00Z', end_at: '2026-08-04T17:30:00Z',
+    sheet_name: 'Dráha 1', event_title: 'Trénink', hodiny: 1.5, sazba: 1000, castka: 1500,
+  }];
+  const SUBJ = { id: 'k1', name: 'SK Curling', ico: '26512345', dic: 'CZ26512345', address: 'Ostrava' };
+
+  describe('u NEPLÁTCE se DPH nikam nepřimíchá', () => {
+    const klub = mapujKlubMesicne({ subjekt: SUBJ, obdobiOd: '2026-08-01', jePlatceDph: false, rezervace: rez })!;
+    const akce = mapujKomercniAkci({ eventId: 'e1', subjekt: SUBJ, jePlatceDph: false, rezervace: rez })!;
+
+    it('řádek nemá sazbu — a je to `undefined`, ne nula', () => {
+      // Nula znamená „osvobozeno", což je jiný daňový režim než „neplátce"
+      // a doklad by to popsal špatně.
+      expect(klub.lines[0].vatRate).toBeUndefined();
+      expect('vatRate' in klub.lines[0]).toBe(false);
+      expect(akce.lines[0].vatRate).toBeUndefined();
+    });
+
+    it('doklad neříká, jestli jsou ceny s daní — u neplátce ta otázka nedává smysl', () => {
+      expect(klub.pricesIncludeVat).toBeUndefined();
+      expect(akce.pricesIncludeVat).toBeUndefined();
+    });
+
+    it('a DIČ odběratele se nepošle, i když ho subjekt má', () => {
+      expect(klub.party.vatNo).toBeUndefined();
+    });
+  });
+
+  describe('u PLÁTCE nese led sníženou sazbu 12 %', () => {
+    const klub = mapujKlubMesicne({ subjekt: SUBJ, obdobiOd: '2026-08-01', jePlatceDph: true, rezervace: rez })!;
+    const akce = mapujKomercniAkci({ eventId: 'e1', subjekt: SUBJ, jePlatceDph: true, rezervace: rez })!;
+
+    it('sazba je 12 (procent, ne koeficient) na obou typech dokladu', () => {
+      expect(SAZBA_DPH_LED).toBe(12);
+      expect(klub.lines[0].vatRate).toBe(12);
+      expect(akce.lines[0].vatRate).toBe(12);
+    });
+
+    it('KLUBOVÝ doklad má ceny VČETNĚ daně', () => {
+      expect(klub.pricesIncludeVat).toBe(true);
+    });
+
+    it('KOMERČNÍ doklad má ceny BEZ daně', () => {
+      // Tohle je jediné místo, kde se oba typy rozcházejí v tom, co `unitPrice`
+      // znamená. Sazba je u obou táž — kdyby se to spletlo, klub by dostal
+      // fakturu o 12 % vyšší, než jakou mu hala slíbila.
+      expect(akce.pricesIncludeVat).toBe(false);
+    });
+
+    it('DIČ odběratele se pošle, když ho subjekt má', () => {
+      expect(klub.party.vatNo).toBe('CZ26512345');
+    });
+
+    it('… a nepošle, když ho nemá — spolek bez registrace k DPH je běžný případ', () => {
+      const bezDic = mapujKlubMesicne({
+        subjekt: { ...SUBJ, dic: null }, obdobiOd: '2026-08-01', jePlatceDph: true, rezervace: rez,
+      })!;
+      expect(bezDic.party.vatNo).toBeUndefined();
+    });
+  });
+
+  describe('součet řádků a co znamená pod DPH', () => {
+    it('sčítá to, co je NA ŘÁDCÍCH — u klubu tedy částku s daní', () => {
+      const klub = mapujKlubMesicne({ subjekt: SUBJ, obdobiOd: '2026-08-01', jePlatceDph: true, rezervace: rez })!;
+      expect(soucetRadku(klub.lines)).toBe(1500);
+    });
+
+    it('… a u komerčky ZÁKLAD bez daně, při TÉŽE sazbě za hodinu', () => {
+      const akce = mapujKomercniAkci({ eventId: 'e1', subjekt: SUBJ, jePlatceDph: true, rezervace: rez })!;
+      expect(soucetRadku(akce.lines)).toBe(1500);
+    });
+
+    it('zapnutí DPH NEMĚNÍ částku na řádku — mění jen její výklad', () => {
+      // Pojistka proti implementaci, která by při přepnutí na plátce začala
+      // sama něco přepočítávat. Sazba za hodinu je snapshot z rezervace
+      // a mapování ji nesmí sáhnout ani o haléř.
+      const neplatce = mapujKlubMesicne({ subjekt: SUBJ, obdobiOd: '2026-08-01', jePlatceDph: false, rezervace: rez })!;
+      const platce = mapujKlubMesicne({ subjekt: SUBJ, obdobiOd: '2026-08-01', jePlatceDph: true, rezervace: rez })!;
+      expect(platce.lines[0].unitPrice).toBe(neplatce.lines[0].unitPrice);
+      expect(soucetRadku(platce.lines)).toBe(soucetRadku(neplatce.lines));
+    });
   });
 });

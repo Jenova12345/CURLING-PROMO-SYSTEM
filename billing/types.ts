@@ -10,10 +10,21 @@
 // nesmí mít ani teoretickou cestu do prohlížeče, a mimo `src/` se na tenhle kód
 // nedostane ani `@/` alias — takže ho do komponenty nejde omylem importovat.
 //
-// DPH ZÁMĚRNĚ NENÍ. Hala je neplátce (`billing_settings.vat_mode = 'neplatce'`,
-// rozhodnutí PM) a řádky se posílají bez `vat_rate`. Až padne otázka Q7 (agregace
-// po řádcích vs. z mezisoučtu za sazbu — patří účetní klienta), přibude sem pole
-// vědomě a s rozhodnutím za zády. Prázdné místo je lepší než hádaná nula.
+// DPH: OD BLOKU B JE HALA PLÁTCE. Přepíná to `IS_VAT_PAYER` v prostředí; když je
+// zapnuté, řádky za led nesou `vatRate` (12 %, snížená sazba za sportovní služby)
+// a doklad nese `pricesIncludeVat`. U NEPLÁTCE zůstává obojí nevyplněné — nula
+// není totéž co „mimo režim DPH" a doklad by to popsal špatně.
+//
+// PROČ `pricesIncludeVat` A NE JEN SAZBA: klubové ceny jsou VČETNĚ DPH (klub vidí
+// jedno číslo a to platí), komerční ceny jsou BEZ DPH (firma si DPH odečte).
+// Je to rozdíl v tom, co znamená `unitPrice`, ne v sazbě — a rozhoduje o něm typ
+// dokladu, tedy naše mapovací vrstva, ne provider.
+//
+// CO TO DĚLÁ S KONTROLNÍM SOUČTEM: `Σ quantity × unitPrice` je nově buď základ
+// bez daně (komerční), nebo částka s daní (klubová). Porovnávat se proto musí
+// LIKE S LIKE — viz `providerSubtotal` níž. Sečíst řádky bez DPH a porovnat je
+// s celkovou částkou s DPH by dalo rozdíl přesně ve výši daně a vypadalo by to
+// jako chyba mapování.
 
 /**
  * Typ dokladu.
@@ -30,7 +41,14 @@ export interface InvoiceParty {
   name: string;
   /** IČO. U spolku i firmy osm číslic; u fyzické osoby bez IČO zůstane prázdné. */
   registrationNo?: string;
-  /** DIČ. Posílá se JEN u plátce DPH — u neplátce nemá na dokladu co dělat. */
+  /**
+   * DIČ ODBĚRATELE. Posílá se JEN u plátce DPH a JEN když ho odběratel má —
+   * tahá se z ARESu jako dosud a u spolku bez registrace k DPH prostě není.
+   *
+   * DIČ DODAVATELE (naše) se neposílá vůbec: bere si ho Fakturoid z nastavení
+   * účtu. Poslat ho odsud by znamenalo mít ho na dvou místech a nechat je
+   * rozejít se.
+   */
   vatNo?: string;
   /**
    * E-mail, na který se doklad odesílá.
@@ -65,6 +83,17 @@ export interface InvoiceLine {
   unitName: string;
   /** Sazba Kč/h ze snapshotu rezervace (`reservations.rate_per_hour`), ne dopočet z částky. */
   unitPrice: number;
+  /**
+   * Sazba DPH v PROCENTECH (12 = dvanáct procent), ne koeficient.
+   *
+   * Vyplňuje se JEN u plátce. U neplátce zůstává `undefined` — a je to schválně
+   * `undefined`, ne nula: nulová sazba znamená „osvobozeno", což je něco jiného
+   * než „mimo režim DPH" a na dokladu se to tiskne jinak.
+   *
+   * Jestli je `unitPrice` s daní, nebo bez ní, NEURČUJE tohle pole, ale
+   * `InvoiceDraft.pricesIncludeVat` — sazba je u obou režimů táž.
+   */
+  vatRate?: number;
 }
 
 /** Doklad připravený k odeslání. Provider ho přeloží do svého tvaru. */
@@ -77,6 +106,20 @@ export interface InvoiceDraft {
   idempotencyKey: string;
   party: InvoiceParty;
   lines: InvoiceLine[];
+  /**
+   * Jsou ceny na řádcích VČETNĚ DPH?
+   *
+   * `true`  — klubová faktura. Klub vidí jednu částku a tu platí; ceník klubů je
+   *           vedený včetně daně.
+   * `false` — komerční faktura. Firma si DPH odečte, takže na dokladu chce
+   *           základ zvlášť a daň zvlášť.
+   * `undefined` — neplátce, otázka nedává smysl.
+   *
+   * Rozhoduje o tom TYP DOKLADU, ne provider: nastavuje to mapovací vrstva
+   * (`mapujKlubMesicne` / `mapujKomercniAkci`). Provider to jen přeloží do svého
+   * tvaru — u Fakturoidu na `vat_price_mode`.
+   */
+  pricesIncludeVat?: boolean;
   /** Splatnost ve dnech. Default 14 (`BILLING_DUE_DAYS`, rozhodnutí PM). */
   dueInDays?: number;
   /** Datum vystavení `RRRR-MM-DD` v pražském čase. Nevyplněné = provider dosadí dnešek. */
@@ -114,6 +157,18 @@ export interface InvoiceResult {
    * na doklad. Bez tohohle pole by se ta odchylka nedala změřit, jen tušit.
    */
   providerTotal?: number;
+  /**
+   * Základ daně, jak ho spočítal PROVIDER — tedy částka BEZ DPH.
+   *
+   * Bez tohohle pole by kontrolní součet u komerčních dokladů nešel udělat
+   * poctivě: na nich jsou naše ceny bez daně, kdežto `providerTotal` je s daní,
+   * takže by se strany rozešly přesně o částku DPH a vypadalo by to jako chyba
+   * mapování. Porovnává se proto like s like — u komerčky proti `providerSubtotal`,
+   * u klubové (ceny s daní) proti `providerTotal`.
+   *
+   * U neplátce jsou obě čísla stejná a je jedno, které se použije.
+   */
+  providerSubtotal?: number;
   /**
    * Řádky, jak je má doklad U PROVIDERA.
    *

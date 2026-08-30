@@ -156,6 +156,12 @@ export class SupabaseStore implements InvoiceLinkStore {
       _public_url: result.publicUrl ?? null,
       _status: result.status,
       _provider_total: result.providerTotal ?? null,
+      // Základ daně se ukládá ZVLÁŠŤ, ne dopočítává. Pod DPH má `nas_soucet`
+      // podle typu dokladu jiný význam (u komerčky základ, u klubu částku
+      // s daní), takže kontrolní součet v `fakturoid_invoices_list` potřebuje
+      // obě čísla od providera, aby mohl porovnávat like s like. Dopočet ze
+      // sazby by byl náš odhad; na dokladu je číslo Fakturoidu.
+      _provider_subtotal: result.providerSubtotal ?? null,
       _varovani: meta.varovani ?? null,
       // Kontext pro větev B.
       _druh: draft.type,

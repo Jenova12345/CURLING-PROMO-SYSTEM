@@ -4,9 +4,15 @@
 // soubor PŘESKOČÍ — ne spadne. Rozdíl je podstatný: vývojář bez klíčů má mít
 // zelenou sadu, ne červenou, kterou se naučí ignorovat.
 //
-// CO TYHLE TESTY ZAKLÁDAJÍ NA ÚČTU: jednoho odběratele a jeden doklad na běh,
-// s `custom_id` začínajícím `test-`. Nejsou to smyšlené doklady vydávané za
-// pravé — je to testovací účet Fakturoidu a data jsou zjevně testovací.
+// CO TYHLE TESTY ZAKLÁDAJÍ NA ÚČTU: jednoho odběratele (stabilního napříč běhy)
+// a DVA doklady na běh — jeden klubový (ceny včetně DPH) a jeden komerční (ceny
+// bez DPH). Oba mají `custom_id` s razítkem běhu, takže se navzájem nepotkají.
+// Nejsou to smyšlené doklady vydávané za pravé — je to testovací účet Fakturoidu
+// a data jsou zjevně testovací.
+//
+// REŽIM DPH SE BERE Z `IS_VAT_PAYER`, tedy z téhož přepínače jako provoz.
+// Testy běží v obou režimech a jen tvrdí něco jiného; přepnutím testovacího účtu
+// na plátce se z nich stane ověření plátcovského dokladu naživo.
 //
 // Spuštění:
 //   FAKTUROID_LIVE=true npx vitest run billing/providers/fakturoid/fakturoid.integration
@@ -19,7 +25,9 @@ import { FakturoidProvider } from './index.ts';
 import { nactiConfig } from './config.ts';
 import { stahniPdf, vystavDoklad } from '../../pipeline.ts';
 import { PametovyStore } from '../../store.ts';
-import { mapujKlubMesicne, soucetRadku, type BillableReservation } from '../../mapping.ts';
+import {
+  mapujKlubMesicne, mapujKomercniAkci, soucetRadku, SAZBA_DPH_LED, type BillableReservation,
+} from '../../mapping.ts';
 import { roundCzk } from '../../../src/lib/money.ts';
 
 // `loadEnv` čte `.env` stejně, jako to dělá aplikace — bez další závislosti.
@@ -70,18 +78,58 @@ const rezervace: BillableReservation[] = [
   { id: `r3-${BEH}`, start_at: '2026-08-18T16:00:00Z', end_at: '2026-08-18T17:30:00Z', sheet_name: 'Dráha 1', event_title: 'Integrační test', hodiny: 1.5, sazba: 833.67, castka: 1250.51 },
 ];
 
-const draft = () => mapujKlubMesicne({
-  subjekt: {
-    id: TEST_KLUB_ID,
-    name: 'TEST Curling Ostrava',
-    ico: '26512345',
-    dic: null,
-    address: 'Sportovní 12, 702 00 Ostrava',
-  },
-  obdobiOd: '2026-08-01',
-  jePlatceDph: false,
+/**
+ * Je testovací účet PLÁTCE DPH?
+ *
+ * Bere se z `IS_VAT_PAYER` — tedy z téhož přepínače, kterým se řídí provoz.
+ * Testy níž se podle něj chovají jinak, ale běží v OBOU režimech: dokud je účet
+ * neplátcovský, ověřují, že se DPH nikam neplete; jakmile ho někdo přepne na
+ * plátce, ověří naživo i sazbu a `vat_price_mode`.
+ */
+const jePlatceDph = nactiConfig(env as Record<string, string | undefined>).jePlatceDph;
+
+const subjekt = {
+  id: TEST_KLUB_ID,
+  name: 'TEST Curling Ostrava',
+  ico: '26512345',
+  dic: null,
+  address: 'Sportovní 12, 702 00 Ostrava',
+};
+
+/**
+ * KLUBOVÝ doklad — ceny VČETNĚ DPH (`vat_price_mode = from_total_with_vat`).
+ *
+ * ⚠️ KLÍČ SE TU PŘEPISUJE NA PER-BĚH, a je to podstatné.
+ * `klicKlubu` skládá klíč z id klubu a MĚSÍCE (`klub-{id}-{RRRRMM}`), takže je
+ * napříč běhy STABILNÍ — druhý běh by narazil na doklad z prvního a místo
+ * vystavení by testoval jen „existoval". Přesně tohle se stalo: na testovacím
+ * účtu zůstal doklad z dřívějška, někdo do něj ručně přidal řádek „občerstvení"
+ * za 10 000 Kč a od té chvíle sada padala na „expected 'nesedi' to be
+ * 'vystaveno'" a na deltě 9 999,53 Kč. Nebyla to chyba kódu ani DPH — byl to
+ * cizí řádek v cizím dokladu, který si testy samy našly.
+ *
+ * Tvar klíče hlídá `idempotency.test.ts`; tady jde o providera, ne o klíč.
+ */
+const draftKlub = () => {
+  const d = mapujKlubMesicne({
+    subjekt,
+    obdobiOd: '2026-08-01',
+    jePlatceDph,
+    rezervace,
+  });
+  return d ? { ...d, idempotencyKey: `klub-test-${BEH}` } : null;
+};
+
+/** KOMERČNÍ doklad — ceny BEZ DPH (`vat_price_mode = without_vat`). */
+const draftAkce = () => mapujKomercniAkci({
+  eventId: `test-${BEH}`,
+  subjekt,
+  jePlatceDph,
   rezervace,
 });
+
+/** Zpětná kompatibilita pro testy, kterým je typ dokladu jedno. */
+const draft = draftKlub;
 
 describe.skipIf(!live)('Fakturoid — živý testovací účet', () => {
   const provider = () => new FakturoidProvider({
@@ -154,12 +202,17 @@ describe.skipIf(!live)('Fakturoid — živý testovací účet', () => {
   //   po řádcích             3 753 Kč   (chyba, které se vyhýbáme)
   // ---------------------------------------------------------------------------
   it('změří rozdíl mezi naším zaokrouhlením a Fakturoidovým', { timeout: 30_000 }, async () => {
-    const d = draft()!;
+    const d = draftKlub()!;
     const doklad = await provider().findExistingInvoice(d.idempotencyKey);
     expect(doklad).not.toBeNull();
 
     const nasPresny = soucetRadku(d.lines);
     const nasKUhrade = roundCzk(nasPresny);
+
+    // LIKE S LIKE. Klubový doklad má ceny VČETNĚ DPH, takže náš součet řádků je
+    // částka s daní a protějšek je `total`. U komerčního dokladu (ceny bez daně)
+    // by to byl `subtotal` — porovnat základ s celkovou částkou by dalo rozdíl
+    // přesně ve výši DPH a vypadalo by to jako chyba mapování.
     const fakturoid = doklad!.providerTotal;
 
     if (fakturoid === undefined) {
@@ -169,7 +222,8 @@ describe.skipIf(!live)('Fakturoid — živý testovací účet', () => {
 
     const delta = Number((fakturoid - nasKUhrade).toFixed(2));
     console.info(
-      `[ZAOKROUHLENÍ] přesný součet ${nasPresny} Kč · naše k úhradě ${nasKUhrade} Kč · ` +
+      `[ZAOKROUHLENÍ] režim ${jePlatceDph ? 'PLÁTCE (ceny s DPH)' : 'neplátce'} · ` +
+      `přesný součet ${nasPresny} Kč · naše k úhradě ${nasKUhrade} Kč · ` +
       `Fakturoid ${fakturoid} Kč · DELTA ${delta > 0 ? '+' : ''}${delta} Kč na doklad`,
     );
 
@@ -177,6 +231,75 @@ describe.skipIf(!live)('Fakturoid — živý testovací účet', () => {
     // se rozhodne (nastavit zaokrouhlení na účtu / zapsat jako známou). Nad 0,50 Kč
     // je špatně něco jiného: mapování, sazba, nebo počet řádků.
     expect(Math.abs(delta)).toBeLessThanOrEqual(0.5);
+  });
+
+  // ---------------------------------------------------------------------------
+  // DPH NA ŽIVÉM DOKLADU
+  //
+  // Běží v OBOU režimech, jen tvrdí něco jiného. Dokud je testovací účet
+  // neplátcovský, hlídá, že se DPH nikam nepřimíchá; jakmile ho někdo přepne na
+  // plátce, ověří naživo sazbu i to, že `vat_price_mode` opravdu rozhoduje
+  // o významu `unit_price`.
+  //
+  // Ta druhá půlka je důvod, proč se testovací účet vyplatí přepnout: `subtotal`
+  // vs. `total` je jediné místo, kde se dá zvenčí ověřit, že Fakturoid pochopil
+  // klubovou cenu jako částku S DANÍ, a ne jako základ, ke kterému daň přidá.
+  // ---------------------------------------------------------------------------
+  it('KOMERČNÍ doklad: ceny bez DPH, základ = náš součet', { timeout: 60_000 }, async () => {
+    const d = draftAkce()!;
+    const vysledek = await vystavDoklad({
+      draft: d, provider: provider(), store: new PametovyStore(),
+    });
+    expect(vysledek.stav).toBe('vystaveno');
+    if (vysledek.stav !== 'vystaveno') return;
+
+    const u = vysledek.link.result;
+    const nase = roundCzk(soucetRadku(d.lines));
+
+    console.info(
+      `[DPH · komerční] pricesIncludeVat=${d.pricesIncludeVat} · náš součet ${nase} Kč · ` +
+      `subtotal ${u.providerSubtotal} Kč · total ${u.providerTotal} Kč`,
+    );
+
+    expect(u.providerSubtotal).toBeDefined();
+
+    if (!jePlatceDph) {
+      // Neplátce: základ a celkem je totéž číslo a rovná se našemu součtu.
+      expect(u.providerSubtotal).toBeCloseTo(nase, 2);
+      expect(u.providerTotal).toBeCloseTo(nase, 2);
+      return;
+    }
+
+    // Plátce, ceny BEZ DPH: náš součet je ZÁKLAD, celkem je o daň vyšší.
+    expect(Math.abs(u.providerSubtotal! - nase)).toBeLessThanOrEqual(0.5);
+    expect(u.providerTotal!).toBeGreaterThan(u.providerSubtotal!);
+
+    const dan = u.providerTotal! - u.providerSubtotal!;
+    const cekana = u.providerSubtotal! * (SAZBA_DPH_LED / 100);
+    expect(Math.abs(dan - cekana)).toBeLessThanOrEqual(0.5);
+  });
+
+  it('KLUBOVÝ doklad: ceny včetně DPH, celkem = náš součet', { timeout: 30_000 }, async () => {
+    const d = draftKlub()!;
+    const doklad = await provider().findExistingInvoice(d.idempotencyKey);
+    expect(doklad).not.toBeNull();
+
+    const nase = roundCzk(soucetRadku(d.lines));
+    console.info(
+      `[DPH · klubový] pricesIncludeVat=${d.pricesIncludeVat} · náš součet ${nase} Kč · ` +
+      `subtotal ${doklad!.providerSubtotal} Kč · total ${doklad!.providerTotal} Kč`,
+    );
+
+    // TOHLE JE TO PODSTATNÉ TVRZENÍ: u klubu se náš součet rovná ČÁSTCE S DANÍ,
+    // ne základu. Kdyby Fakturoid pochopil klubovou cenu jako základ, vyšla by
+    // faktura o 12 % vyšší, než jakou hala klubu slíbila.
+    expect(Math.abs(doklad!.providerTotal! - nase)).toBeLessThanOrEqual(0.5);
+
+    if (jePlatceDph) {
+      expect(doklad!.providerSubtotal!).toBeLessThan(doklad!.providerTotal!);
+    } else {
+      expect(doklad!.providerSubtotal).toBeCloseTo(nase, 2);
+    }
   });
 });
 

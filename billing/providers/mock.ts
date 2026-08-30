@@ -21,6 +21,29 @@ export interface MockVolby {
   rok?: number;
 }
 
+/**
+ * Základ a celkem tak, jak by je spočítal Fakturoid.
+ *
+ * Zaokrouhluje se na haléře (`round(x, 2)`), protože tak to dělá i skutečný
+ * doklad. Kdyby mock počítal přesněji než Fakturoid, testy by procházely
+ * i implementaci, která naživo o pár haléřů uteče.
+ */
+const mockCastky = (draft: InvoiceDraft): { providerTotal: number; providerSubtotal: number } => {
+  const soucet = roundCzk(soucetRadku(draft.lines));
+  const sazba = draft.lines.find((l) => l.vatRate !== undefined)?.vatRate;
+
+  // Neplátce: základ i celkem je totéž číslo.
+  if (sazba === undefined || draft.pricesIncludeVat === undefined) {
+    return { providerTotal: soucet, providerSubtotal: soucet };
+  }
+
+  const koeficient = 1 + sazba / 100;
+  return draft.pricesIncludeVat
+    ? { providerTotal: soucet, providerSubtotal: Number((soucet / koeficient).toFixed(2)) }
+    : { providerSubtotal: soucet, providerTotal: Number((soucet * koeficient).toFixed(2)) };
+};
+
+
 export class MockProvider implements InvoiceProvider {
   /** Doklady podle `custom_id` (= náš klíč idempotence). */
   readonly doklady = new Map<string, InvoiceResult>();
@@ -63,7 +86,15 @@ export class MockProvider implements InvoiceProvider {
       // Skutečný Fakturoid celkovou částku vrací a jádro se na ni spoléhá
       // (větev „nesedi" v pipeline). Mock, který ji neposílá, by tu větev
       // spouštěl pořád a vypadalo by to jako chyba v jádře.
-      providerTotal: roundCzk(soucetRadku(draft.lines)),
+      //
+      // POD DPH SE ROZPADÁ NA DVĚ ČÍSLA a mock je musí umět obě, jinak by
+      // kontrolní součet u komerčního dokladu (ceny bez daně) neměl proti čemu
+      // porovnávat a hlásil by „provider nevrátil základ daně" v každém testu.
+      // Fakturoid `subtotal` počítá ze základu, `total` včetně daně:
+      //   • ceny BEZ DPH  → základ = součet řádků, celkem = základ × (1 + sazba)
+      //   • ceny S DPH    → celkem = součet řádků, základ = celkem ÷ (1 + sazba)
+      //   • neplátce      → obě čísla jsou táž
+      ...mockCastky(draft),
       // Skutečný Fakturoid řádky vrací a jádro je porovnává — bez nich by se
       // testovala jen slabší varianta kontroly (podle částky).
       providerLines: draft.lines.map((l) => ({ ...l })),

@@ -836,3 +836,108 @@ describe('rozpor kontrolního součtu se ukládá, ne jen vrací', () => {
     expect(ulozeneVarovani).toMatch(/KONTROLNÍ SOUČET NESEDÍ/);
   });
 });
+
+// =============================================================================
+// KONTROLNÍ SOUČET POD DPH
+//
+// Rovnice z CLAUDE.md („suma vystavených faktur == Kdo kolik dluží") se pod DPH
+// nemění, ale musí se počítat LIKE S LIKE. `soucetRadku` sečte to, co je na
+// řádcích — u klubu částku s daní, u komerčky základ bez daně — a protějšek
+// u providera je proto jednou `total` a jednou `subtotal`.
+//
+// Kdyby se to spletlo, rozdíl by vyšel PŘESNĚ ve výši DPH: u 12 % a dokladu za
+// 5 000 Kč tedy 600 Kč. To neprojde jako zaokrouhlení, spustí to poplach
+// „kontrolní součet nesedí" na KAŽDÉ komerční faktuře a hledala by se chyba
+// v mapování, která tam není.
+// =============================================================================
+describe('kontrolní součet pod DPH', () => {
+  const draftKlubuDph = () => mapujKlubMesicne({
+    subjekt: KLUB, obdobiOd: '2026-08-01', jePlatceDph: true, rezervace,
+  })!;
+  const draftAkceDph = () => mapujKomercniAkci({
+    eventId: 'e-dph', subjekt: KLUB, jePlatceDph: true, rezervace,
+  })!;
+
+  /** Doklad u providera s ručně zadaným základem a celkem. */
+  const provider = (subtotal: number | undefined, total: number | undefined): InvoiceProvider =>
+    fakeProvider({
+      createInvoice: async (d) => ({
+        providerInvoiceId: 'i1', number: '20260001', variableSymbol: '20260001', status: 'open',
+        ...(total !== undefined ? { providerTotal: total } : {}),
+        ...(subtotal !== undefined ? { providerSubtotal: subtotal } : {}),
+        providerLines: d.lines.map((l) => ({ ...l })),
+      }),
+    });
+
+  it('KLUB (ceny s daní): porovnává se proti CELKEM, ne proti základu', async () => {
+    const d = draftKlubuDph();
+    const nase = soucetRadku(d.lines);           // 2400 — částka s daní
+    // Základ je nižší o daň; kdyby se porovnával on, vyšel by rozdíl 257 Kč.
+    const v = await vystavDoklad({
+      draft: d, provider: provider(2142.86, nase), store: new PametovyStore(),
+    });
+    expect(v.stav).toBe('vystaveno');
+    if (v.stav !== 'vystaveno') return;
+    expect(v.varovani).toBeUndefined();
+  });
+
+  it('KOMERČNÍ (ceny bez daně): porovnává se proti ZÁKLADU, ne proti celkem', async () => {
+    const d = draftAkceDph();
+    const nase = soucetRadku(d.lines);           // 2400 — základ bez daně
+    const v = await vystavDoklad({
+      draft: d, provider: provider(nase, 2688), store: new PametovyStore(),
+    });
+    expect(v.stav).toBe('vystaveno');
+    if (v.stav !== 'vystaveno') return;
+    // Kdyby se porovnávalo proti `total`, vyšel by rozdíl 288 Kč = přesně DPH.
+    expect(v.varovani).toBeUndefined();
+  });
+
+  it('a kdyby se to spletlo, poplach zní přesně ve výši daně', async () => {
+    // Doklad, u kterého základ NESEDÍ na náš podklad — tedy skutečná neshoda,
+    // ne záměna čísel. Tvrzení je tu proto, aby test výš nebyl zelený jen tím,
+    // že varování nevzniká nikdy.
+    const d = draftAkceDph();
+    const v = await vystavDoklad({
+      draft: d, provider: provider(2688, 3010.56), store: new PametovyStore(),
+    });
+    expect(v.stav).toBe('vystaveno');
+    if (v.stav !== 'vystaveno') return;
+    expect(v.varovani?.map((x) => x.kod)).toEqual(['kontrolni_soucet']);
+    expect(v.varovani?.[0].zprava).toContain('základ bez DPH');
+  });
+
+  it('chybějící ZÁKLAD u komerčního dokladu je varování, ne tiché přeskočení', async () => {
+    const d = draftAkceDph();
+    const v = await vystavDoklad({
+      draft: d, provider: provider(undefined, 2688), store: new PametovyStore(),
+    });
+    expect(v.stav).toBe('vystaveno');
+    if (v.stav !== 'vystaveno') return;
+    expect(v.varovani?.map((x) => x.kod)).toEqual(['kontrolni_soucet']);
+    // Hláška musí říct, ČEHO se nedostává — „nevrátil celkovou částku" by tu
+    // lhalo, celkovou částku provider vrátil.
+    expect(v.varovani?.[0].zprava).toContain('základ daně');
+  });
+
+  it('NEPLÁTCE se chová jako dřív — bere se celkem', async () => {
+    const d = draftKlubu()!;
+    const nase = soucetRadku(d.lines);
+    const v = await vystavDoklad({
+      draft: d, provider: provider(nase, nase), store: new PametovyStore(),
+    });
+    expect(v.stav).toBe('vystaveno');
+    if (v.stav !== 'vystaveno') return;
+    expect(v.varovani).toBeUndefined();
+  });
+
+  it('zaokrouhlení do půl koruny je pořád jen poznámka, i pod DPH', async () => {
+    const d = draftAkceDph();
+    const v = await vystavDoklad({
+      draft: d, provider: provider(soucetRadku(d.lines) + 0.4, 2688), store: new PametovyStore(),
+    });
+    expect(v.stav).toBe('vystaveno');
+    if (v.stav !== 'vystaveno') return;
+    expect(v.varovani?.map((x) => x.kod)).toEqual(['zaokrouhleni']);
+  });
+});

@@ -25,6 +25,25 @@ import type { InvoiceDraft, InvoiceLine, InvoiceParty } from './types.ts';
 /** Splatnost, když ji volající neurčí. Rozhodnutí PM: 14 dní (`BILLING_DUE_DAYS`). */
 export const SPLATNOST_DNI = 14;
 
+/**
+ * Sazba DPH za pronájem ledové plochy, v PROCENTECH.
+ *
+ * 12 % je snížená sazba. Použití sportovních zařízení do ní patří (příloha č. 2
+ * ZDPH); od konsolidace k 1. 1. 2024 jsou obě dřívější snížené sazby sloučené
+ * do jedné dvanáctiprocentní.
+ *
+ * PROČ KONSTANTA A NE POLOŽKA V NASTAVENÍ: sazba se nemění provozním
+ * rozhodnutím, ale zákonem. Změna proto má být commit, který projde branami
+ * a je vidět v historii — ne hodnota, kterou někdo přepíše ve formuláři
+ * a nikdo se to nedozví. Až se sazba změní, mění se i doklady vystavené od
+ * účinnosti, takže to stejně chce vědomý zásah.
+ *
+ * ⚠️ PLATÍ JEN PRO LED. Až přibudou volitelné položky (salonek, občerstvení —
+ * požadavek B z ETAPA3-POZADAVKY), budou mít sazbu vlastní: občerstvení není
+ * sportovní služba. Proto se konstanta jmenuje `LED`, ne `SAZBA_DPH`.
+ */
+export const SAZBA_DPH_LED = 12;
+
 /** Jednotka na řádku. Pronájem ledu se účtuje po hodinách, vždy. */
 export const JEDNOTKA = 'h';
 
@@ -75,8 +94,14 @@ export interface SubjectForBilling {
  * než tiše špatné. Follow-up: rozšířit `ares-lookup`, ať si drží `nazevUlice`,
  * `nazevObce` a `psc` z ARESu (viz `billing/README.md`, sekce Follow-up).
  *
- * DIČ se posílá JEN u plátce DPH. Hala je dnes neplátce (`billing_settings.vat_mode`),
- * takže se `vat_no` na doklad nedostane — a nemá tam co dělat.
+ * DIČ ODBĚRATELE se posílá JEN u plátce DPH a jen když ho subjekt má; u spolku
+ * bez registrace k dani prostě není a to je běžný stav, ne chyba.
+ *
+ * ⚠️ ROZHODUJE O TOM `IS_VAT_PAYER`, NE `billing_settings.vat_mode`. To druhé
+ * řídí interní engine (PDF dokladu) a je to samostatné nastavení téže věci —
+ * viz `billing/README.md`, sekce o dvou zdrojích pravdy. Dřívější znění téhle
+ * poznámky ukazovalo na `vat_mode` a tvrdilo, že hala je neplátce; obojí je od
+ * přechodu na plátce nepravda.
  */
 export const mapujSubjekt = (
   subjekt: SubjectForBilling,
@@ -183,13 +208,20 @@ const overRadek = (r: BillableReservation): void => {
   }
 };
 
-const naRadek = (r: BillableReservation, popis: (r: BillableReservation) => string): InvoiceLine => {
+const naRadek = (
+  r: BillableReservation,
+  popis: (r: BillableReservation) => string,
+  jePlatceDph: boolean,
+): InvoiceLine => {
   overRadek(r);
   return {
     name: popis(r),
     quantity: Number(r.hodiny),
     unitName: JEDNOTKA,
     unitPrice: Number(r.sazba),
+    // U NEPLÁTCE se pole vůbec nepřidá. `vatRate: 0` by znamenalo „osvobozeno",
+    // což je jiný daňový režim než „neplátce" a doklad by to popsal špatně.
+    ...(jePlatceDph ? { vatRate: SAZBA_DPH_LED } : {}),
   };
 };
 
@@ -241,7 +273,11 @@ export const mapujKomercniAkci = (vstup: {
     type: 'commercial_event',
     idempotencyKey: klicAkce(vstup.eventId),
     party: mapujSubjekt(vstup.subjekt, { jePlatceDph: vstup.jePlatceDph }),
-    lines: rezervace.map((r) => naRadek(r, popisAkce)),
+    lines: rezervace.map((r) => naRadek(r, popisAkce, vstup.jePlatceDph)),
+    // KOMERČNÍ DOKLAD MÁ CENY BEZ DPH. Firma si daň odečte, takže na dokladu
+    // chce vidět základ zvlášť a daň zvlášť — a komerční ceník je proto vedený
+    // bez daně. U neplátce zůstává pole nevyplněné, otázka tam nedává smysl.
+    ...(vstup.jePlatceDph ? { pricesIncludeVat: false } : {}),
     dueInDays: vstup.dueInDays ?? SPLATNOST_DNI,
     ...(vstup.issuedOn ? { issuedOn: datumProApi(vstup.issuedOn) } : {}),
     sourceReservationIds: rezervace.map((r) => r.id),
@@ -278,7 +314,12 @@ export const mapujKlubMesicne = (vstup: {
     type: 'club_monthly',
     idempotencyKey: klicKlubu(vstup.subjekt.id, vstup.obdobiOd),
     party: mapujSubjekt(vstup.subjekt, { jePlatceDph: vstup.jePlatceDph }),
-    lines: rezervace.map((r) => naRadek(r, popisKlubu)),
+    lines: rezervace.map((r) => naRadek(r, popisKlubu, vstup.jePlatceDph)),
+    // KLUBOVÝ DOKLAD MÁ CENY VČETNĚ DPH. Klub vidí jedno číslo za hodinu ledu
+    // a to platí; klubový ceník je vedený s daní. Tohle je jediné místo, kde se
+    // klubová a komerční faktura rozcházejí v tom, CO `unitPrice` znamená —
+    // sazba je u obou táž.
+    ...(vstup.jePlatceDph ? { pricesIncludeVat: true } : {}),
     dueInDays: vstup.dueInDays ?? SPLATNOST_DNI,
     ...(vstup.issuedOn ? { issuedOn: datumProApi(vstup.issuedOn) } : {}),
     sourceReservationIds: rezervace.map((r) => r.id),
@@ -293,6 +334,13 @@ export const mapujKlubMesicne = (vstup: {
  * Sčítá se v haléřích a NIC se průběžně nezaokrouhluje — kanonické pravidlo R3.
  * Tohle je veličina pro KONTROLNÍ SOUČET (protějšek `invoices.total`), ne částka
  * k úhradě: zaokrouhlení na koruny dělá až provider na svém dokladu.
+ *
+ * POD DPH SE MĚNÍ VÝZNAM, NE VÝPOČET. Funkce sečte to, co je na řádcích —
+ * u klubové faktury tedy částku VČETNĚ daně, u komerční ZÁKLAD bez daně.
+ * Proti provideru se to musí porovnávat like s like (`providerTotal` vs.
+ * `providerSubtotal`); dělá to `zkontrolujSoucet` v `pipeline.ts`. Kdyby se
+ * základ bez daně porovnal s celkovou částkou s daní, rozdíl by vyšel přesně
+ * ve výši DPH a vypadal by jako chyba mapování.
  */
 export const soucetRadku = (lines: readonly InvoiceLine[]): number =>
   sumKc(lines.map((l) => l.quantity * l.unitPrice));
