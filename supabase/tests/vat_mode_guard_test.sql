@@ -59,14 +59,47 @@ BEGIN
   END IF;
   RAISE NOTICE 'OK  po migraci je hala vedená jako plátce DPH';
 
-  -- 2) Koncept se založit DÁ i pod plátcem — guard sedí až na vystavení.
-  --    (Kdyby zavíral i zakládání, byla by to jiná, širší změna.)
+  -- 2) KONCEPT SE POD PLÁTCEM NESMÍ ZALOŽIT ANI ZAČÍT.
+  --
+  --    Dřív šel — a to byla past: koncept vznikl, ZAMKL rezervace
+  --    (`invoice_id` + `invoiced_at`) a vystavit ho pak už nešlo. Admin
+  --    v „Kdo dluží" klikl, dostal „Koncept faktury založen" a narazil až
+  --    o obrazovku dál, s rezervacemi visícími na dokladu, který nikdy
+  --    nevznikne. Zavírá to migrace 20260830160000.
   SELECT id INTO _sub FROM public.subjects WHERE name = 'CK Ostravské kameny';
-  _koncept := public.create_invoice_draft_club(_sub, '2026-07-01', '2026-07-31');
-  IF _koncept IS NULL THEN
-    RAISE EXCEPTION 'TEST SELHAL: koncept se nezaložil, guard by se nezkusil.';
+
+  BEGIN
+    SET LOCAL ROLE authenticated;
+    PERFORM public.create_invoice_draft_club(_sub, '2026-07-01', '2026-07-31');
+    RESET ROLE;
+  EXCEPTION WHEN OTHERS THEN
+    RESET ROLE;
+    _spadlo := true;
+    _hlaska := SQLERRM;
+  END;
+
+  IF NOT _spadlo THEN
+    RAISE EXCEPTION 'TEST SELHAL: pod plátcem se založil koncept. Zamkne rezervace na dokladu, který nepůjde vystavit.';
   END IF;
-  RAISE NOTICE 'OK  koncept jde založit i pod plátcem (guard je až na vystavení)';
+  IF position('neplátce' in _hlaska) = 0 THEN
+    RAISE EXCEPTION 'TEST SELHAL: zakládání odmítnuto, ale jinou hláškou: %', _hlaska;
+  END IF;
+
+  -- A NIC SE NEZAMKLO. Bez tohohle tvrzení by test prošel i tehdy, kdyby guard
+  -- odmítal až PO zabrání rezervací — tedy kdyby po sobě musel uklízet.
+  IF EXISTS (SELECT 1 FROM public.reservations WHERE invoice_id IS NOT NULL) THEN
+    RAISE EXCEPTION 'TEST SELHAL: guard odmítl, ale rezervace už byly zamčené.';
+  END IF;
+  RAISE NOTICE 'OK  pod plátcem se koncept nezaloží — a nic se přitom nezamkne';
+
+  -- Pro zbytek testu si koncept vyrobíme pod neplátcem.
+  _spadlo := false;
+  UPDATE public.billing_settings SET vat_mode = 'neplatce' WHERE singleton;
+  _koncept := public.create_invoice_draft_club(_sub, '2026-07-01', '2026-07-31');
+  UPDATE public.billing_settings SET vat_mode = 'platce' WHERE singleton;
+  IF _koncept IS NULL THEN
+    RAISE EXCEPTION 'TEST SELHAL: nepodařilo se vyrobit koncept ani pod neplátcem.';
+  END IF;
 
   -- 3) A TEĎ TO PODSTATNÉ: vystavit ho nejde.
   BEGIN
@@ -105,6 +138,32 @@ BEGIN
     RAISE EXCEPTION 'TEST SELHAL: pod neplátcem měl doklad projít, ale spadl: %', _hlaska;
   END IF;
   RAISE NOTICE 'OK  … a pod neplátcem týž koncept projde (guard rozlišuje, neodmítá všechno)';
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- A AUTOMATIKA POD PLÁTCEM TAKY NIC NEVYROBÍ
+--
+-- `billing_automation_tick` volá `create_invoice_draft_commercial` uvnitř
+-- `EXCEPTION WHEN OTHERS`, takže po přepnutí NESPADNE — jen tiše počítá `chyb`.
+-- To je přesně ten stav, před kterým varuje hlavička migrace 20260830140000
+-- („automatiku nezapínat, dokud interní engine nevypadne"), a je lepší mít ho
+-- doložený než odhadnutý.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _v jsonb; _pred int; _po int;
+BEGIN
+  UPDATE public.billing_settings
+     SET vat_mode = 'platce', automation_enabled = true, auto_issue = false
+   WHERE singleton;
+
+  SELECT count(*) INTO _pred FROM public.invoices;
+  _v := public.billing_automation_tick();
+  SELECT count(*) INTO _po FROM public.invoices;
+
+  IF _po <> _pred THEN
+    RAISE EXCEPTION 'TEST SELHAL: automatika pod plátcem vyrobila % dokladů.', _po - _pred;
+  END IF;
+  RAISE NOTICE 'OK  automatika pod plátcem nevyrobí doklad (%)' , _v;
 END $$;
 
 DO $$ BEGIN RAISE NOTICE '=== VŠECHNY TESTY PROŠLY ==='; END $$;

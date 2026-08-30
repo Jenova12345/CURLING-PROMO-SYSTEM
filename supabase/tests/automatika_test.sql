@@ -13,6 +13,23 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
+-- -----------------------------------------------------------------------------
+-- PŘEDPOKLAD: NEPLÁTCOVSKÝ REŽIM
+--
+-- Automatika volá `create_invoice_draft_commercial`, a ta má od migrace
+-- `20260830160000_dph_guard_koncept.sql` guard režimu DPH — pod plátcem koncept
+-- nezaloží. Hala je od `20260830140000` plátce, takže by se automatika neměla
+-- k čemu dostat a tenhle soubor by testoval prázdno.
+--
+-- Je to záměr: pod S2 vystavuje ostré doklady Fakturoid a interní engine je na
+-- vyřazení. Test proto svůj předpoklad říká NAHLAS. Celý soubor končí
+-- ROLLBACKem, takže se nastavení nikam nepropíše.
+--
+-- ⚠️ Že automatika pod plátcem NIC neudělá, je vlastní tvrzení a patří jinam —
+-- do `vat_mode_guard_test.sql`, kde se testuje guard sám.
+-- -----------------------------------------------------------------------------
+UPDATE public.billing_settings SET vat_mode = 'neplatce' WHERE singleton;
+
 CREATE OR REPLACE FUNCTION pg_temp.tvrd(_podminka boolean, _popis text) RETURNS void
  LANGUAGE plpgsql AS $$
 BEGIN

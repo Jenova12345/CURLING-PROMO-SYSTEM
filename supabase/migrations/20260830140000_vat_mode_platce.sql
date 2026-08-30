@@ -19,8 +19,13 @@
 -- CO SE TÍM TEDY DĚLÁ: interní engine se ZAVŘE. Není to vedlejší škoda, je to
 -- ZÁMĚR. Pod S2 vystavuje ostré doklady Fakturoid a interní engine je na
 -- vyřazení (samostatný ticket) — do té doby je „hlasitě nedostupný" přesně to,
--- co chceme. Tlačítko „Vygenerovat fakturu" v „Kdo dluží" tedy nově skončí
--- čitelnou hláškou místo daňově špatného dokladu.
+-- co chceme.
+--
+-- ⚠️ SAMA O SOBĚ TO NESTIHNE CELÉ. `issue_invoice` guard má, ale tlačítko
+-- „Vygenerovat fakturu" v „Kdo dluží" volá `create_invoice_draft_*`, a ty ho
+-- neměly — koncept tedy vznikl, zamkl rezervace a vystavit se pak nedal.
+-- Dotahuje to navazující migrace `20260830160000_dph_guard_koncept.sql`;
+-- bez ní je tahle sama past, ne zábrana.
 --
 -- -----------------------------------------------------------------------------
 -- NEŽ TO PUSTÍŠ NA DEMO NEBO PRODUKCI
@@ -63,6 +68,12 @@
 --
 -- VRATNOST:
 --   UPDATE public.billing_settings SET vat_mode = 'neplatce' WHERE singleton;
+--
+-- ⚠️ REVERT MUSÍ JÍT RUKU V RUCE s `IS_VAT_PAYER=false` v secrets, jinak
+-- vznikne přesně ta dvouspínačová nekonzistence, jen obráceně: Fakturoid by
+-- dál dostával plátcovské doklady, kdežto interní engine by se otevřel pro
+-- neplátcovské. Dopředný směr to říká v bodech 1–4 výš; platí to i zpátky.
+--
 -- Data se neztrácejí. Ale POZOR: doklady vystavené mezitím fakturoidí cestou
 -- už DPH nesou a revertem nezmizí — vrací se nastavení, ne historie.
 -- =============================================================================
