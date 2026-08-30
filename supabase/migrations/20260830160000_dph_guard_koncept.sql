@@ -45,7 +45,17 @@
 -- po aplikaci VŠECH migrací, ne ze znění v `20260813140000_faktury_rpc.sql`.
 -- Kdo vezme to původní, výjimku pro plánovač tiše smaže a rozbije automatiku.
 --
--- VRATNOST: obě funkce zpátky do znění bez toho bloku. Data se nemění.
+-- VRATNOST — A POZOR, JAK. Napsat „zpátky do znění bez toho bloku" by bylo
+-- pozvání k tomu, sáhnout po `20260813140000_faktury_rpc.sql` — tedy přesně po
+-- tom, před čím varuje odstavec výš. Postup je:
+--
+--   1. `SELECT pg_get_functiondef('public.create_invoice_draft_club(uuid,date,date)'::regprocedure);`
+--      (a totéž pro `…_commercial(uuid)`),
+--   2. z výsledku SMAZAT těch 18 řádků guardu — nic jiného,
+--   3. pustit jako `CREATE OR REPLACE`.
+--
+-- Data se nemění. A revert téhle migrace BEZ revertu `20260830140000` past jen
+-- vrátí zpátky: koncepty půjdou zakládat, vystavit ne.
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION public.create_invoice_draft_club(_subject_id uuid, _obdobi_od date, _obdobi_do date)
@@ -83,7 +93,10 @@ BEGIN
   -- něco zamkne, jinak by po sobě musela uklízet.
   IF COALESCE((SELECT vat_mode FROM public.billing_settings WHERE singleton),
               'neplatce') <> 'neplatce' THEN
-    RAISE EXCEPTION 'Doklad umí zatím jen režim neplátce DPH (nastaveno: %).',
+    -- RADA JE V `message`, NE JEN V `HINT`. Frontend (`useInvoices.ts`) propouští
+    -- `error.message` a `hint` z PostgrestError zahazuje, takže by se admin
+    -- dozvěděl, že to nejde, ale ne kudy jinudy. `HINT` zůstává pro psql a logy.
+    RAISE EXCEPTION 'Doklad umí zatím jen režim neplátce DPH (nastaveno: %). Ostré doklady vystavuje Fakturoid, ne tenhle interní engine.',
       (SELECT vat_mode FROM public.billing_settings WHERE singleton)
       USING HINT = 'Hala je vedená jako plátce — ostré doklady vystavuje Fakturoid, ne interní engine.';
   END IF;
@@ -243,7 +256,10 @@ BEGIN
   -- něco zamkne, jinak by po sobě musela uklízet.
   IF COALESCE((SELECT vat_mode FROM public.billing_settings WHERE singleton),
               'neplatce') <> 'neplatce' THEN
-    RAISE EXCEPTION 'Doklad umí zatím jen režim neplátce DPH (nastaveno: %).',
+    -- RADA JE V `message`, NE JEN V `HINT`. Frontend (`useInvoices.ts`) propouští
+    -- `error.message` a `hint` z PostgrestError zahazuje, takže by se admin
+    -- dozvěděl, že to nejde, ale ne kudy jinudy. `HINT` zůstává pro psql a logy.
+    RAISE EXCEPTION 'Doklad umí zatím jen režim neplátce DPH (nastaveno: %). Ostré doklady vystavuje Fakturoid, ne tenhle interní engine.',
       (SELECT vat_mode FROM public.billing_settings WHERE singleton)
       USING HINT = 'Hala je vedená jako plátce — ostré doklady vystavuje Fakturoid, ne interní engine.';
   END IF;

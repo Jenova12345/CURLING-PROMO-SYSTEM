@@ -16,7 +16,15 @@
 --     vat_mode = 'platce'    →  ODMÍTNUTO: „Doklad umí zatím jen režim
 --                               neplátce DPH (nastaveno: platce)."
 --
--- CO SE TÍM TEDY DĚLÁ: interní engine se ZAVŘE. Není to vedlejší škoda, je to
+-- ⚠️ „ZAVŘE SE" NEPLATÍ BEZ VÝJIMKY, a je to tak schválně. Guard mají
+-- `issue_invoice` a (od navazující migrace) obě `create_invoice_draft_*`.
+-- `storno_invoice` a `dobropis_invoice` ho NEMAJÍ a mít nemají: staré
+-- neplátcovské doklady musí jít opravit, a opravný doklad si režim dědí
+-- z toho opravovaného (`_p.vat_mode`), takže se daňově nerozejde. Prakticky
+-- to znamená, že interní číselná řada může po přepnutí DÁL RŮST — jen o
+-- storna a dobropisy k dokladům, které vznikly předtím. Ověřeno.
+--
+-- CO SE TÍM TEDY DĚLÁ: interní engine se ZAVŘE pro nové doklady. Není to vedlejší škoda, je to
 -- ZÁMĚR. Pod S2 vystavuje ostré doklady Fakturoid a interní engine je na
 -- vyřazení (samostatný ticket) — do té doby je „hlasitě nedostupný" přesně to,
 -- co chceme.
@@ -83,6 +91,8 @@ DECLARE
   _puvodni public.vat_mode;
   _automatika boolean;
   _auto_issue boolean;
+  _konceptu bigint;
+  _zamcenych bigint;
 BEGIN
   SELECT vat_mode, automation_enabled, auto_issue
     INTO _puvodni, _automatika, _auto_issue
@@ -111,7 +121,30 @@ BEGIN
      SET vat_mode = 'platce'
    WHERE singleton;
 
-  RAISE NOTICE 'Režim DPH přepnut na plátce. Interní engine (issue_invoice) je tím ZAVŘENÝ — je to záměr, viz hlavička migrace.';
+  RAISE NOTICE 'Režim DPH přepnut na plátce. Interní engine je tím ZAVŘENÝ pro nové doklady — je to záměr, viz hlavička migrace.';
+
+  -- OTEVŘENÉ KONCEPTY ZŮSTANOU ZASEKNUTÉ, a nikdo by se to jinak nedozvěděl.
+  --
+  -- Migrace zavírá dveře pro NOVÉ koncepty, ale s tím, co je uvnitř, nedělá nic.
+  -- Koncept založený před přepnutím drží rezervace zamčené (`invoice_id`) a už
+  -- nepůjde vystavit — `k_fakturaci` u toho subjektu spadne na nulu, zatímco
+  -- fakturoidí cesta ty rezervace vidí dál a klidně je vyfakturuje. Pak zůstane
+  -- ve `v_konceptu` částka, která je ve skutečnosti vyfakturovaná jinde.
+  --
+  -- Migrace je ZÁMĚRNĚ neruší sama: zahodit rozpracovaný doklad je rozhodnutí
+  -- provozu, ne migrace. Ale mlčet o nich nesmí. Cesta ven je
+  -- `delete_invoice_draft`, která funguje i pod plátcem (ověřeno).
+  --
+  -- Na čerstvém seedu je konceptů nula, takže se na tohle na lokále nepřijde.
+  -- Přijde se na to na demu — proto ten výpis.
+  SELECT count(*) INTO _konceptu FROM public.invoices WHERE status = 'koncept';
+  IF _konceptu > 0 THEN
+    SELECT count(*) INTO _zamcenych FROM public.reservations r
+      JOIN public.invoices i ON i.id = r.invoice_id
+     WHERE i.status = 'koncept';
+    RAISE WARNING 'POZOR: zůstává % otevřených konceptů, které drží % rezervací zamčených a UŽ NEPŮJDOU VYSTAVIT. Zahoď je (delete_invoice_draft) — funguje i pod plátcem —, jinak ty rezervace zůstanou viset mimo „Kdo dluží" i mimo Fakturoid.',
+      _konceptu, _zamcenych;
+  END IF;
 
   IF _automatika OR _auto_issue THEN
     RAISE WARNING 'POZOR: automatika je zapnutá (automation_enabled=%, auto_issue=%). Po tomhle přepnutí bude billing_automation_tick tiše počítat chyby, protože issue_invoice odmítá. Vypni ji, dokud interní engine nevypadne.',

@@ -403,6 +403,23 @@ Kromě pastí z `docs/ETAPA2-STAV.md`, kapitola 5, přibylo tohle:
    hala vystavit chtěla — a to se opravuje dobropisem, ne přepnutím zpátky.
    Automatiku přitom NEZAPÍNAT, dokud interní engine nevypadne (podrobnosti
    v hlavičce té migrace).
+
+   **Před migrací zahoď otevřené koncepty.** Koncept založený před přepnutím
+   drží rezervace zamčené a už nepůjde vystavit — `k_fakturaci` u toho subjektu
+   spadne na nulu, zatímco fakturoidí cesta ty rezervace vidí dál. Migrace je
+   sama neruší (zahodit rozpracovaný doklad je rozhodnutí provozu), jen na ně
+   upozorní `WARNING`em. Cesta ven je `delete_invoice_draft` a funguje i pod
+   plátcem.
+   ```sql
+   SELECT i.cislo, i.subjekt_nazev, count(r.id) AS zamcenych_rezervaci
+     FROM public.invoices i LEFT JOIN public.reservations r ON r.invoice_id = i.id
+    WHERE i.status = 'koncept' GROUP BY 1, 2;
+   ```
+
+   **Co se přepnutím NEZAVŘE:** `storno_invoice` a `dobropis_invoice` guard
+   nemají a mít nemají — staré neplátcovské doklady musí jít opravit a opravný
+   doklad si režim dědí z opravovaného. Interní číselná řada tedy může po
+   přepnutí dál růst, jen o storna a dobropisy k dokladům z doby předtím.
 5. Deploy funkce `fakturoid-invoice`.
 6. **Týden v režimu `koncept`** — doklady se zakládají, e-maily se neposílají.
    Teprve pak `FAKTUROID_MODE=odeslat`.

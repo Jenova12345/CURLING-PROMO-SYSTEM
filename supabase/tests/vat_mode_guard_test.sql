@@ -50,6 +50,7 @@ UPDATE public.billing_settings
 DO $$
 DECLARE
   _sub uuid; _koncept uuid; _spadlo boolean := false; _hlaska text; _rezim public.vat_mode;
+  _zamcenych_pred bigint;
 BEGIN
   -- 1) Výchozí stav po migraci MUSÍ být plátce. Kdyby nebyl, celý tenhle soubor
   --    by testoval něco jiného, než si myslí.
@@ -67,6 +68,7 @@ BEGIN
   --    o obrazovku dál, s rezervacemi visícími na dokladu, který nikdy
   --    nevznikne. Zavírá to migrace 20260830160000.
   SELECT id INTO _sub FROM public.subjects WHERE name = 'CK Ostravské kameny';
+  SELECT count(*) INTO _zamcenych_pred FROM public.reservations WHERE invoice_id IS NOT NULL;
 
   BEGIN
     SET LOCAL ROLE authenticated;
@@ -85,12 +87,25 @@ BEGIN
     RAISE EXCEPTION 'TEST SELHAL: zakládání odmítnuto, ale jinou hláškou: %', _hlaska;
   END IF;
 
-  -- A NIC SE NEZAMKLO. Bez tohohle tvrzení by test prošel i tehdy, kdyby guard
-  -- odmítal až PO zabrání rezervací — tedy kdyby po sobě musel uklízet.
-  IF EXISTS (SELECT 1 FROM public.reservations WHERE invoice_id IS NOT NULL) THEN
-    RAISE EXCEPTION 'TEST SELHAL: guard odmítl, ale rezervace už byly zamčené.';
+  -- A PO ODMÍTNUTÍ NEZŮSTALO NIC ZAMČENÉ.
+  --
+  -- ⚠️ CO TOHLE TVRZENÍ DOKAZUJE A CO NE. Dřívější komentář sliboval, že hlídá
+  -- umístění guardu PŘED zabráním rezervací — to je nepravda a databázová brána
+  -- to doložila mutací: guard přesunutý až ZA zabrání nechal test zelený.
+  -- `RAISE` uvnitř funkce totiž odrolluje celý příkaz včetně `UPDATE reservations`,
+  -- takže na umístění v tomhle ohledu nezáleží (má jiné důvody — nebrat zbytečně
+  -- zámky řádků). Původní past nevznikla pozdním odmítnutím, ale tím, že funkce
+  -- skončila ÚSPĚŠNĚ. Tvrzení je tedy levná regresní pojistka, ne důkaz o pořadí.
+  --
+  -- POČÍTÁ SE ROZDÍL, NE CELÁ TABULKA. `EXISTS (… invoice_id IS NOT NULL)` se
+  -- ptalo na celý stav databáze, takže by na demu nebo v půlce měsíce spadlo
+  -- kvůli cizímu, dávno zamčenému dokladu — a obvinilo guard, který se zachoval
+  -- správně. Táž past, jakou popisuje `fakturace_test.sql` u seedu.
+  IF (SELECT count(*) FROM public.reservations WHERE invoice_id IS NOT NULL) <> _zamcenych_pred THEN
+    RAISE EXCEPTION 'TEST SELHAL: po odmítnutém pokusu se změnil počet zamčených rezervací (bylo %, je %).',
+      _zamcenych_pred, (SELECT count(*) FROM public.reservations WHERE invoice_id IS NOT NULL);
   END IF;
-  RAISE NOTICE 'OK  pod plátcem se koncept nezaloží — a nic se přitom nezamkne';
+  RAISE NOTICE 'OK  pod plátcem se koncept nezaloží — a po odmítnutí nezůstalo nic zamčené';
 
   -- Pro zbytek testu si koncept vyrobíme pod neplátcem.
   _spadlo := false;
@@ -163,7 +178,47 @@ BEGIN
   IF _po <> _pred THEN
     RAISE EXCEPTION 'TEST SELHAL: automatika pod plátcem vyrobila % dokladů.', _po - _pred;
   END IF;
-  RAISE NOTICE 'OK  automatika pod plátcem nevyrobí doklad (%)' , _v;
+
+  -- A GUARD SE DOOPRAVDY ZAPOJIL. Samotné „nevzniklo nic" platí i tehdy, kdyby
+  -- prostě nebylo co fakturovat — pak by tvrzení bylo o prázdnu. Nenulové `chyb`
+  -- říká, že se automatika o akce pokusila a odmítl je guard.
+  --
+  -- ⚠️ TOHLE JE JEDINÉ MÍSTO, KTERÉ KRYJE GUARD V `create_invoice_draft_commercial`.
+  -- Kdo by tuhle sekci vyhodil jako „to je přece o automatice, ne o guardu",
+  -- nechá komerční cestu bez pokrytí. Ověřeno mutací oběma bránami.
+  IF COALESCE((_v -> 'behy' -> 0 ->> 'chyb')::int, 0) = 0 THEN
+    RAISE EXCEPTION 'TEST SELHAL: automatika neohlásila ani jednu chybu — buď neměla co fakturovat, nebo se guard vůbec nezapojil. Tvrzení výš je pak o prázdnu. Výsledek: %', _v;
+  END IF;
+  RAISE NOTICE 'OK  automatika pod plátcem nevyrobí doklad a guard ji odmítl (chyb: %)',
+    (_v -> 'behy' -> 0 ->> 'chyb');
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- VÝJIMKA: STORNO A DOBROPIS ZŮSTÁVAJÍ OTEVŘENÉ — A JE TO ZÁMĚR
+--
+-- „Interní engine se zavře" neplatí bez výhrady. `storno_invoice`
+-- a `dobropis_invoice` guard NEMAJÍ a mít nemají: staré neplátcovské doklady
+-- musí jít opravit, a opravný doklad si daňový režim dědí z opravovaného
+-- (`_p.vat_mode`), takže se nerozejde.
+--
+-- Prakticky to znamená, že interní číselná řada může po přepnutí DÁL RŮST.
+-- Kdo čte „engine je zavřený" a nedočte tuhle výjimku, bude překvapený —
+-- proto je tady jako tvrzení, ne jen jako věta v hlavičce migrace.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _bez_guardu text;
+BEGIN
+  SELECT string_agg(p.proname, ', ' ORDER BY p.proname) INTO _bez_guardu
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND p.proname IN ('storno_invoice', 'dobropis_invoice')
+     AND pg_get_functiondef(p.oid) !~ 'neplátce';
+
+  IF _bez_guardu IS DISTINCT FROM 'dobropis_invoice, storno_invoice' THEN
+    RAISE EXCEPTION 'TEST SELHAL: očekával jsem, že guard NEMAJÍ právě storno_invoice a dobropis_invoice. Bez guardu jsou: %. Když jim ho někdo přidal, staré doklady přestaly jít opravit; když ho někdo přidal jinam, přečti si, proč tu ta výjimka je.',
+      COALESCE(_bez_guardu, '(žádná)');
+  END IF;
+  RAISE NOTICE 'OK  storno a dobropis guard NEMAJÍ — staré doklady jdou opravit i pod plátcem';
 END $$;
 
 DO $$ BEGIN RAISE NOTICE '=== VŠECHNY TESTY PROŠLY ==='; END $$;
