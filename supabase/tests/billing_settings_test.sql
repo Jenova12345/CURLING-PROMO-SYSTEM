@@ -84,6 +84,20 @@ BEGIN
   PERFORM pg_temp.tvrd(pg_temp.default_sloupce('auto_issue') = 'false',               'default auto_issue vypnuté (režim náběhu)');
   PERFORM pg_temp.tvrd(pg_temp.default_sloupce('invoice_only_approved') = 'true',     'default: fakturují se jen schválené rezervace (Q4)');
 
+  -- SAZBA DPH ZA LED JE NA DVOU MÍSTECH a musí zůstat táž.
+  --
+  -- Tady, protože „Kdo kolik dluží" je stránka v `src/`, a ta si `billing/`
+  -- (kde je `SAZBA_DPH_LED`) importovat NESMÍ — hlídá to `hranice.test.ts`.
+  -- Sazbu pro dopočet dluhu tedy musí dodat databáze.
+  --
+  -- Je to přesně ta situace, na kterou v tomhle repu doplatily `iban_je_platny`
+  -- a `overIban`: dvě implementace téhož pravidla, které se tiše rozešly.
+  -- Proto obě strany přišpendlené na TOTÉŽ ČÍSLO — druhá polovina je
+  -- `expect(SAZBA_DPH_LED).toBe(12)` v `billing/mapping.test.ts`.
+  -- Změnit jedno bez druhého nejde tiše: jeden z těch dvou testů zčervená.
+  PERFORM pg_temp.tvrd(pg_temp.default_sloupce('vat_rate_ice') = '12',
+    'default sazba DPH za led je 12 % (musí sedět se SAZBA_DPH_LED v billing/mapping.ts)');
+
   -- Údaje od klienta nesmí mít default — nemá je kdo vymyslet.
   PERFORM pg_temp.tvrd(pg_temp.default_sloupce('supplier_ico') IS NULL, 'IČO dodavatele nemá default');
   PERFORM pg_temp.tvrd(pg_temp.default_sloupce('bank_iban') IS NULL,    'IBAN nemá default');

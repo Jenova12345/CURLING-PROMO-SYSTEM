@@ -319,6 +319,11 @@ describe('DPH — co mapování rozhoduje', () => {
     const akce = mapujKomercniAkci({ eventId: 'e1', subjekt: SUBJ, jePlatceDph: true, rezervace: rez })!;
 
     it('sazba je 12 (procent, ne koeficient) na obou typech dokladu', () => {
+      // ⚠️ TOHLE ČÍSLO ŽIJE NA DVOU MÍSTECH. Druhé je
+      // `billing_settings.vat_rate_ice` v databázi — potřebuje ho „Kdo kolik
+      // dluží", protože `src/` si `billing/` importovat nesmí (hranice.test.ts).
+      // Protějšek tohohle tvrzení je v `supabase/tests/billing_settings_test.sql`;
+      // změnit jedno bez druhého nejde tiše, jeden z těch dvou testů zčervená.
       expect(SAZBA_DPH_LED).toBe(12);
       expect(klub.lines[0].vatRate).toBe(12);
       expect(akce.lines[0].vatRate).toBe(12);

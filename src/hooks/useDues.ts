@@ -16,6 +16,16 @@ export type DueReservation = {
   amount: number | null;
   corrected_hours: number | null;
   corrected_amount: number | null;
+  /**
+   * SKUTEČNÁ dlužná částka — u komerčního subjektu včetně DPH.
+   *
+   * Dopočítává ji pohled `reservations_billing`, ne frontend: sazbu má
+   * databáze (`billing_settings.vat_rate_ice`) a `src/` si `billing/`,
+   * kde žije `SAZBA_DPH_LED`, importovat nesmí.
+   */
+  dluh: number | null;
+  /** Týž údaj BEZ daně — to, co jde na řádek dokladu u komerční faktury. */
+  dluh_zaklad: number | null;
   subject_id: string;
   subject_name: string | null;
   subject_type: SubjectType | null;
@@ -47,7 +57,7 @@ export const useDues = (range: { from: string; to: string } | null) => {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('reservations_billing')
-        .select('id, start_at, end_at, hours, rate_per_hour, amount, corrected_hours, corrected_amount, subject_id, subject_name, subject_type, sheet_name, event_title, created_by_name')
+        .select('id, start_at, end_at, hours, rate_per_hour, amount, corrected_hours, corrected_amount, dluh, dluh_zaklad, subject_id, subject_name, subject_type, sheet_name, event_title, created_by_name')
         .gte('start_at', range!.from)
         .lt('start_at', range!.to)
         .order('start_at', { ascending: true });
@@ -77,7 +87,17 @@ export const useDues = (range: { from: string; to: string } | null) => {
   const bySubject = new Map<string, { subjectId: string; name: string; type: SubjectType; hal: number; hodinySetiny: number; count: number }>();
   for (const r of rows) {
     const hours = Number(r.corrected_hours ?? r.hours ?? 0);
-    const amount = Number(r.corrected_amount ?? r.amount ?? 0);
+    // `dluh` je SKUTEČNÁ dlužná částka, ne `amount`.
+    //
+    // `amount` je snapshot `hodiny × sazba` a pod DPH znamená u klubu částku
+    // S DANÍ, u komerce ZÁKLAD — sečíst ho napříč typy tedy míchá jablka
+    // s hruškami a u komerčních zákazníků podhodnotí dluh o celou sazbu daně.
+    // Dopočet dělá pohled `reservations_billing`, protože sazbu má databáze;
+    // `src/` si `billing/` (kde je `SAZBA_DPH_LED`) importovat nesmí.
+    //
+    // Fallback na `amount` je pro jistotu, ne pro provoz: `dluh` pohled vrací
+    // vždycky. Kdyby chyběl, je lepší ukázat základ než nulu.
+    const amount = Number(r.dluh ?? r.corrected_amount ?? r.amount ?? 0);
     const key = r.subject_id;
     const cur = bySubject.get(key) ?? {
       subjectId: key,

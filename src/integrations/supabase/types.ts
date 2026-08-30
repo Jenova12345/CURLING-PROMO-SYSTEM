@@ -96,6 +96,7 @@ export type Database = {
           updated_at: string
           updated_by: string | null
           vat_mode: Database["public"]["Enums"]["vat_mode"]
+          vat_rate_ice: number
         }
         Insert: {
           auto_issue?: boolean
@@ -125,6 +126,7 @@ export type Database = {
           updated_at?: string
           updated_by?: string | null
           vat_mode?: Database["public"]["Enums"]["vat_mode"]
+          vat_rate_ice?: number
         }
         Update: {
           auto_issue?: boolean
@@ -154,6 +156,7 @@ export type Database = {
           updated_at?: string
           updated_by?: string | null
           vat_mode?: Database["public"]["Enums"]["vat_mode"]
+          vat_rate_ice?: number
         }
         Relationships: [
           {
@@ -558,6 +561,7 @@ export type Database = {
           updated_by?: string | null
           variabilni_symbol?: string | null
           vat_mode?: Database["public"]["Enums"]["vat_mode"]
+          vat_rate_ice?: number
         }
         Update: {
           cislo?: string | null
@@ -607,6 +611,7 @@ export type Database = {
           updated_by?: string | null
           variabilni_symbol?: string | null
           vat_mode?: Database["public"]["Enums"]["vat_mode"]
+          vat_rate_ice?: number
         }
         Relationships: [
           {
@@ -1938,6 +1943,11 @@ export type Database = {
           correction_reason: string | null
           created_by: string | null
           created_by_name: string | null
+          // Skutečný dluh (u komerce včetně DPH) a týž údaj bez daně.
+          // Dopočítává pohled, ne frontend — sazbu má databáze
+          // (`billing_settings.vat_rate_ice`), viz migrace 20260831090000.
+          dluh: number | null
+          dluh_zaklad: number | null
           end_at: string | null
           event_title: string | null
           event_type: Database["public"]["Enums"]["event_type"] | null
