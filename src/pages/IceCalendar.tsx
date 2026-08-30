@@ -62,6 +62,13 @@ const IceCalendar = () => {
   const [eventType, setEventType] = useState<EventType>('commercial');
   const [startTime, setStartTime] = useState('09:00');
   const [endTime, setEndTime] = useState('11:00');
+  // Rozpis štábu u starých akcí je ODHAD, ne údaj. Dokud do něj admin vědomě
+  // nesáhne, nesmí se z něj stát skutečnost — viz `legacyStab` níž.
+  const [rolesTouched, setRolesTouched] = useState(false);
+  // Vyplněné jen u akce, která rozpis podle rolí NEMÁ (`role_reqs` prázdné)
+  // a štáb má popsaný jen starým `required_staff`. Drží původní hodnoty, aby
+  // se daly poslat zpátky beze změny.
+  const [legacyStab, setLegacyStab] = useState<number | null>(null);
   const [roleCounts, setRoleCounts] = useState<Record<string, number>>({
     instructor: 0,
     bar_staff: 0,
@@ -152,6 +159,7 @@ const IceCalendar = () => {
 
   // Increment/decrement role count
   const adjustRoleCount = (role: string, delta: number) => {
+    setRolesTouched(true);
     setRoleCounts(prev => ({
       ...prev,
       [role]: Math.max(0, Math.min(VALIDATION_LIMITS.STAFF_COUNT_MAX, (prev[role] || 0) + delta))
@@ -284,7 +292,8 @@ const IceCalendar = () => {
         start_time: validation.data.start_time,
         end_time: validation.data.end_time,
         required_staff: getTotalStaff(),
-        role_reqs: Object.keys(roleReqs).length > 0 ? roleReqs : undefined,
+        // Vždycky objekt, nikdy `undefined` — proč, viz handleUpdateEvent.
+        role_reqs: roleReqs,
       });
 
       toast({
@@ -371,6 +380,8 @@ const IceCalendar = () => {
     setStartTime('09:00');
     setEndTime('11:00');
     setRoleCounts({ instructor: 0, bar_staff: 0, manager: 0 });
+    setRolesTouched(false);
+    setLegacyStab(null);
     setSelectedDate(null);
     setEditingEvent(null);
   };
@@ -384,17 +395,31 @@ const IceCalendar = () => {
     setStartTime(format(new Date(event.start_time), 'HH:mm'));
     setEndTime(format(new Date(event.end_time), 'HH:mm'));
     
-    // Parse role_reqs or fallback to legacy distribution
+    setRolesTouched(false);
+
+    // Rozpis podle rolí, nebo starý `required_staff`.
     const eventRoleReqs = (event as any).role_reqs;
     if (eventRoleReqs && typeof eventRoleReqs === 'object' && Object.keys(eventRoleReqs).length > 0) {
+      setLegacyStab(null);
       setRoleCounts({
         instructor: eventRoleReqs.instructor || 0,
         bar_staff: eventRoleReqs.bar_staff || 0,
         manager: eventRoleReqs.manager || 0,
       });
     } else {
-      // Legacy events: assign all required_staff to instructor
+      // STARÁ AKCE: rozpis podle rolí nemá, jen počet lidí. Do formuláře se to
+      // musí nějak vykreslit, tak se celý počet ukáže u instruktora — ale je to
+      // ODHAD, ne údaj z databáze. Nikdo nikdy neřekl, že ti lidé byli instruktoři.
+      //
+      // ⚠️ PROTO `legacyStab`. Dokud admin do rolí nesáhne, uložení MUSÍ poslat
+      // rozpis prázdný a původní `required_staff`. Jinak by pouhé otevření
+      // a uložení akce beze změny přepsalo odhad na fakt — a od migrace
+      // 20260827100000 z toho dorovnání štábu udělá skutečné směny: původní
+      // směny bez role by se zrušily a nahradily směnami „instruktor",
+      // s jinou sazbou z ceníku. Ověřeno na živých datech; před tou migrací to
+      // bylo neškodné, protože se rozpis četl jen při vzniku akce.
       const legacyCount = event.required_staff || 0;
+      setLegacyStab(legacyCount);
       setRoleCounts({
         instructor: legacyCount,
         bar_staff: 0,
@@ -437,10 +462,23 @@ const IceCalendar = () => {
     }
 
     try {
-      // Build role_reqs object (filter out zeros)
-      const roleReqs = Object.fromEntries(
-        Object.entries(roleCounts).filter(([_, count]) => count > 0)
-      );
+      // STARÁ AKCE, DO JEJÍŽ ROLÍ NIKDO NESÁHL → štábu se nedotýkáme.
+      //
+      // Rozpis, který formulář ukazuje, je u takové akce odhad („všechno jsou
+      // instruktoři", viz handleOpenEditDialog). Uložit ho jako fakt by
+      // znamenalo, že pouhé otevření a uložení akce beze změny zruší její
+      // původní směny a nahradí je jinými — s rolí, kterou nikdo nepotvrdil,
+      // a s jinou sazbou z ceníku. Posílá se proto prázdný rozpis a PŮVODNÍ
+      // počet lidí, takže dorovnání štábu nemá co měnit.
+      //
+      // POZOR na `required_staff`: vynulovat role a nechat `getTotalStaff()`
+      // by poslalo 0 a legacy směny by se zrušily. Musí jít původní hodnota.
+      const nechatLegacyStab = legacyStab !== null && !rolesTouched;
+
+      // Rozpis podle rolí (nuly se vyhazují — nula a chybějící klíč jsou totéž).
+      const roleReqs = nechatLegacyStab
+        ? {}
+        : Object.fromEntries(Object.entries(roleCounts).filter(([_, count]) => count > 0));
 
       await updateEvent({
         id: editingEvent.id,
@@ -449,8 +487,13 @@ const IceCalendar = () => {
         event_type: validation.data.event_type as Database['public']['Enums']['event_type'],
         start_time: validation.data.start_time,
         end_time: validation.data.end_time,
-        required_staff: getTotalStaff(),
-        role_reqs: Object.keys(roleReqs).length > 0 ? roleReqs : undefined,
+        required_staff: nechatLegacyStab ? legacyStab : getTotalStaff(),
+        // Vždycky objekt, nikdy `undefined`. `undefined` totiž z payloadu pole
+        // vypadne úplně, takže při ÚPRAVĚ akce, kde admin vynuloval všechny
+        // role, by v databázi zůstal starý rozpis — a dorovnání štábu
+        // (trg_events_dorovnani) by směny drželo podle něj. Vynulování by
+        // tiše nefungovalo. Prázdný objekt je jednoznačný: „nikoho nechci".
+        role_reqs: roleReqs,
       });
 
       toast({
@@ -1235,6 +1278,18 @@ const IceCalendar = () => {
                 <p className="text-xs text-muted-foreground">
                   Vyberte počet osob pro každou roli.
                 </p>
+
+                {/* Stará akce má jen počet lidí, ne rozdělení podle rolí. Čísla
+                    níž jsou proto odhad — a admin to musí vědět dřív, než uloží,
+                    protože prvním sáhnutím do rolí se z odhadu stane zadání
+                    a štáb akce se podle něj přeskládá. */}
+                {legacyStab !== null && !rolesTouched && (
+                  <p className="text-xs text-amber-600 dark:text-amber-500">
+                    Tahle akce má štáb zadaný ještě postaru — jen počtem osob ({legacyStab}), bez rozdělení
+                    na role. Čísla níž jsou jen odhad. Dokud do nich nesáhnete, uložení nechá směny akce
+                    beze změny; jakmile do nich sáhnete, štáb se podle nich přeskládá.
+                  </p>
+                )}
                 
                 {Object.entries(staffRoleLabels).map(([role, label]) => (
                   <div key={role} className="flex items-center justify-between p-3 rounded-lg bg-muted/50">

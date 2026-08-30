@@ -64,45 +64,21 @@ export const useEvents = () => {
 
       if (error) throw error;
 
-      // Sync shift slots to match new required_staff (commercial/recruitment only)
-      try {
-        const eventType = (updates.event_type ?? data.event_type) as string;
-        if (eventType === 'commercial' || eventType === 'recruitment') {
-          const desired = updates.required_staff ?? data.required_staff ?? 0;
-
-          const { data: existing, error: fetchErr } = await supabase
-            .from('shifts')
-            .select('id, status')
-            .eq('event_id', id);
-          if (fetchErr) throw fetchErr;
-
-          const currentCount = existing?.length ?? 0;
-          const openIds = (existing ?? [])
-            .filter((s) => s.status === 'open')
-            .map((s) => s.id);
-
-          if (desired > currentCount) {
-            const toInsert = Array.from({ length: desired - currentCount }, () => ({
-              event_id: id,
-              status: 'open' as const,
-            }));
-            const { error: insErr } = await supabase.from('shifts').insert(toInsert);
-            if (insErr) throw insErr;
-          } else if (desired < currentCount) {
-            const removeCount = Math.min(currentCount - desired, openIds.length);
-            if (removeCount > 0) {
-              const { error: delErr } = await supabase
-                .from('shifts')
-                .delete()
-                .in('id', openIds.slice(0, removeCount));
-              if (delErr) throw delErr;
-            }
-          }
-        }
-      } catch (syncErr) {
-        console.error('Shift slot sync failed:', syncErr);
-      }
-
+      // Směny tady NEDOROVNÁVÁME. Dělá to databáze — trigger `trg_events_dorovnani`
+      // (migrace 20260827100000) nad funkcí `dorovnej_stab`.
+      //
+      // Dřív tu byl vlastní dopočet a měl tři vady, kvůli kterým by teď
+      // s triggerem přímo BOJOVAL:
+      //   • počítal podle `required_staff`, kdežto rozpis je v `role_reqs` —
+      //     u akce se dvěma instruktory a barmanem by to viděl jako „3 směny"
+      //     bez rolí a rozdíl by pořád dorovnával tam a zpátky;
+      //   • zakládal směny BEZ `required_role`, takže se nedalo poznat, kdo je
+      //     na co potřeba (a od migrace 20260827090000 by nedostaly ani sazbu
+      //     z ceníku, jen záložních 150 Kč/h);
+      //   • přebytek MAZAL natvrdo (`delete`), proti zásadě „nic nemazat
+      //     natvrdo" — dorovnání ho ruší softly a s razítkem, kdo to udělal.
+      // A selhání jen zapisoval do konzole, takže rozpor mezi akcí a štábem
+      // vznikal tiše.
       return data;
     },
     onSuccess: () => {
