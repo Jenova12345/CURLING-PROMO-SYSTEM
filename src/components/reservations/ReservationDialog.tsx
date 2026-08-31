@@ -53,6 +53,10 @@ export interface ReservationApi {
   /** Lidé s rolí trenéra — pro nezávazné přání u tréninku (R7, varianta D). */
   treneri: Array<{ user_id: string; jmeno: string }>;
   nastavPraniTrenera: (args: { reservation_ids: string[]; user_id: string | null }) => Promise<unknown>;
+  /** Přidání/ubrání dráhy u existující akce (B). */
+  upravDrahyAkce: (args: { event_id: string; sheet_ids: string[] }) => Promise<unknown>;
+  /** Změna typu akce s přepočtem ceny (C) — jen admin. */
+  zmenTypAkce: (args: { event_id: string; typ: BookingKind }) => Promise<unknown>;
   moveBooking: (args: { id: string; start_at: string; end_at: string; sheet_id?: string }) => Promise<unknown>;
   checkConflicts: (args: { sheet_ids: string[]; start_at: string; end_at: string; kind: BookingKind; ignore_event?: string }) => Promise<Conflict[]>;
   aresLookup: (ico: string) => Promise<{ name: string; address: string; dic: string }>;
@@ -75,6 +79,8 @@ interface Props {
   editing?: CalendarReservation | null;
   /** kolik drah drží editovaná akce (u dvou nejde měnit dráha) */
   editingLanes?: number;
+  /** Dráhy, na kterých upravovaná akce běží — aby šlo přidávat a ubírat (B). */
+  editingSheetIds?: string[];
   api: ReservationApi;
 }
 
@@ -90,7 +96,7 @@ function kindOf(r: CalendarReservation): BookingKind {
 
 export function ReservationDialog({
   open, onOpenChange, isAdmin, sheets, subjects, memberships, settings,
-  defaultSheetId, defaultStart, editing, editingLanes = 1, api,
+  defaultSheetId, defaultStart, editing, editingLanes = 1, editingSheetIds = [], api,
 }: Props) {
   const { toast } = useToast();
   const isEdit = !!editing;
@@ -171,7 +177,9 @@ export function ReservationDialog({
       const end = new Date(editing.end_at!);
       setKind(kindOf(editing));
       setSubjectId(editing.subject_id ?? '');
-      setSheetIds(editing.sheet_id ? [editing.sheet_id] : []);
+      // Předvyplní se VŠECHNY dráhy akce (B). Dřív jen ta jedna, na kterou se
+      // kliklo — takže uložení úpravy by ostatní tiše odebralo.
+      setSheetIds(editingSheetIds.length ? editingSheetIds : (editing.sheet_id ? [editing.sheet_id] : []));
       setDate(format(start, 'yyyy-MM-dd'));
       setStartHour(start.getHours());
       // Konec o půlnoci (starší data z doby před validací) posuneme na 23:00 —
@@ -465,7 +473,11 @@ export function ReservationDialog({
         const sameMoment = (a: string, b: string) => new Date(a).getTime() === new Date(b).getTime();
         const movedTime =
           !sameMoment(toIso(startHour), editing.start_at!) || !sameMoment(toIso(endHour), editing.end_at!);
-        const movedSheet = sheetIds[0] !== editing.sheet_id;
+        // Přesun dráhy řeší `moveBooking` jen u JEDNODRÁHOVÉ akce, kde se
+        // nemění počet drah. Když se počet mění, je to práce pro
+        // `upravDrahyAkce` níž — jinak by si ty dvě cesty přepisovaly výsledek.
+        const movedSheet = editingSheetIds.length === 1 && sheetIds.length === 1
+          && sheetIds[0] !== editing.sheet_id;
         if (movedTime || (movedSheet && editingLanes === 1)) {
           await api.moveBooking({
             id: editing.id!,
@@ -494,6 +506,21 @@ export function ReservationDialog({
 
         if (meniSazbu && editing.event_id) {
           await api.upravSazbuAkce({ event_id: editing.event_id, sazba: rateNum! });
+        }
+
+        // ZMĚNA TYPU AKCE (C) — jako první, protože přepočítá cenu; případná
+        // ruční sazba níž pak platí nad novým typem, ne naopak.
+        if (isAdmin && editing.event_id && kind !== kindOf(editing)) {
+          await api.zmenTypAkce({ event_id: editing.event_id, typ: kind });
+        }
+
+        // DRÁHY (B) — přidání i ubrání jedním voláním nad celou akcí.
+        if (editing.event_id) {
+          const puvodni = [...editingSheetIds].sort().join(',');
+          const nove = [...sheetIds].sort().join(',');
+          if (puvodni !== nove && sheetIds.length > 0) {
+            await api.upravDrahyAkce({ event_id: editing.event_id, sheet_ids: sheetIds });
+          }
         }
 
         if (kind === 'training' && (editing.preferovany_trener ?? '') !== praniTrenera) {
@@ -552,7 +579,10 @@ export function ReservationDialog({
                   <Button
                     key={k} type="button" size="sm"
                     variant={kind === k ? 'default' : 'outline'}
-                    disabled={isEdit}
+                    // TYP AKCE JDE ZMĚNIT I V ÚPRAVĚ (C) — ale jen adminovi,
+                    // protože typ hýbe cenou (klub → pásma, komerční → sazba).
+                    // Bez akce (`event_id`) není co přepínat.
+                    disabled={isEdit && (!isAdmin || !editing?.event_id)}
                     onClick={() => setKind(k)}
                   >
                     {KIND_LABELS[k]}
@@ -612,25 +642,28 @@ export function ReservationDialog({
             {/* dráhy */}
             <div className="space-y-2">
               <Label>Dráhy</Label>
-              {isEdit && editingLanes > 1 ? (
-                <p className="text-xs text-muted-foreground">
-                  Akce běží na obou drahách — posunout jde jen její čas, dráhy ne.
-                </p>
-              ) : (
-                <div className="flex flex-wrap gap-4">
-                  {sheets.map((s) => (
-                    <label key={s.id} className="flex items-center gap-2 text-sm">
-                      <Checkbox
-                        checked={sheetIds.includes(s.id)}
-                        onCheckedChange={() => (isEdit ? setSheetIds([s.id]) : toggleSheet(s.id))}
-                      />
-                      {s.name}
-                    </label>
-                  ))}
-                </div>
-              )}
+              <div className="flex flex-wrap gap-4">
+                {sheets.map((s) => (
+                  <label key={s.id} className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={sheetIds.includes(s.id)}
+                      // I V ÚPRAVĚ SE DRÁHY PŘEPÍNAJÍ VOLNĚ (B).
+                      // Dřív tu bylo `setSheetIds([s.id])`, takže zaškrtnutí
+                      // druhé dráhy tu první vyplo a akce zůstala jednodráhová.
+                      onCheckedChange={() => toggleSheet(s.id)}
+                    />
+                    {s.name}
+                  </label>
+                ))}
+              </div>
               {!isEdit && sheetIds.length > 1 && (
                 <p className="text-xs text-muted-foreground">Rezervace vznikne na obou drahách (stejný čas i akce).</p>
+              )}
+              {isEdit && (
+                <p className="text-xs text-muted-foreground">
+                  Přidaná dráha se založí pod touhle akcí se stejným časem i sazbou;
+                  odebraná se skryje, nesmaže.
+                </p>
               )}
             </div>
 

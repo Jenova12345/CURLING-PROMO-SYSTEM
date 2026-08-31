@@ -432,6 +432,28 @@ export const useReservations = (range: DateRange | null) => {
     onSuccess: invalidate,
   });
 
+  // ---- ÚPRAVA AKCE: dráhy a typ (B, C) ------------------------------------
+
+  const upravDrahyAkce = useMutation({
+    mutationFn: async (a: { event_id: string; sheet_ids: string[] }) => {
+      const { error } = await supabase.rpc('uprav_drahy_akce', {
+        _event_id: a.event_id, _sheet_ids: a.sheet_ids,
+      });
+      if (error) throw rpcError(error, 'Dráhy se nepodařilo upravit.');
+    },
+    onSuccess: invalidate,
+  });
+
+  const zmenTypAkce = useMutation({
+    mutationFn: async (a: { event_id: string; typ: BookingKind }) => {
+      const { error } = await supabase.rpc('zmen_typ_akce', {
+        _event_id: a.event_id, _typ: a.typ,
+      });
+      if (error) throw rpcError(error, 'Typ akce se nepodařilo změnit.');
+    },
+    onSuccess: invalidate,
+  });
+
   // Založení komerčního subjektu (firmy) — jen admin (subjects RLS).
   //
   // ⚠️ `.select()` MUSÍ VYJMENOVAT SLOUPCE, holé `.select()` tady NEFUNGUJE.
@@ -490,6 +512,8 @@ export const useReservations = (range: DateRange | null) => {
     priradTrenera: priradTrenera.mutateAsync,
     odeberTrenera: odeberTrenera.mutateAsync,
     nastavPraniTrenera: nastavPraniTrenera.mutateAsync,
+    upravDrahyAkce: upravDrahyAkce.mutateAsync,
+    zmenTypAkce: zmenTypAkce.mutateAsync,
     moveBooking: moveBooking.mutateAsync,
     cancelBooking: cancelBooking.mutateAsync,
     approveReservation: approveReservation.mutateAsync,

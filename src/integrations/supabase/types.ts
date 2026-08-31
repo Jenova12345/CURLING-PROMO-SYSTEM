@@ -3172,8 +3172,19 @@ export type Database = {
         }
         Returns: undefined
       }
+      uprav_drahy_akce: {
+        Args: { _event_id: string; _sheet_ids: string[] }
+        Returns: Json
+      }
       uprav_sazbu_akce: {
         Args: { _event_id: string; _sazba: number }
+        Returns: Json
+      }
+      zmen_typ_akce: {
+        Args: {
+          _event_id: string
+          _typ: Database["public"]["Enums"]["event_type"]
+        }
         Returns: Json
       }
     }

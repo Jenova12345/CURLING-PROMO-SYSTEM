@@ -449,8 +449,11 @@ describe('parseSazba — sazba z formulářového pole', () => {
 
   it('odmítne nečíslo a nekladné hodnoty', () => {
     expect(parseSazba('abc').chyba).toBeTruthy();
-    expect(parseSazba('0').chyba).toBe('Sazba musí být kladná.');
-    expect(parseSazba('-600').chyba).toBe('Sazba musí být kladná.');
+    // NULA PROJDE — akce zadarmo je legitimní a od 31. 8. 2026 se prostě
+    // nefakturuje (doklad na 0 Kč se nevystavuje). Dřív to tady bylo zakázané.
+    expect(parseSazba('0').chyba).toBeUndefined();
+    expect(parseSazba('0').hodnota).toBe(0);
+    expect(parseSazba('-600').chyba).toBe('Sazba nesmí být záporná.');
     expect(parseSazba('Infinity').chyba).toBeTruthy();
     expect(parseSazba('NaN').chyba).toBeTruthy();
   });
@@ -531,16 +534,20 @@ describe('parseSazba — sazba z formulářového pole', () => {
 
   it('při chybě nikdy nevrátí hodnotu k uložení', () => {
     // Aby volající, který zapomene chybu ošetřit, neuložil nesmysl.
-    for (const vstup of ['abc', '0', '-1', '1250,50', 'NaN']) {
+    // '0' už tu NENÍ — nula je od 31. 8. 2026 platný vstup (akce zdarma).
+    for (const vstup of ['abc', '-1', '1250,50', 'NaN']) {
       expect(parseSazba(vstup).hodnota).toBeNull();
     }
   });
 
   it('SMLOUVA: co projde validací, uloží databáze beze změny', () => {
     // Vlastnostní test, ne pár ukázek: přes široký vzorek různých tvarů vstupu
-    // musí platit, že bez `chyba` je hodnota celé kladné číslo v rozsahu
+    // musí platit, že bez `chyba` je hodnota celé NEZÁPORNÉ číslo v rozsahu
     // numeric(10,2) a nepřesahuje strop sazby. Zrcadlí CHECKy z A2 a ze stropu
     // sazby (`settings_*_cele_koruny`, `*_strop`).
+    //
+    // Nezáporné, ne kladné: nula je platná sazba (akce zdarma) a databáze ji
+    // taky pouští — `rate_per_hour >= 0`.
     const vstupy: string[] = [];
     for (let i = 0; i < 400; i++) {
       vstupy.push(String(i), `${i},00`, `${i}.5`, `${i},001`, `${i}e2`, ` ${i} `, `-${i}`);
@@ -558,7 +565,7 @@ describe('parseSazba — sazba z formulářového pole', () => {
       if (v.hodnota === null) continue; // prázdné pole = „z ceníku"
       prijatych++;
       expect(Number.isInteger(v.hodnota)).toBe(true);
-      expect(v.hodnota).toBeGreaterThan(0);
+      expect(v.hodnota).toBeGreaterThanOrEqual(0);
       expect(v.hodnota).toBeLessThanOrEqual(SAZBA_STROP);
       expect(v.hodnota).toBe(roundCzk(v.hodnota));
     }

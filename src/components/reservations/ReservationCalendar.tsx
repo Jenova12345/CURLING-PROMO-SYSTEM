@@ -69,20 +69,56 @@ export function ReservationCalendar({
    * součet by byl horší než žádný.
    */
   const akce = useMemo(() => {
-    const m = new Map<string, { drah: number; celkem: number | null }>();
+    const m = new Map<string, {
+      drah: number; celkem: number | null;
+      lanes: number[]; start: string; end: string; stejnyCas: boolean;
+    }>();
+    const poradiDrahy = new Map(sheets.map((s, i) => [s.id, i]));
+
     for (const r of reservations) {
       if (!r.event_id) continue;
-      const cur = m.get(r.event_id) ?? { drah: 0, celkem: 0 as number | null };
+      const cur = m.get(r.event_id);
       const castka = Number(r.corrected_amount ?? r.amount);
-      m.set(r.event_id, {
-        drah: cur.drah + 1,
-        celkem: cur.celkem == null || !r.can_see_amount || !Number.isFinite(castka)
-          ? null
-          : cur.celkem + castka,
-      });
+      const lane = poradiDrahy.get(r.sheet_id!) ?? -1;
+
+      if (!cur) {
+        m.set(r.event_id, {
+          drah: 1,
+          celkem: r.can_see_amount && Number.isFinite(castka) ? castka : null,
+          lanes: [lane], start: r.start_at!, end: r.end_at!, stejnyCas: true,
+        });
+        continue;
+      }
+      cur.drah += 1;
+      cur.lanes.push(lane);
+      cur.celkem = cur.celkem == null || !r.can_see_amount || !Number.isFinite(castka)
+        ? null : cur.celkem + castka;
+      // SPOJUJE SE JEN PŘI SHODNÉM ČASE. Kdyby jedna dráha běžela jinak,
+      // roztažený blok by lhal o tom, kdy se hraje — pak radši dva bloky.
+      if (r.start_at !== cur.start || r.end_at !== cur.end) cur.stejnyCas = false;
     }
+    for (const v of m.values()) v.lanes.sort((a, b) => a - b);
     return m;
-  }, [reservations]);
+  }, [reservations, sheets]);
+
+  /**
+   * Má se akce vykreslit jako JEDEN blok roztažený přes dráhy?
+   *
+   * Platí pro VŠECHNY typy akcí (komerční, trénink, turnaj i údržba) — akce na
+   * dvou drahách je jedna akce, ne dvě. Podmínky jsou tři:
+   *   • víc než jedna dráha,
+   *   • shodný čas na všech (jinak by blok lhal o tom, kdy se hraje),
+   *   • dráhy jdou po sobě — roztáhnout blok přes mezeru nejde, sloupce mezi
+   *     nimi patří jiné dráze.
+   */
+  const spojenaAkce = (eventId?: string | null) => {
+    if (!eventId) return null;
+    const a = akce.get(eventId);
+    if (!a || a.drah < 2 || !a.stejnyCas) return null;
+    const souvisle = a.lanes.every((l, i) => i === 0 || l === a.lanes[i - 1] + 1);
+    if (!souvisle || a.lanes[0] < 0) return null;
+    return a;
+  };
 
   const openMin = openHour * 60;
   const totalMin = (closeHour - openHour) * 60;
@@ -229,12 +265,22 @@ export function ReservationCalendar({
           const skupina = r.event_id ? akce.get(r.event_id) : undefined;
           const vicDrah = (skupina?.drah ?? 1) > 1;
 
+          // JEDNA AKCE = JEDEN BLOK. Roztažený blok se kreslí jen v PRVNÍ
+          // dráze skupiny; v ostatních se rezervace přeskočí, jinak by pod ním
+          // zůstaly ležet duplicitní boxy.
+          const spojena = spojenaAkce(r.event_id);
+          if (spojena && laneIndex !== spojena.lanes[0]) return null;
+          const roztazeniDrah = spojena ? spojena.drah : 1;
+
           return (
             <button
               key={r.id}
               type="button"
               onClick={(e) => e.stopPropagation()}
-              onPointerDown={(e) => { e.stopPropagation(); onPointerDown(e, r); }}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                if (roztazeniDrah === 1) onPointerDown(e, r);
+              }}
               onPointerMove={onPointerMove}
               onPointerUp={(e) => { e.stopPropagation(); onPointerUp(e, r); }}
               onPointerCancel={() => { dragRef.current = null; setPreview(null); }}
@@ -249,11 +295,19 @@ export function ReservationCalendar({
                 vicDrah && 'ring-1 ring-inset ring-primary/40',
                 TYPE_STYLE[r.event_type ?? 'training'] ?? 'border-l-slate-400 bg-slate-50',
                 !r.approved_at && 'border-dashed',
-                canDrag && r.can_manage && 'cursor-grab touch-none',
+                // Roztažený blok se netáhne: tah míří do jednoho sloupce
+                // a akce jich zabírá víc. Přesouvá se přes Upravit.
+                canDrag && r.can_manage && roztazeniDrah === 1 && 'cursor-grab touch-none',
                 dragging && 'z-20 cursor-grabbing opacity-80 ring-2 ring-primary',
               )}
               style={{
                 top, height,
+                // Sloupce drah jsou stejně široké `flex-1` sourozenci, takže
+                // roztažení přes N drah je N × šířka sloupce (minus okraje,
+                // které blok drží uvnitř `left-1 right-1`).
+                ...(roztazeniDrah > 1
+                  ? { width: `calc(${roztazeniDrah} * 100% - 0.5rem)`, right: 'auto' }
+                  : null),
                 transform: dragging ? `translate(${preview!.dx}px, ${preview!.dy}px)` : undefined,
               }}
               title={
@@ -285,9 +339,12 @@ export function ReservationCalendar({
                 <div className="text-[11px] text-muted-foreground">
                   {vicDrah && skupina?.celkem != null ? (
                     // U akce přes víc drah je hlavní číslo CELEK; částka téhle
-                    // dráhy je jen podíl a sama o sobě mate.
-                    <>celkem {fmtKc(skupina.celkem)} <span className="opacity-70">
-                      (tato dráha {fmtKc(Number(amount))})</span></>
+                    // dráhy je jen podíl a sama o sobě mate. U SPOJENÉHO bloku
+                    // se podíl neuvádí vůbec — blok už zastupuje celou akci.
+                    roztazeniDrah > 1
+                      ? <>{fmtKc(skupina.celkem)} · {skupina.drah} dráhy</>
+                      : <>celkem {fmtKc(skupina.celkem)} <span className="opacity-70">
+                          (tato dráha {fmtKc(Number(amount))})</span></>
                   ) : fmtKc(Number(amount))}
                 </div>
               )}

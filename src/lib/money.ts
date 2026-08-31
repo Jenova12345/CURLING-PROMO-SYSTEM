@@ -236,7 +236,11 @@ export function parseSazba(vstup: string, strop: number = SAZBA_STROP): Vysledek
   const cislo = Number(text.replace(',', '.'));
 
   if (!Number.isFinite(cislo)) return { hodnota: null, chyba: 'Sazba musí být číslo.' };
-  if (cislo <= 0) return { hodnota: null, chyba: 'Sazba musí být kladná.' };
+  // NULA JE POVOLENÁ. Akce zadarmo je legitimní (ukázková hodina, protislužba),
+  // databáze ji přijímá vždycky a od 31. 8. 2026 se taková akce prostě
+  // nefakturuje — `fakturovatelne_rezervace` ji vynechá, protože doklad na
+  // 0 Kč nemá co říct. Záporná sazba je pořád nesmysl.
+  if (cislo < 0) return { hodnota: null, chyba: 'Sazba nesmí být záporná.' };
   // Schválně `Number.isInteger`, ne `toSetiny(x) % 100`: to druhé nejdřív zaokrouhlí,
   // takže by kolem každé koruny nechalo toleranční okno ±0,005 a „600,001" by prošlo
   // jako celokorunová sazba — a vrátilo by se nezaokrouhlené dál do výpočtů.
@@ -256,5 +260,8 @@ export function parseSazba(vstup: string, strop: number = SAZBA_STROP): Vysledek
     const mez = String(strop).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
     return { hodnota: null, chyba: `Sazba je nejvýš ${mez} Kč/h. Vyšší číslo je skoro jistě překlep.` };
   }
-  return { hodnota: cislo };
+  // `+ 0` srovnává ZÁPORNOU NULU. `Number('-0')` je `-0`, což projde jako
+  // nezáporné číslo, ale uložit do sazby „minus nulu" je nesmysl a `Object.is`
+  // ji od nuly rozezná — což už jednou shodilo vlastnostní test.
+  return { hodnota: cislo + 0 };
 }

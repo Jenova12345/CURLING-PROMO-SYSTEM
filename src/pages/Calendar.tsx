@@ -381,6 +381,12 @@ const Calendar = () => {
         defaultStart={defaultStart}
         editing={editing}
         editingLanes={lanesOfEvent(editing)}
+        editingSheetIds={
+          editing?.event_id
+            ? reservations.filter((x) => x.event_id === editing.event_id)
+                .map((x) => x.sheet_id!).filter(Boolean)
+            : (editing?.sheet_id ? [editing.sheet_id] : [])
+        }
         api={{
           createBooking: (input) => { limit(); return api.createBooking(input); },
           createSeries: (input) => { limit(); return api.createSeries(input); },
@@ -388,6 +394,8 @@ const Calendar = () => {
           upravSazbuAkce: api.upravSazbuAkce,
           treneri: api.treneri,
           nastavPraniTrenera: api.nastavPraniTrenera,
+          upravDrahyAkce: api.upravDrahyAkce,
+          zmenTypAkce: api.zmenTypAkce,
           moveBooking: api.moveBooking,
           checkConflicts: api.checkConflicts,
           aresLookup: api.aresLookup,
