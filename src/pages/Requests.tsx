@@ -19,14 +19,19 @@ const STAV: Record<string, { text: string; trida?: string }> = {
 const kdy = (d: string | null) => (d ? format(new Date(d), 'd. M. yyyy HH:mm', { locale: cs }) : '—');
 
 const Requests = () => {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isRep } = useAuth();
   const { toast } = useToast();
   const { requests, cekajici, isLoading, error, approve, reject, isBusy } = useSubjectRequests();
   // Úroveň se volí PRO KAŽDOU ŽÁDOST ZVLÁŠŤ, ne globálně: zástupce je výjimka,
   // a jedno společné rozbalovátko by svádělo k tomu udělat zástupce ze všech.
   const [uroven, setUroven] = useState<Record<string, RepLevel>>({});
 
-  if (!isAdmin) return <div className="p-6 text-muted-foreground">Žádosti o přiřazení vyřizuje jen správce.</div>;
+  // Frontu vyřizuje i ZÁSTUPCE KLUBU (blok C, R5) — vidí v ní jen žádosti do
+  // svých klubů, o což se stará politika na `subject_requests`, ne tahle
+  // podmínka. Tady jde jen o to, komu se stránka vůbec ukáže.
+  if (!isAdmin && !isRep) {
+    return <div className="p-6 text-muted-foreground">Žádosti o přiřazení vyřizuje správce haly nebo zástupce klubu.</div>;
+  }
 
   const schval = async (z: SubjectRequest) => {
     const level = uroven[z.id!] ?? 'member';
@@ -114,7 +119,9 @@ const Requests = () => {
                         onChange={(e) => setUroven((u) => ({ ...u, [z.id!]: e.target.value as RepLevel }))}
                       >
                         <option value="member">člen</option>
-                        <option value="rep">zástupce</option>
+                        {/* Zástupce smí jmenovat JEN admin (blok C) — zástupci se
+                            ta volba ani nenabízí, aby nenarazil na chybu z databáze. */}
+                        {isAdmin && <option value="rep">zástupce</option>}
                       </select>
                     </TableCell>
                     <TableCell className="text-right">

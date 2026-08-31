@@ -110,7 +110,8 @@ export const ROLE_LABELS: Record<string, string> = {
   bar_staff: 'Obsluha baru',
   manager: 'Provozní hospoda',
   pro_player: 'Profi hráč',
-  hobby_player: 'Hobby hráč',
+  // R3: v databázi zůstává `hobby_player`, mění se JEN popisek v UI.
+  hobby_player: 'Hráč klubu',
 };
 
 export const DEFAULT_PATHS = ['/', '/calendar', '/profile', '/communication', '/help'];

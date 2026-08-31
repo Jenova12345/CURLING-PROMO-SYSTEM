@@ -73,7 +73,19 @@ INSERT INTO auth.identities (
    '{"sub":"55555555-5555-5555-5555-555555555555","email":"clen2@test.local"}', 'email',
    now(), now(), now());
 
--- 3) Doplňkové role (trigger už každému dal hobby_player)
+-- 3) Role.
+--
+-- ⚠️ TRIGGER UŽ ROLI NEDÁVÁ. Od migrace `20260831140000_zivotni_cyklus_uctu.sql`
+-- vzniká účet BEZ role a ve stavu `ceka` — dovnitř ho pustí až schválení
+-- žádosti o klub. Seed proto musí `hobby_player` i stav `aktivni` doplnit sám,
+-- jinak by se demo uživatelé nedostali nikam a všechny testy práv by padaly na
+-- „nic nevidí".
+INSERT INTO public.user_roles (user_id, role)
+SELECT user_id, 'hobby_player'::public.app_role FROM public.profiles
+ON CONFLICT (user_id, role) DO NOTHING;
+
+UPDATE public.profiles SET stav = 'aktivni' WHERE stav <> 'aktivni';
+
 INSERT INTO public.user_roles (user_id, role) VALUES
   ('11111111-1111-1111-1111-111111111111', 'admin'),
   ('22222222-2222-2222-2222-222222222222', 'instructor'),

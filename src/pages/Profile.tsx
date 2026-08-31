@@ -51,7 +51,7 @@ const Profile = () => {
     trainer: 'Trenér',
     part_time_staff: 'Brigádník',
     pro_player: 'Profi hráč',
-    hobby_player: 'Hobby hráč',
+    hobby_player: 'Hráč klubu',   // R3 — hodnota v DB se nepřejmenovává
   };
 
   const handleSaveProfile = async () => {

@@ -62,9 +62,14 @@ v UI, ne prvek datového modelu.
 2. **Dorovnání štábu** — trigger, který směny dopočítá i při ÚPRAVĚ akce, ne jen
    při vzniku (R8).
 
-**Body 2, 3 a 5 se zatím NESTAVÍ** (rozhodnutí PM): životní cyklus účtu je zásah
-do RLS napříč aplikací a potvrzovací dialog čeká na přepis schůzky. Jdou na řadu
-až po 1 a 4.
+~~**Body 2, 3 a 5 se zatím NESTAVÍ**~~ — **bod 2 (životní cyklus účtu) je od
+31. 8. 2026 POSTAVENÝ** jako „blok C", migrace
+`20260831140000_zivotni_cyklus_uctu.sql`. Body 3 a 5 pořád čekají.
+
+> ⚠️ Kompletní bezpečnostní brána na blok C **ještě neproběhla** — pouští se až
+> před nasazením do produkce (rozhodnutí PM). Do té doby ho ber jako
+> odzkoušený (20 SQL suit + testy práv pod `authenticated`), ale nezhlédnutý
+> nezávislým review.
 
 ---
 

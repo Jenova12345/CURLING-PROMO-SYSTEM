@@ -23,7 +23,7 @@ const Dashboard = () => {
     bar_staff: 'Obsluha baru',
     manager: 'Provozní hospoda',
     pro_player: 'Profi hráč',
-    hobby_player: 'Hobby hráč',
+    hobby_player: 'Hráč klubu',
   };
 
   const upcomingEvents = events

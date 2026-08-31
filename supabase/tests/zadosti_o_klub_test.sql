@@ -95,12 +95,18 @@ BEGIN
   PERFORM pg_temp.tvrd(_z.decided_at IS NULL AND _z.decided_by IS NULL,
     'bez razítka o rozhodnutí');
 
-  -- Profil i výchozí role musí vzniknout jako dřív.
+  -- Profil vzniká jako dřív, ROLE UŽ NE (blok C, R4). Dokud účet nikdo
+  -- neschválí, nemá roli ani přístup — tohle je ta hlavní změna životního cyklu.
   PERFORM pg_temp.tvrd((SELECT count(*) FROM public.profiles WHERE user_id = _novy) = 1,
     'registrace pořád zakládá profil');
   PERFORM pg_temp.tvrd(
-    (SELECT count(*) FROM public.user_roles WHERE user_id = _novy AND role = 'hobby_player') = 1,
-    'a výchozí roli hobby_player (členství v klubu na aplikační roli nestojí)');
+    (SELECT count(*) FROM public.user_roles WHERE user_id = _novy) = 0,
+    'ale ŽÁDNOU roli — účet po registraci čeká na schválení (R4)');
+  PERFORM pg_temp.tvrd(
+    (SELECT stav FROM public.profiles WHERE user_id = _novy) = 'ceka',
+    'a profil je ve stavu „ceka"');
+  PERFORM pg_temp.tvrd(NOT public.ucet_aktivni(_novy),
+    '… takže ho default-deny brána nikam nepustí (R6)');
 END $$;
 
 -- -----------------------------------------------------------------------------
@@ -237,12 +243,14 @@ DECLARE _z uuid;
 BEGIN
   SELECT hodnota::uuid INTO _z FROM _stav WHERE klic = 'zadost';
   SELECT id INTO _z FROM public.subject_requests WHERE status = 'ceka' LIMIT 1;
+  -- Hláška se blokem C změnila (schvalovat smí i zástupce), tvrzení ne:
+  -- ŘADOVÝ ČLEN nesmí ani schválit, ani zamítnout.
   PERFORM pg_temp.ocekavej_chybu(
     format('SELECT public.approve_subject_request(%L, ''rep'')', _z),
-    'jen správce', 'člen si žádost neschválí');
+    'správce haly nebo zástupce klubu', 'člen si žádost neschválí');
   PERFORM pg_temp.ocekavej_chybu(
     format('SELECT public.reject_subject_request(%L)', _z),
-    'jen správce', 'člen žádost nezamítne');
+    'správce haly nebo zástupce klubu', 'člen žádost nezamítne');
 END $$;
 
 -- A ve frontě vidí jen svoje.

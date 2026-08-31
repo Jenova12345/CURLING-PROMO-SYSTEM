@@ -45,7 +45,7 @@ const Members = () => {
     bar_staff: 'Obsluha baru',
     manager: 'Provozní hospoda',
     pro_player: 'Profi hráč',
-    hobby_player: 'Hobby hráč',
+    hobby_player: 'Hráč klubu',
   };
 
   // All roles including legacy (for badge display only)

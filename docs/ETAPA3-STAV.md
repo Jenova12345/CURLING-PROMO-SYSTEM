@@ -50,6 +50,7 @@ nová implementace `InvoiceProvider`, aniž se sáhne na jádro.
 | — `0e7eb29` | Druhé kolo review: zavření okna mezi zámkem 2 a claimem |
 | **PR 4** | Migrace `fakturoid_invoices`, `SupabaseStore`, Edge funkce, režim vystavení, oddělení chyb |
 | **Ceník ledu** | Pásmový klubový ceník (`cenik_pasma`), rozpis na rezervaci, řádky dokladu po sazbách, komerční 5 000 Kč/h |
+| **Blok C** | Životní cyklus účtu: registrace bez role, schvaluje i zástupce, „právo navíc", default-deny brána `ucet_aktivni()` |
 
 **Kód žije v `billing/`, schválně MIMO `src/`.** Do `src/` sahá Vite bundle
 a `FAKTUROID_CLIENT_SECRET` nesmí mít ani teoretickou cestu do prohlížeče.
@@ -452,6 +453,47 @@ patří jí vlastní blok s vlastními bránami.
 **Ranní pásmo 6–14 za 800 Kč/h** taky pořád čeká na potvrzení klienta, a ceník
 zatím **nejde měnit z aplikace** — v `src/` na `cenik_pasma` není reference,
 takže „admin si to upraví v Nastavení" dnes znamená ruční SQL.
+
+---
+
+## 6c. Blok C — životní cyklus účtu (31. 8. 2026)
+
+Migrace `20260831140000_zivotni_cyklus_uctu.sql`, testy
+`supabase/tests/zivotni_cyklus_test.sql`. Staví bod 2 z `docs/ETAPA3-ROLE-NAVRH.md`.
+
+**Registrace už nedává roli.** Účet vzniká ve stavu `ceka` a dovnitř ho pustí
+teprve schválení žádosti o klub, které jedním krokem přidělí členství, roli
+`hobby_player` i stav `aktivni`. Schvalovat smí **admin i zástupce cílového
+klubu** (R5) — zástupce ale jen do svého klubu a **úroveň „zástupce" smí udělit
+jen admin**, jinak by si zástupce vyrobil druhého a obešel správce haly.
+
+**Default-deny je vidět (R6).** Brána je `ucet_aktivni()` a je zapojená do tří
+funkcí, na kterých stojí všechny politiky: `has_role`, `is_subject_member`,
+`is_subject_rep`. Účet ve stavu `ceka` by neprošel i bez ní (nemá roli ani
+členství), ale **deaktivovaný účet roli má** — a právě ten se tím zavírá.
+Zavřít člověka jde díky tomu na jednom místě, změnou `profiles.stav`.
+
+**„Právo navíc" je úzké (R11).** `subject_reps.muze_potvrzovat` dovolí hráči
+potvrdit **jen jeho vlastní** rezervaci před akcí; cizí nepotvrdí ani s ním.
+Potvrzení PO akci, které spouští fakturaci a výplaty, hráč nedostane nikdy (R10).
+
+### Dvě pasti, na které tenhle blok narazil
+
+- **Frontend si roli domýšlel.** `AuthContext` při prázdném seznamu rolí
+  nastavoval `hobby_player`. Od bloku C je „bez role" normální stav (čekající
+  účet), takže by se takový uživatel tvářil jako vpuštěný a koukal na prázdnou
+  aplikaci místo věty „čeká se na potvrzení". Fallback je pryč; zastavuje to
+  `AppLayout` na jednom místě nad všemi stránkami.
+- **`profiles_self` neměl `stav`.** Aplikace profil čte z pohledu, ne z tabulky,
+  a pohled vznikl dřív než sloupec. Bez jeho doplnění by se přihlašovací
+  obrazovka neměla podle čeho rozhodnout.
+
+### Co ještě nemá brány
+
+⚠️ **Kompletní bezpečnostní brána na blok C neproběhla** — pouští se až před
+nasazením do produkce (rozhodnutí PM z 31. 8. 2026). Odzkoušené to je (20 SQL
+suit, testy práv pod `SET LOCAL ROLE authenticated`, typecheck, build), ale
+nezávislé review to zatím nevidělo. **Do produkce ne, dokud brána neproběhne.**
 
 ---
 

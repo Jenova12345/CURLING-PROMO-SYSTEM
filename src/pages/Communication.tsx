@@ -42,7 +42,7 @@ const ALL_ROLES: { value: AppRole; label: string }[] = [
   { value: 'bar_staff', label: 'Obsluha baru' },
   { value: 'manager', label: 'Provozní hospoda' },
   { value: 'pro_player', label: 'Profi hráč' },
-  { value: 'hobby_player', label: 'Hobby hráč' },
+  { value: 'hobby_player', label: 'Hráč klubu' },
 ];
 
 const AVAILABLE_ICONS = [

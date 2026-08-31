@@ -25,6 +25,8 @@ interface Profile {
   full_name: string | null;
   phone: string | null;
   bank_account: string | null;
+  /** Životní cyklus účtu (blok C). Chybí jen u profilu načteného starým klientem. */
+  stav?: 'ceka' | 'aktivni' | 'zamitnut' | 'deaktivovan' | null;
 }
 
 interface AuthContextType {
@@ -42,6 +44,10 @@ interface AuthContextType {
   isTrainer: boolean;
   isStaff: boolean;
   isMember: boolean;
+  /** Účet čeká na schválení (nebo byl zavřený) — nesmí vidět aplikaci. */
+  cekaNaSchvaleni: boolean;
+  /** Je zástupcem aspoň jednoho klubu → smí vyřizovat žádosti do svých klubů. */
+  isRep: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -55,6 +61,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [profile, setProfile] = useState<Profile | null>(null);
   const [role, setRole] = useState<AppRole | null>(null);
   const [roles, setRoles] = useState<AppRole[]>([]);
+  const [isRep, setIsRep] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const fetchUserData = async (userId: string) => {
@@ -95,14 +102,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setRole(primaryRole);
         console.log('[AuthContext] Roles successfully set to:', userRoles, 'Primary:', primaryRole);
       } else {
-        console.warn('[AuthContext] No roles found for user, defaulting to hobby_player');
-        setRoles(['hobby_player']);
-        setRole('hobby_player');
+        // ŽÁDNÝ FALLBACK NA `hobby_player` (blok C).
+        //
+        // Účet bez role je od zavedení životního cyklu normální stav — čeká na
+        // schválení. Kdyby si mu frontend roli domyslel, tvářil by se jako
+        // vpuštěný: menu, kalendář, všechno. Data by mu sice RLS nevydala, ale
+        // uživatel by koukal na prázdnou aplikaci místo věty „čeká se na
+        // potvrzení". Bez role tedy bez role.
+        console.warn('[AuthContext] Uživatel nemá žádnou roli — účet nejspíš čeká na schválení.');
+        setRoles([]);
+        setRole(null);
       }
+
+      // Zástupcovství klubu (kvůli schvalovací frontě). Selhání dotazu nesmí
+      // shodit přihlášení — v nejhorším se jen neukáže položka v menu.
+      const { data: repData } = await supabase
+        .from('subject_reps')
+        .select('level')
+        .eq('user_id', userId)
+        .eq('level', 'rep')
+        .limit(1);
+      setIsRep((repData ?? []).length > 0);
     } catch (error) {
       console.error('[AuthContext] Error fetching user data:', error);
-      setRoles(['hobby_player']);
-      setRole('hobby_player');
+      setRoles([]);
+      setRole(null);
+      setIsRep(false);
     }
   };
 
@@ -229,6 +254,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   );
   const isMember = roles.some(r => ['hobby_player', 'pro_player'].includes(r));
 
+  // ÚČET ČEKÁ, DOKUD HO NĚKDO NEPUSTÍ (blok C, R4/R6).
+  //
+  // Rozhoduje `profiles.stav`, ne přítomnost role — deaktivovaný účet roli má,
+  // a přesto dovnitř nesmí. Dokud profil nedorazil (`profile === null`), NIC se
+  // netvrdí: jinak by při každém pomalejším načtení probliklo „čekáte na
+  // schválení" i řádnému uživateli.
+  //
+  // `stav === undefined` je starší profil bez sloupce — bere se jako v pořádku,
+  // aby výpadek pohledu nezavřel aplikaci všem.
+  const cekaNaSchvaleni = !!profile && !!profile.stav && profile.stav !== 'aktivni';
+
   return (
     <AuthContext.Provider
       value={{
@@ -246,6 +282,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isTrainer,
         isStaff,
         isMember,
+        cekaNaSchvaleni,
+        isRep,
       }}
     >
       {children}
