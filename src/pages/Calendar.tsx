@@ -326,6 +326,7 @@ const Calendar = () => {
           createBooking: (input) => { limit(); return api.createBooking(input); },
           createSeries: (input) => { limit(); return api.createSeries(input); },
           updateBooking: api.updateBooking,
+          upravSazbuAkce: api.upravSazbuAkce,
           moveBooking: api.moveBooking,
           checkConflicts: api.checkConflicts,
           aresLookup: api.aresLookup,

@@ -3120,6 +3120,10 @@ export type Database = {
         }
         Returns: undefined
       }
+      uprav_sazbu_akce: {
+        Args: { _event_id: string; _sazba: number }
+        Returns: Json
+      }
     }
     Enums: {
       app_role:

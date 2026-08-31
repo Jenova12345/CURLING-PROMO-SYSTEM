@@ -48,6 +48,8 @@ export interface ReservationApi {
   createBooking: (input: BookingInput) => Promise<unknown>;
   createSeries: (input: SeriesInput) => Promise<SeriesResult>;
   updateBooking: (args: { id: string; title?: string; note?: string | null; rate_per_hour?: number | null }) => Promise<unknown>;
+  /** Přecení CELOU akci (všechny dráhy) — jen komerční akce s `event_id`. */
+  upravSazbuAkce: (args: { event_id: string; sazba: number }) => Promise<unknown>;
   moveBooking: (args: { id: string; start_at: string; end_at: string; sheet_id?: string }) => Promise<unknown>;
   checkConflicts: (args: { sheet_ids: string[]; start_at: string; end_at: string; kind: BookingKind; ignore_event?: string }) => Promise<Conflict[]>;
   aresLookup: (ico: string) => Promise<{ name: string; address: string; dic: string }>;
@@ -160,6 +162,7 @@ export function ReservationDialog({
 
   useEffect(() => {
     if (!open) return;
+    setCelkemTouched(false);
     if (editing) {
       const start = new Date(editing.start_at!);
       const end = new Date(editing.end_at!);
@@ -251,8 +254,81 @@ export function ReservationDialog({
 
   // Jedna politika sazeb pro celou appku (viz src/lib/money.ts) — prázdné pole
   // znamená „z ceníku", ne chybu.
+  // CELKOVÁ CENA AKCE (jen komerční). Komerční akce na dvou drahách je JEDNA
+  // akce s jednou cenou: celkem = dráhy × hodiny × sazba. Sazba i celková cena
+  // jsou editovatelné a přepočítávají se navzájem.
+  const [celkem, setCelkem] = useState('');
+  // Sáhl už admin do celkové ceny? Pak ji dopočet nesmí přepisovat pod rukama.
+  // Týž vzor jako `titleTouched` a `instructorsTouched` výš.
+  const [celkemTouched, setCelkemTouched] = useState(false);
+  const hodinAkce = Math.max(0, endHour - startHour);
+  const drahAkce = Math.max(1, isEdit ? editingLanes : sheetIds.length);
+  const jednotek = hodinAkce * drahAkce;   // „dráhohodiny" — z nich se počítá celková cena
+
   const sazba = parseSazba(rate);
   const rateNum = sazba.hodnota != null ? sazba.hodnota : undefined;
+
+  // ---- CENA: sazba ⇄ celková ---------------------------------------------
+  //
+  // Jedna pravda, dvě okna. Celková cena je `sazba × dráhohodiny`, takže se
+  // z každé strany dopočítá ta druhá. Nedrží se to v useEffectu schválně —
+  // ten by při psaní přepisoval pole pod rukama.
+
+  /** Sazba → celková. Prázdná nebo neplatná sazba nechá celkovou prázdnou. */
+  const prepocitejCelkem = (novaSazba: string) => {
+    const v = parseSazba(novaSazba);
+    if (v.chyba || v.hodnota == null || jednotek <= 0) { setCelkem(''); return; }
+    setCelkem(String(v.hodnota * jednotek));
+  };
+
+  /** Celková → sazba. */
+  const prepocitejSazbu = (novaCelkem: string) => {
+    const v = parseSazba(novaCelkem);
+    if (v.chyba || v.hodnota == null || jednotek <= 0) { setRate(''); return; }
+    setRate(String(v.hodnota / jednotek));
+  };
+
+  // Vyjde zadaná celková cena na CELÉ KORUNY za hodinu?
+  //
+  // `amount` v databázi je `hodiny × sazba` a sazba musí být celá koruna, takže
+  // ne každá celková částka je dosažitelná: 10 000 Kč za 3 h by dalo
+  // 3 333,33 Kč/h a databáze to odmítne. Radši to řekneme dopředu a nabídneme
+  // nejbližší možné, než aby admin dostal chybu až při ukládání.
+  const celkemNum = parseSazba(celkem).hodnota ?? null;
+  const sazbaZCelkem = celkemNum != null && jednotek > 0 ? celkemNum / jednotek : null;
+  const celkemNevychazi =
+    sazbaZCelkem != null && Math.abs(sazbaZCelkem - Math.round(sazbaZCelkem)) > 1e-9;
+  const nejblizsiCelkem = celkemNevychazi && sazbaZCelkem != null
+    ? [Math.floor(sazbaZCelkem) * jednotek, Math.ceil(sazbaZCelkem) * jednotek]
+    : null;
+
+  // Celková cena se dopočítá, když se změní počet drah nebo hodin — tedy když
+  // se změnil jmenovatel, ne když admin píše do některého z polí. Psaní si
+  // pole dopočítávají navzájem samy (`prepocitejCelkem` / `prepocitejSazbu`);
+  // efekt nad `rate` by je přepisoval pod rukama.
+  // Když se změní POČET DRAH nebo HODIN, změní se jmenovatel — a jedno z polí
+  // se musí dopočítat, jinak si začnou odporovat (sazba × dráhohodiny ≠ celkem).
+  //
+  // Které z nich je kotva, rozhoduje to, do čeho admin naposledy psal:
+  //   • psal celkovou → celková platí, dopočítá se sazba (dohodnutá cena za akci),
+  //   • jinak → platí sazba a dopočítá se celková.
+  useEffect(() => {
+    if (kind !== 'commercial') { setCelkem(''); return; }
+    if (celkemTouched) prepocitejSazbu(celkem);
+    else prepocitejCelkem(rate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jednotek]);
+
+  // Změna sazby (z ceníku, z typu akce, z výběru subjektu) dopočítá celkovou —
+  // dokud do ní admin sám nesáhl.
+  useEffect(() => {
+    if (kind !== 'commercial') { setCelkem(''); return; }
+    if (celkemTouched) return;
+    prepocitejCelkem(rate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rate, kind, open, celkemTouched]);
+
+
   const busy = api.isCreating || api.isUpdating || aresLoading;
   const needsSubject = kind !== 'maintenance';
   const startOptions = Array.from({ length: Math.max(closeHour - openHour, 1) }, (_, i) => openHour + i);
@@ -382,13 +458,27 @@ export function ReservationDialog({
             sheet_id: editingLanes > 1 ? undefined : sheetIds[0],
           });
         }
+        // SAZBA SE MĚNÍ PŘES CELOU AKCI, ne přes jednu rezervaci.
+        //
+        // `update_booking` přepíše sazbu jen na tom jednom řádku, takže akce na
+        // dvou drahách by skončila se dvěma různými cenami (BUG 1). Když má
+        // rezervace `event_id`, jde přecenění přes `uprav_sazbu_akce`, které
+        // sáhne na všechny dráhy atomicky.
+        const meniSazbu = isAdmin && rateNum !== undefined
+          && rateNum !== (editing.rate_per_hour ?? undefined);
+
         await api.updateBooking({
           id: editing.id!,
           title: sanitizeText(title),
           // prázdný řetězec = „smaž poznámku" (null by znamenalo „neměň")
           note: note ? sanitizeText(note) : '',
-          rate_per_hour: isAdmin && rateNum !== undefined ? rateNum : undefined,
+          // U akce se sazba pošle zvlášť (níž), aby se propsala na všechny dráhy.
+          rate_per_hour: meniSazbu && !editing.event_id ? rateNum : undefined,
         });
+
+        if (meniSazbu && editing.event_id) {
+          await api.upravSazbuAkce({ event_id: editing.event_id, sazba: rateNum! });
+        }
         toast({ title: 'Rezervace upravena' });
         onOpenChange(false);
         return;
@@ -592,14 +682,55 @@ export function ReservationDialog({
               </div>
             )}
 
-            {/* sazba */}
+            {/* sazba (+ celková cena u komerční akce) */}
             {kind !== 'maintenance' && (
               <div className="space-y-2">
-                <Label htmlFor="res-rate">Sazba (Kč/h)</Label>
-                <Input
-                  id="res-rate" value={rate} onChange={(e) => setRate(e.target.value)}
-                  readOnly={!isAdmin} inputMode="numeric" placeholder={rate ? undefined : 'z ceníku'}
-                />
+                <div className={kind === 'commercial' ? 'grid grid-cols-2 gap-3' : undefined}>
+                  <div className="space-y-2">
+                    <Label htmlFor="res-rate">Sazba (Kč/h)</Label>
+                    <Input
+                      id="res-rate" value={rate}
+                      onChange={(e) => { setRate(e.target.value); prepocitejCelkem(e.target.value); }}
+                      readOnly={!isAdmin} inputMode="numeric" placeholder={rate ? undefined : 'z ceníku'}
+                    />
+                  </div>
+
+                  {/* CELKOVÁ CENA — jen u komerční akce.
+                      Klubový led se oceňuje pásmy a turnaje pevnou cenou, tam by
+                      editovatelný součet jen sváděl přepsat něco, co určuje ceník. */}
+                  {kind === 'commercial' && (
+                    <div className="space-y-2">
+                      <Label htmlFor="res-celkem">Celková cena (Kč)</Label>
+                      <Input
+                        id="res-celkem" value={celkem}
+                        onChange={(e) => {
+                          setCelkemTouched(true);
+                          setCelkem(e.target.value);
+                          prepocitejSazbu(e.target.value);
+                        }}
+                        readOnly={!isAdmin} inputMode="numeric"
+                        placeholder={jednotek > 0 ? 'dopočítá se ze sazby' : undefined}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {kind === 'commercial' && jednotek > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {drahAkce} {drahAkce === 1 ? 'dráha' : drahAkce < 5 ? 'dráhy' : 'drah'} × {hodinAkce} h
+                    {' '}= {jednotek} dráhohodin. Cena platí pro celou akci, tedy pro všechny dráhy dohromady.
+                  </p>
+                )}
+
+                {celkemNevychazi && nejblizsiCelkem && (
+                  <p className="text-xs text-amber-700">
+                    Tahle částka nevyjde na celé koruny za hodinu
+                    ({(sazbaZCelkem ?? 0).toFixed(2)} Kč/h) a databáze ji nepřijme.
+                    {' '}Nejbližší možné: <strong>{nejblizsiCelkem[0]} Kč</strong>
+                    {' '}nebo <strong>{nejblizsiCelkem[1]} Kč</strong>.
+                  </p>
+                )}
+
                 {!isAdmin && <p className="text-xs text-muted-foreground">Sazbu určuje správce podle ceníku.</p>}
               </div>
             )}

@@ -347,6 +347,22 @@ export const useReservations = (range: DateRange | null) => {
     return rows[0] ?? null;
   };
 
+  // Přecenění CELÉ komerční akce — všechny dráhy naráz (BUG 1).
+  //
+  // `update_booking` mění sazbu jen na jedné rezervaci, takže akce na dvou
+  // drahách mohla skončit se dvěma různými cenami za touž hodinu ledu. RPC to
+  // udělá atomicky nad celým `event_id`; smyčka v UI by při selhání druhého
+  // volání nechala akci půl přeceněnou.
+  const upravSazbuAkce = useMutation({
+    mutationFn: async (args: { event_id: string; sazba: number }) => {
+      const { error } = await supabase.rpc('uprav_sazbu_akce', {
+        _event_id: args.event_id, _sazba: args.sazba,
+      });
+      if (error) throw rpcError(error, 'Cenu akce se nepodařilo uložit.');
+    },
+    onSuccess: invalidate,
+  });
+
   // Založení komerčního subjektu (firmy) — jen admin (subjects RLS).
   //
   // ⚠️ `.select()` MUSÍ VYJMENOVAT SLOUPCE, holé `.select()` tady NEFUNGUJE.
@@ -399,6 +415,7 @@ export const useReservations = (range: DateRange | null) => {
     createBooking: createBooking.mutateAsync,
     createSeries: createSeries.mutateAsync,
     updateBooking: updateBooking.mutateAsync,
+    upravSazbuAkce: upravSazbuAkce.mutateAsync,
     moveBooking: moveBooking.mutateAsync,
     cancelBooking: cancelBooking.mutateAsync,
     approveReservation: approveReservation.mutateAsync,
