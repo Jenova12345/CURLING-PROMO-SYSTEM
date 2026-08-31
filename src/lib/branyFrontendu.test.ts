@@ -78,3 +78,28 @@ describe('Trenér se nečte ze `shifts`', () => {
     expect(hook).not.toMatch(/update\(\{\s*preferovany_trener/);
   });
 });
+
+describe('Registrace: klub se nedá přeskočit', () => {
+  const auth = cti('src/pages/Auth.tsx');
+
+  it('rozbalovátko klubu je required a nemá volbu „žádný"', () => {
+    // Volba s prázdnou hodnotou smí být jen ta úvodní výzva; kdyby se vrátila
+    // možnost „Zatím žádný / nevím", vznikl by účet bez žádosti — a ten se
+    // nikomu neobjeví ve frontě ke schválení.
+    expect(auth).not.toContain('Zatím žádný');
+    expect(auth).not.toContain('Klub (nepovinné)');
+    // Vyříznu si celý blok <select>, ať test nestojí na tom, jak dlouhý je
+    // className — ten má přes 300 znaků a jakékoli okno {0,N} je hádání.
+    const zacatek = auth.indexOf('id="register-club"');
+    const konec = auth.indexOf('</select>', zacatek);
+    expect(zacatek, 'rozbalovátko klubu z formuláře zmizelo').toBeGreaterThan(-1);
+    const vyber = auth.slice(zacatek, konec);
+    expect(vyber, 'select klubu není required — formulář by šel odeslat prázdný').toContain('required');
+  });
+
+  it('klub jde do validace, ne rovnou do signUp', () => {
+    // `registerClub || undefined` znamenalo „prázdno je taky odpověď".
+    expect(auth).toContain('subjectId: registerClub');
+    expect(auth).not.toContain('registerClub || undefined');
+  });
+});

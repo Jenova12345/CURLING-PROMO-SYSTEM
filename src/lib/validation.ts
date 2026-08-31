@@ -230,12 +230,30 @@ export const loginFormSchema = z.object({
 });
 
 /**
+ * Výběr klubu při registraci.
+ *
+ * POVINNÝ. Bez klubu nevznikne žádost o přiřazení — a účet, ke kterému žádost
+ * není, se nikomu neobjeví ve frontě `/requests`, takže ho nemá kdo schválit.
+ * Sám si klub doplnit nemůže: na Profil se čekající účet nedostane, protože
+ * ho `AppLayout` zastaví na čekací obrazovce. Skončil by tedy natrvalo mezi
+ * dveřmi.
+ *
+ * Vlastní schéma, ne `uuidSchema`: prázdné rozbalovátko je úplně jiná chyba
+ * („nevybral jsem") než podstrčené id („tohle není klub") a hláška to má říct.
+ */
+export const clubChoiceSchema = z
+  .string()
+  .min(1, 'Vyberte klub, za který budete hrát')
+  .uuid('Vybraný klub neexistuje');
+
+/**
  * Registration form validation
  */
 export const registerFormSchema = z.object({
   name: nameSchema,
   email: emailSchema,
   password: passwordSchema,
+  subjectId: clubChoiceSchema,
 });
 
 /**

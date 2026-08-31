@@ -155,6 +155,72 @@ BEGIN
 END $$;
 
 -- -----------------------------------------------------------------------------
+-- 1b) ŽÁDOST MUSÍ BÝT VIDĚT TOMU, KDO JI MÁ VYŘÍDIT
+--
+-- Registrace s klubem vyrobí žádost — a k něčemu je jen tehdy, když ji uvidí
+-- zástupce TOHO klubu. Zástupce jiného klubu ji vidět nesmí, jinak by fronta
+-- byla společná a schvaloval by kdokoli komukoli.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _novy uuid; _klub uuid; _n bigint;
+BEGIN
+  SELECT hodnota::uuid INTO _novy FROM _s WHERE klic = 'novy';
+  SELECT hodnota::uuid INTO _klub FROM _s WHERE klic = 'klub';
+
+  -- 44444444 je zástupce klubu „CK Ostravské kameny", kam žádost míří.
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"44444444-4444-4444-4444-444444444444","role":"authenticated"}', true);
+  EXECUTE 'SET LOCAL ROLE authenticated';
+  SELECT count(*) INTO _n FROM public.subject_requests_list
+   WHERE user_id = _novy AND status = 'ceka';
+  EXECUTE 'RESET ROLE';
+  PERFORM pg_temp.tvrd(_n = 1, 'zástupce SVÉHO klubu čerstvou žádost ve frontě vidí');
+
+  -- 22222222 je zástupce klubu „Curling Ostrava", tedy jiného.
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}', true);
+  EXECUTE 'SET LOCAL ROLE authenticated';
+  SELECT count(*) INTO _n FROM public.subject_requests_list WHERE user_id = _novy;
+  EXECUTE 'RESET ROLE';
+  PERFORM pg_temp.tvrd(_n = 0, '… zástupce JINÉHO klubu tutéž žádost nevidí');
+
+  -- A admin vidí frontu celou.
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"11111111-1111-1111-1111-111111111111","role":"authenticated"}', true);
+  EXECUTE 'SET LOCAL ROLE authenticated';
+  SELECT count(*) INTO _n FROM public.subject_requests_list WHERE user_id = _novy;
+  EXECUTE 'RESET ROLE';
+  PERFORM pg_temp.tvrd(_n = 1, '… a správce haly vidí žádosti do všech klubů');
+END $$;
+
+-- REGISTRACE BEZ KLUBU: účet vznikne, ale žádost ne — a tím pádem ho nikdo
+-- neuvidí ve frontě. Přesně tohle zavírá povinný výběr klubu ve formuláři
+-- (`registerFormSchema`, testy v `src/lib/registrace.test.ts`); databáze to
+-- sama vynutit nemůže, protože týmž triggerem chodí i účty zakládané adminem
+-- z dashboardu, kde žádná metadata nejsou.
+DO $$
+DECLARE _bez uuid := '88888888-8888-8888-8888-888888888884'; _n bigint;
+BEGIN
+  INSERT INTO auth.users (id, email, instance_id, aud, role, raw_user_meta_data)
+  VALUES (_bez, 'bezklubu@test.local', '00000000-0000-0000-0000-000000000000',
+          'authenticated', 'authenticated', jsonb_build_object('full_name','Bez Klubu'));
+
+  PERFORM pg_temp.tvrd((SELECT stav FROM public.profiles WHERE user_id = _bez) = 'ceka',
+    'registrace bez klubu účet založí (trigger je týž i pro účty od admina)');
+  PERFORM pg_temp.tvrd(
+    NOT EXISTS (SELECT 1 FROM public.subject_requests WHERE user_id = _bez),
+    '… ale NEVZNIKNE žádost');
+
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"11111111-1111-1111-1111-111111111111","role":"authenticated"}', true);
+  EXECUTE 'SET LOCAL ROLE authenticated';
+  SELECT count(*) INTO _n FROM public.subject_requests_list WHERE user_id = _bez;
+  EXECUTE 'RESET ROLE';
+  PERFORM pg_temp.tvrd(_n = 0,
+    '… takže ho ani ADMIN nevidí ve frontě — proto je klub ve formuláři povinný');
+END $$;
+
+-- -----------------------------------------------------------------------------
 -- 2) PO SCHVÁLENÍ VIDÍ TO, CO MU ROLE DOVOLÍ
 -- -----------------------------------------------------------------------------
 DO $$

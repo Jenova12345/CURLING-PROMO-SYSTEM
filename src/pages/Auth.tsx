@@ -43,23 +43,35 @@ const Auth = () => {
   // Register state
   const [registerEmail, setRegisterEmail] = useState('');
   const [registerPassword, setRegisterPassword] = useState('');
-  // Vybraný klub. Prázdné = „zatím nevím" a je to plnohodnotná volba: bez klubu
-  // se dá účet založit a žádost podat později, jinak by hobby hráč neměl kudy dovnitř.
+  // Vybraný klub. POVINNÝ — prázdno formulář neodešle.
+  //
+  // Dřív tu prázdno bylo plnohodnotná volba („zatím nevím"). Jenže bez klubu
+  // nevznikne žádost o přiřazení, a účet bez žádosti se nikomu neobjeví ve
+  // frontě `/requests` — nemá ho tedy kdo schválit a sám si klub doplnit
+  // nemůže, protože na Profil se čekající účet nedostane. Uvázl by mezi dveřmi.
   const [registerClub, setRegisterClub] = useState('');
   const [kluby, setKluby] = useState<{ id: string; name: string }[]>([]);
+  const [klubyChyba, setKlubyChyba] = useState(false);
   const [registerName, setRegisterName] = useState('');
 
   // Seznam klubů pro rozbalovátko. Čte veřejný pohled `clubs_public`, který
   // vydává jen id a název — `subjects` samotné je admin-only (IČO, adresy, sazby).
-  // Když se nenačte, registrace tím netrpí: klub je nepovinný a dá se doplnit potom.
+  //
+  // ⚠️ Od chvíle, kdy je klub POVINNÝ, na tomhle dotazu registrace stojí: když
+  // se seznam nenačte, není z čeho vybrat a formulář by šlo jen marně odesílat.
+  // Proto se výpadek pozná (`klubyChyba`) a napíše se to nahlas, místo aby
+  // uživatel koukal na prázdné rozbalovátko a hádal, co dělá špatně.
   //
   // MUSÍ zůstat nad early returny níž: `loading` je zprvu true, takže první
   // render skončí u spinneru. Kdyby byl hook až za ním, přibyl by až v druhém
   // renderu a React shodí celou přihlašovací stránku („Rendered more hooks…").
   useEffect(() => {
     let zivy = true;
-    supabase.from('clubs_public').select('id, name').order('name').then(({ data }) => {
-      if (zivy && data) setKluby(data as { id: string; name: string }[]);
+    supabase.from('clubs_public').select('id, name').order('name').then(({ data, error }) => {
+      if (!zivy) return;
+      if (error || !data) { setKlubyChyba(true); return; }
+      setKluby(data as { id: string; name: string }[]);
+      setKlubyChyba(data.length === 0);
     });
     return () => { zivy = false; };
   }, []);
@@ -141,6 +153,8 @@ const Auth = () => {
       name: registerName,
       email: registerEmail,
       password: registerPassword,
+      // Klub je povinný: bez něj nevznikne žádost a účet by uvázl mimo frontu.
+      subjectId: registerClub,
     });
     
     if (!validation.success) {
@@ -159,7 +173,8 @@ const Auth = () => {
       validatedData.email,
       validatedData.password,
       validatedData.name,
-      registerClub || undefined,
+      // Prošlo validací, takže je to jisté uuid — `|| undefined` už tu nemá co dělat.
+      validatedData.subjectId,
     );
     setIsSubmitting(false);
 
@@ -187,9 +202,8 @@ const Auth = () => {
       setRegisterClub('');
       toast({
         title: 'Registrace úspěšná!',
-        description: registerClub
-          ? 'Zkontrolujte prosím svůj e-mail pro potvrzení registrace. Přiřazení ke klubu musí ještě schválit správce haly.'
-          : 'Zkontrolujte prosím svůj email pro potvrzení registrace.',
+        description: 'Přiřazení ke klubu teď musí schválit správce haly nebo '
+          + 'zástupce klubu. Do té doby se do systému nedostanete.',
         duration: 10000, // Show longer for important message
       });
     }
@@ -310,23 +324,32 @@ const Auth = () => {
                   </p>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="register-club">Klub (nepovinné)</Label>
+                  <Label htmlFor="register-club">Klub</Label>
                   <select
                     id="register-club"
                     className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                     value={registerClub}
                     onChange={(e) => setRegisterClub(e.target.value)}
+                    required
                   >
-                    <option value="">Zatím žádný / nevím</option>
+                    <option value="">— vyberte klub —</option>
                     {kluby.map((k) => (
                       <option key={k.id} value={k.id}>{k.name}</option>
                     ))}
                   </select>
                   {/* Ať je od začátku jasné, že výběrem se do klubu nikdo nedostane —
                       jinak by člověk čekal, že po přihlášení uvidí rezervace klubu. */}
-                  <p className="text-xs text-muted-foreground">
-                    Výběrem klubu vznikne žádost o přiřazení. Členství potvrzuje správce haly.
-                  </p>
+                  {klubyChyba ? (
+                    <p className="text-xs text-destructive">
+                      Seznam klubů se nepodařilo načíst, takže registraci teď nejde dokončit.
+                      Zkuste obnovit stránku; když to potrvá, ozvěte se správci haly.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      Výběrem klubu vznikne žádost o přiřazení. Členství potvrzuje správce haly
+                      nebo zástupce klubu — do té doby se do systému nedostanete.
+                    </p>
+                  )}
                 </div>
                 <Button type="submit" className="w-full" disabled={isRegisterDisabled}>
                   {isSubmitting ? 'Registrace...' : 'Zaregistrovat se'}
