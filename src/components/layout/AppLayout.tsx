@@ -6,7 +6,7 @@ import MobileHeader from './MobileHeader';
 import MobileNav from './MobileNav';
 
 const AppLayout = () => {
-  const { user, loading, cekaNaSchvaleni, profile, signOut } = useAuth();
+  const { user, loading, cekaNaSchvaleni, profilNedostupny, profile, signOut } = useAuth();
 
   if (loading) {
     return (
@@ -18,6 +18,32 @@ const AppLayout = () => {
 
   if (!user) {
     return <Navigate to="/auth" replace />;
+  }
+
+  // PROFIL SE NENAČETL — nevíme, jestli účet dovnitř smí.
+  //
+  // Zastavuje se to ze stejného důvodu jako čekající účet: bez profilu by
+  // uživatel prošel do aplikace, ve které mu RLS nic nevydá, a koukal by na
+  // prázdný kalendář a prázdné menu. Z takové obrazovky nepozná, jestli se
+  // něco pokazilo, nebo jestli je jen prázdno — a to je přesně ten stav,
+  // kterému se tenhle blok vyhýbá.
+  if (profilNedostupny) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background p-6">
+        <div className="w-full max-w-md space-y-4 rounded-lg border bg-card p-6 text-card-foreground shadow-sm">
+          <h1 className="text-xl font-semibold">Profil se nepodařilo načíst</h1>
+          <p className="text-sm text-muted-foreground">
+            Přihlášení proběhlo, ale nepodařilo se načíst tvůj profil — nejspíš
+            výpadek spojení. Zkus obnovit stránku; když to potrvá, ozvi se
+            správci haly.
+          </p>
+          <div className="flex gap-2">
+            <Button onClick={() => window.location.reload()}>Zkusit znovu</Button>
+            <Button variant="outline" onClick={() => signOut()}>Odhlásit se</Button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   // ÚČET, KTERÝ JEŠTĚ NIKDO NEPUSTIL DOVNITŘ (blok C).

@@ -1373,6 +1373,7 @@ export type Database = {
           cancel_reason: string | null
           cancelled_at: string | null
           cancelled_by: string | null
+          cena_bez_dph: boolean
           cenove_pasma: Json | null
           corrected_amount: number | null
           corrected_hours: number | null
@@ -1404,6 +1405,7 @@ export type Database = {
           cancel_reason?: string | null
           cancelled_at?: string | null
           cancelled_by?: string | null
+          cena_bez_dph?: boolean
           cenove_pasma?: Json | null
           corrected_amount?: number | null
           corrected_hours?: number | null
@@ -1435,6 +1437,7 @@ export type Database = {
           cancel_reason?: string | null
           cancelled_at?: string | null
           cancelled_by?: string | null
+          cena_bez_dph?: boolean
           cenove_pasma?: Json | null
           corrected_amount?: number | null
           corrected_hours?: number | null
@@ -2771,6 +2774,47 @@ export type Database = {
       }
     }
     Functions: {
+      cena_je_bez_dph: {
+        Args: {
+          _event_type: Database["public"]["Enums"]["event_type"]
+          _sazba_subjektu: number
+          _subject_type: Database["public"]["Enums"]["subject_type"]
+        }
+        Returns: boolean
+      }
+      hodiny_bez_pasma: {
+        Args: { _oh: Json }
+        Returns: {
+          den: number
+          hodina: number
+        }[]
+      }
+      nastav_prani_trenera: {
+        Args: { _reservation_ids: string[]; _user_id: string }
+        Returns: Json
+      }
+      over_danovy_rezim_podkladu: {
+        Args: {
+          _ceka_bez_dph: boolean
+          _popis_dokladu: string
+          _rezervace: string[]
+        }
+        Returns: undefined
+      }
+      over_neni_vyfakturovano: {
+        Args: { _co: string; _event_id: string }
+        Returns: undefined
+      }
+      trener_akce: {
+        Args: { _event_id: string }
+        Returns: {
+          hourly_rate: number
+          jmeno: string
+          shift_id: string
+          status: string
+          user_id: string
+        }[]
+      }
       approve_reservation: { Args: { p_reservation_id: string }; Returns: Json }
       approve_subject_request: {
         Args: {

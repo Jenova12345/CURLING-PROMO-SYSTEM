@@ -242,7 +242,12 @@ const Calendar = () => {
   useEffect(() => {
     let zruseno = false;
     if (!detail?.event_id || detail.event_type !== 'training') { setTrener(null); return; }
-    api.trenerAkce(detail.event_id).then((t) => { if (!zruseno) setTrener(t as never); });
+    api.trenerAkce(detail.event_id)
+      .then((t) => { if (!zruseno) setTrener(t as never); })
+      // Kdo trénink vede, je doplňkový údaj — selhání dotazu nesmí shodit
+      // celý detail rezervace. RPC vrací prázdno i tomu, kdo na to nemá
+      // právo, takže sem se dostane jen skutečná chyba spojení.
+      .catch(() => { if (!zruseno) setTrener(null); });
     return () => { zruseno = true; };
   }, [detail?.event_id, detail?.event_type]);
 

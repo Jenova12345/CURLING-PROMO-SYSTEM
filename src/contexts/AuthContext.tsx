@@ -46,6 +46,11 @@ interface AuthContextType {
   isMember: boolean;
   /** Účet čeká na schválení (nebo byl zavřený) — nesmí vidět aplikaci. */
   cekaNaSchvaleni: boolean;
+  /**
+   * Profil se nepodařilo načíst (chyba dotazu, chybějící řádek, nenasazený
+   * pohled). Nevíme tedy, jestli účet smí dovnitř — a nevědět znamená nepustit.
+   */
+  profilNedostupny: boolean;
   /** Je zástupcem aspoň jednoho klubu → smí vyřizovat žádosti do svých klubů. */
   isRep: boolean;
 }
@@ -62,6 +67,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [role, setRole] = useState<AppRole | null>(null);
   const [roles, setRoles] = useState<AppRole[]>([]);
   const [isRep, setIsRep] = useState(false);
+  // `null` = ještě nevíme (běží načítání). Rozlišuje se od `true`/`false`,
+  // aby se při pomalém načtení neprobliklo hlášení o nedostupném profilu.
+  const [profilOk, setProfilOk] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
 
   const fetchUserData = async (userId: string) => {
@@ -85,6 +93,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       
       if (profileData) {
         setProfile(profileData);
+        setProfilOk(true);
+      } else {
+        // PROFIL NEDORAZIL = ZAVŘENO, ne otevřeno.
+        //
+        // Dřív se v téhle větvi nedělo nic, takže `profile` zůstal `null`
+        // a `cekaNaSchvaleni` vyšlo `false` — tedy „účet je v pořádku".
+        // Uživatel prošel do aplikace, ve které mu RLS nic nevydá: prázdný
+        // kalendář a prázdné menu, přesně ta obrazovka, které se má
+        // `AppLayout` vyhýbat. Chyba dotazu ani chybějící řádek nesmí
+        // vypadat jako schválený účet.
+        setProfile(null);
+        setProfilOk(false);
       }
 
       // Fetch ALL roles for user
@@ -128,6 +148,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setRoles([]);
       setRole(null);
       setIsRep(false);
+      // Táž úvaha jako výš: když nevíme, v jakém stavu účet je, nepustíme ho.
+      setProfilOk(false);
     }
   };
 
@@ -153,6 +175,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }, 0);
         } else {
           setProfile(null);
+          setProfilOk(null);
           setRole(null);
           setRoles([]);
           if (mounted) {
@@ -228,6 +251,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(null);
     setSession(null);
     setProfile(null);
+    setProfilOk(null);
     setRole(null);
     setRoles([]);
     try {
@@ -265,6 +289,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // aby výpadek pohledu nezavřel aplikaci všem.
   const cekaNaSchvaleni = !!profile && !!profile.stav && profile.stav !== 'aktivni';
 
+  // NEVĚDĚT ZNAMENÁ NEPUSTIT. `profilOk === false` je až výsledek doběhlého
+  // načtení, takže se tím nic neproblikne — `loading` drží obrazovku dřív.
+  const profilNedostupny = profilOk === false;
+
   return (
     <AuthContext.Provider
       value={{
@@ -283,6 +311,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isStaff,
         isMember,
         cekaNaSchvaleni,
+        profilNedostupny,
         isRep,
       }}
     >

@@ -497,6 +497,102 @@ nezávislé review to zatím nevidělo. **Do produkce ne, dokud brána neproběh
 
 ---
 
+## 6d. Nápravy z brány (ultra review, 31. 8. 2026)
+
+Multiagentní review dnešní práce našla 15 nálezů, z toho 6 označených jako
+MUST-FIX před tím, než se do systému přihlásí členové klubů. Všech 15 je
+opravených v pěti migracích a čtyřech souborech frontendu; **nasazuje se to
+jako jeden celek**, protože nálezy se navzájem drží (daňová brána potřebuje
+snapshot, snapshot potřebuje backfill).
+
+| Migrace | Co řeší |
+|---|---|
+| `20260831230000_ucet_nelze_odbanovat` | Zavřený účet se nesmí otevřít přes žádost o klub |
+| `20260831231000_dph_jedno_misto` | `cena_bez_dph` — jedno kritérium pro daňový význam `amount` |
+| `20260831232000_uprava_akce_naprava` | Pásmová dráha, zámek vyfakturované akce, instruktor, trenérská směna |
+| `20260831233000_trener_prava` | Zástupce trenéra vidí; přání se nedá podstrčit; jednoznačný klub |
+| `20260831234000_cenik_pokryva_provoz` | Ceník musí pokrýt otevírací dobu; hláška, která nelže |
+
+### Nejdražší dva nálezy
+
+**1) Zástupce klubu uměl odbanovat účet.** `approve_subject_request` přepínala
+`stav` na `aktivni` bezpodmínečně a `request_subject_membership` se stavu
+neptala vůbec. Deaktivovaný uživatel si tedy podal žádost do libovolného jiného
+klubu, jeho zástupce ji v dobré víře schválil — a protože `ucet_aktivni()` je
+brána pod `has_role`, `is_subject_member` i `is_subject_rep`, otevřelo se tím
+úplně všechno, co blok C zavřel. Zavřeno dvěma vrstvami (žádost se nepodá +
+schválení neotevře), obojí ověřeno mutací.
+
+**2) Kontrolní součet se rozešel o 12 %.** Daňový význam `amount` si každá
+vrstva odvozovala z něčeho jiného — ocenění z **typu akce**, „Kdo kolik dluží"
+z **typu subjektu**, doklad z **druhu dokladu**. Dokud typ akce a typ subjektu
+chodily spolu, sedělo to; rozejít je umělo jedno kliknutí (`zmen_typ_akce` na
+klubové akci). Řeší to snapshot `reservations.cena_bez_dph`, pořízený ve chvíli,
+kdy se sazba vybírá — a **daňová brána** v obou podkladových funkcích, která
+nepustí na jeden doklad ceny se dvěma významy. Radši nevystavit než vystavit
+špatně.
+
+### Co se vědomě NEŘEŠILO
+
+- **Editor pásmového ceníku v UI.** Zadání znělo „zatím jen zabezpeč".
+  Migrace proto brání vzniku díry mezi otevírací dobou a ceníkem (dva odložené
+  constraint triggery) a opravuje hlášku, která posílala na obrazovku, jež
+  neexistuje. Editor je samostatný follow-up — bez něj se ceník pořád mění
+  jen ručním SQL.
+- **Sazba ranního pásma (800 Kč/h)** pořád čeká na potvrzení klienta. Migrace
+  ji NEMĚNÍ (vymyslet cenu není oprava), jen z popisku pásma odstranila
+  placeholder. Test ji přišpendluje, aby se změnila vědomě.
+- **Obnovení zavřeného účtu z aplikace.** Dnes je to `UPDATE profiles` pod
+  adminem, RPC ani obrazovka na to nejsou. Nová brána to nezhoršuje (dřív tam
+  taky nic nebylo), ale je to teď jediná cesta zpátky — patří k follow-upu
+  o správě uživatelů.
+- **Rozplétání akce, která už je na dokladu.** Nová brána `over_neni_vyfakturovano`
+  úpravu zastaví a odkáže na storno/dobropis. Rezervace na STORNOVANÉM dokladu
+  drží zámek dál — je to vědomé, ale znamená to, že cesta „stornovat a přecenit"
+  dnes končí u dobropisu.
+
+### Otázka na PM
+
+**Má klub, který si objedná komerční akci, platit komerčních 5 000 Kč/h?**
+Dnes ano (rozhoduje typ akce, ne typ odběratele) — a nově se mu k tomu správně
+připočte DPH. Kdyby měl platit klubový ceník, je to jednořádková změna ve výběru
+sazby, ne v mechanismu.
+
+### Testy
+
+```bash
+docker exec -i supabase_db_<project> psql -U postgres -X -q -v ON_ERROR_STOP=1 \
+  < supabase/tests/ucet_odbanovani_test.sql      # 11 tvrzení, práva pod authenticated
+docker exec -i supabase_db_<project> psql -U postgres -X -q -v ON_ERROR_STOP=1 \
+  < supabase/tests/dph_jedno_misto_test.sql      # 20 tvrzení včetně kontrolního součtu
+docker exec -i supabase_db_<project> psql -U postgres -X -q -v ON_ERROR_STOP=1 \
+  < supabase/tests/trener_prava_test.sql         # 19 tvrzení, práva pod authenticated
+docker exec -i supabase_db_<project> psql -U postgres -X -q -v ON_ERROR_STOP=1 \
+  < supabase/tests/cenik_pokryti_test.sql        # 8 tvrzení
+docker exec -i supabase_db_<project> psql -U postgres -X -q -v ON_ERROR_STOP=1 \
+  < supabase/tests/uprava_akce_test.sql          # 48 tvrzení: + pásmová dráha, zámek, PRÁVA
+npm run test:run                                 # 405 (přibyl src/lib/branyFrontendu.test.ts)
+```
+
+**Ověřeno mutací** (test zčervená, když se oprava vrátí zpátky): odbanování
+přes frontu, dluh podle typu subjektu, kopírování průměrné sazby do nové dráhy,
+chybějící zámek vyfakturované akce.
+
+**Kontrolní součet:** `billing_reconcile` = 0 za 6–10/2026 na čerstvém seedu,
+`billing_health` má všechny počty nulové. Celá sada 28 SQL souborů + 405 unit
+testů + `npm run typecheck` + `deno check` je zelená po `supabase db reset`.
+
+### Past, kterou tyhle opravy odhalily
+
+**Sloupcový `REVOKE` na `reservations` nic nezmůže.** Tabulka má tabulkový
+`GRANT UPDATE` pro `authenticated`, takže `information_schema.column_privileges`
+ukáže UPDATE u KAŽDÉHO sloupce a odebrat právo k jednomu z nich nejde. Skutečná
+brána je whitelist v `guard_reservation_rep_changes` — kdo přidává sloupec, musí
+myslet na něj, ne na granty. (První verze opravy přání trenéra tudy šla a
+kontrola v migraci ji rovnou usvědčila.)
+
+---
+
 ## 7. Čemu nevěřit a co si ověřit
 
 Kromě pastí z `docs/ETAPA2-STAV.md`, kapitola 5, přibylo tohle:

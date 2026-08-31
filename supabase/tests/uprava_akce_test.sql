@@ -239,6 +239,218 @@ BEGIN
     'billing_reconcile má rozdíl 0 i s nulovou akcí (přispěje do obou stran nulou)');
 END $$;
 
+-- =============================================================================
+-- NÁPRAVY Z BRÁNY (ultra review, 31. 8. 2026)
+-- Migrace 20260831232000_uprava_akce_naprava.sql
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- B2) PŘIDÁNÍ DRÁHY K PÁSMOVĚ OCENĚNÉ KLUBOVÉ REZERVACI
+--
+-- Tohle NEŠLO VŮBEC: do nové dráhy se kopírovala `rate_per_hour`, což je
+-- u pásmové ceny odvozený průměr s haléři (3 400 / 3 = 1 133,33), a na tom
+-- padly obě pojistky na celé koruny.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _ev uuid; _d1 uuid; _d2 uuid; _v jsonb; _klub uuid;
+BEGIN
+  SELECT id INTO _klub FROM public.subjects WHERE name = 'CK Ostravské kameny';
+  SELECT id INTO _d1 FROM public.sheets WHERE active ORDER BY name LIMIT 1;
+  SELECT id INTO _d2 FROM public.sheets WHERE active AND id <> _d1 ORDER BY name LIMIT 1;
+
+  -- Středa 16–19: 1 h × 1 000 (odpolední) + 2 h × 1 200 (večerní) = 3 400 Kč.
+  INSERT INTO public.events (title, event_type, start_time, end_time, created_by)
+  VALUES ('TEST pasma draha','training','2027-06-23 16:00+02','2027-06-23 19:00+02',
+          '11111111-1111-1111-1111-111111111111') RETURNING id INTO _ev;
+  INSERT INTO public.reservations (sheet_id, subject_id, event_id, start_at, end_at)
+  VALUES (_d1, _klub, _ev, '2027-06-23 16:00+02','2027-06-23 19:00+02');
+
+  PERFORM pg_temp.tvrd(
+    (SELECT amount FROM public.reservations WHERE event_id = _ev) = 3400,
+    'příprava: klubový trénink přes dvě pásma stojí 3 400 Kč');
+  PERFORM pg_temp.tvrd(
+    (SELECT rate_per_hour FROM public.reservations WHERE event_id = _ev) = 1133.33,
+    '… a odvozený průměr má haléře (to je ta mina)');
+
+  _v := public.uprav_drahy_akce(_ev, ARRAY[_d1, _d2]);
+  PERFORM pg_temp.tvrd((_v->>'pridano')::int = 1,
+    'druhá dráha k DVOUPÁSMOVÉ klubové rezervaci se přidat DÁ (dřív to padalo na celé koruny)');
+  PERFORM pg_temp.tvrd((_v->>'celkem')::numeric = 6800,
+    '… a celá akce stojí 2 × 3 400 = 6 800 Kč');
+  PERFORM pg_temp.tvrd(
+    (SELECT count(DISTINCT amount) FROM public.reservations
+      WHERE event_id = _ev AND deleted_at IS NULL) = 1,
+    '… obě dráhy stojí STEJNĚ (jedna akce, jedna cena)');
+  PERFORM pg_temp.tvrd(
+    (SELECT count(*) FROM public.reservations
+      WHERE event_id = _ev AND deleted_at IS NULL AND cenove_pasma IS NOT NULL) = 2,
+    '… a OBĚ mají rozpis po pásmech (bez něj by se z nich nesložil doklad)');
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- E) VYFAKTUROVANOU AKCI UŽ NEJDE PŘEPSAT
+--
+-- Tři nové RPC neznaly pojem „už je to na dokladu", takže jedno kliknutí po
+-- odeslání faktury rozešlo doklad s „Kdo kolik dluží".
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _ev uuid; _rez uuid; _d1 uuid; _firma uuid; _dok uuid;
+BEGIN
+  SELECT id INTO _firma FROM public.subjects WHERE name = 'Demo Firma s.r.o.';
+  SELECT id INTO _d1 FROM public.sheets WHERE active ORDER BY name LIMIT 1;
+
+  INSERT INTO public.events (title, event_type, start_time, end_time, created_by)
+  VALUES ('TEST vyfakturovana','commercial','2027-08-11 16:00+02','2027-08-11 18:00+02',
+          '11111111-1111-1111-1111-111111111111') RETURNING id INTO _ev;
+  INSERT INTO public.reservations (sheet_id, subject_id, event_id, start_at, end_at, approved_at, approved_by)
+  VALUES (_d1, _firma, _ev, '2027-08-11 16:00+02','2027-08-11 18:00+02', now(),
+          '11111111-1111-1111-1111-111111111111')
+  RETURNING id INTO _rez;
+
+  -- Doklad z Fakturoidu, jak ho zakládá `zapisDoklad` — pro test stačí vazba.
+  INSERT INTO public.fakturoid_invoices
+    (idempotency_key, druh, subject_id, event_id, nas_soucet, radku, rezervace, cislo)
+  VALUES ('akce-test-'||_ev::text, 'commercial_event', _firma, _ev, 10000, 1, ARRAY[_rez], '2027-0001')
+  RETURNING id INTO _dok;
+  INSERT INTO public.fakturoid_invoice_reservations (fakturoid_invoice_id, reservation_id)
+  VALUES (_dok, _rez);
+
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.uprav_sazbu_akce(%L, 1234)', _ev),
+    'na vystaveném dokladu', 'vyfakturovanou akci nejde PŘECENIT');
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.zmen_typ_akce(%L, %L)', _ev, 'training'),
+    'na vystaveném dokladu', '… ani jí změnit TYP (což taky přepočítá cenu)');
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.uprav_drahy_akce(%L, ARRAY[%L]::uuid[])', _ev,
+           (SELECT id FROM public.sheets WHERE active AND id <> _d1 ORDER BY name LIMIT 1)),
+    'na vystaveném dokladu', '… ani jí přeskládat DRÁHY');
+
+  PERFORM pg_temp.tvrd(
+    (SELECT amount FROM public.reservations WHERE id = _rez) = 10000,
+    '… a částka na rezervaci zůstala ta, na kterou zní doklad');
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- F) ZMĚNA TYPU: instruktor u komerčky, konec trenérské směny
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _ev uuid; _klub uuid; _v jsonb; _r record;
+BEGIN
+  SELECT id INTO _klub FROM public.subjects WHERE name = 'CK Ostravské kameny';
+
+  INSERT INTO public.events (title, event_type, start_time, end_time, role_reqs, created_by)
+  VALUES ('TEST typ stab','training','2027-06-30 17:00+02','2027-06-30 19:00+02','{}'::jsonb,
+          '11111111-1111-1111-1111-111111111111') RETURNING id INTO _ev;
+  INSERT INTO public.reservations (sheet_id, subject_id, event_id, start_at, end_at)
+  VALUES ((SELECT id FROM public.sheets WHERE active ORDER BY name LIMIT 1), _klub, _ev,
+          '2027-06-30 17:00+02','2027-06-30 19:00+02');
+
+  -- K tréninku patří trenér — a tím vzniká PLACENÁ směna.
+  INSERT INTO public.user_roles (user_id, role)
+  VALUES ('22222222-2222-2222-2222-222222222222','trainer') ON CONFLICT DO NOTHING;
+  PERFORM public.prirad_trenera(_ev, '22222222-2222-2222-2222-222222222222');
+  PERFORM pg_temp.tvrd(
+    (SELECT count(*) FROM public.shifts
+      WHERE event_id = _ev AND required_role = 'trainer' AND status <> 'cancelled') = 1,
+    'příprava: trénink má placenou trenérskou směnu');
+
+  _v := public.zmen_typ_akce(_ev, 'commercial');
+
+  PERFORM pg_temp.tvrd((_v->>'trener_zrusen')::int = 1,
+    'přepnutí na komerční akci ZRUŠILO trenérskou směnu (hala ji jinak platí dál)');
+  PERFORM pg_temp.tvrd(
+    (SELECT count(*) FROM public.shifts
+      WHERE event_id = _ev AND required_role = 'trainer' AND status <> 'cancelled') = 0,
+    '… a živá trenérská směna na akci nezůstala');
+  PERFORM pg_temp.tvrd(
+    (SELECT count(*) FROM public.shifts
+      WHERE event_id = _ev AND required_role = 'trainer' AND status = 'cancelled') = 1,
+    '… zrušila se SOFT, nesmazala (zásada 2)');
+
+  PERFORM pg_temp.tvrd((_v->>'doplnen_instruktor')::boolean,
+    'komerční akci se doplnil instruktor (create_booking ho vyžaduje, tahle cesta ho obcházela)');
+  SELECT role_reqs, required_staff INTO _r FROM public.events WHERE id = _ev;
+  PERFORM pg_temp.tvrd((_r.role_reqs->>'instructor')::int >= 1, '… v rozpisu rolí je aspoň jeden');
+  PERFORM pg_temp.tvrd(
+    (SELECT count(*) FROM public.shifts
+      WHERE event_id = _ev AND required_role = 'instructor' AND status <> 'cancelled') >= 1,
+    '… a dorovnání štábu z něj udělalo skutečnou směnu k obsazení');
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- G) PRÁVA POD SKUTEČNOU ROLÍ (pravidlo 8)
+--
+-- Dřív tenhle soubor neměl ani jedno `SET LOCAL ROLE authenticated`, takže
+-- všechno běželo jako postgres — a ten obchází granty i RLS. O admin-only
+-- bráně u `zmen_typ_akce` tedy netvrdil vůbec nic.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _ev uuid; _klub uuid; _d1 uuid; _d2 uuid;
+BEGIN
+  SELECT id INTO _klub FROM public.subjects WHERE name = 'CK Ostravské kameny';
+  SELECT id INTO _d1 FROM public.sheets WHERE active ORDER BY name LIMIT 1;
+  SELECT id INTO _d2 FROM public.sheets WHERE active AND id <> _d1 ORDER BY name LIMIT 1;
+
+  INSERT INTO public.events (title, event_type, start_time, end_time, created_by)
+  VALUES ('TEST prava','training','2027-07-21 17:00+02','2027-07-21 19:00+02',
+          '44444444-4444-4444-4444-444444444444') RETURNING id INTO _ev;
+  INSERT INTO public.reservations (sheet_id, subject_id, event_id, start_at, end_at, created_by)
+  VALUES (_d1, _klub, _ev, '2027-07-21 17:00+02','2027-07-21 19:00+02',
+          '44444444-4444-4444-4444-444444444444');
+
+  INSERT INTO _s VALUES ('prava_ev', _ev::text), ('prava_d1', _d1::text), ('prava_d2', _d2::text);
+END $$;
+
+-- Zástupce klubu (44444444) — dráhy své akce spravovat SMÍ, cenu a typ NE.
+DO $$
+DECLARE _ev uuid; _d1 uuid; _d2 uuid; _v jsonb;
+BEGIN
+  SELECT hodnota::uuid INTO _ev FROM _s WHERE klic = 'prava_ev';
+  SELECT hodnota::uuid INTO _d1 FROM _s WHERE klic = 'prava_d1';
+  SELECT hodnota::uuid INTO _d2 FROM _s WHERE klic = 'prava_d2';
+
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"44444444-4444-4444-4444-444444444444","role":"authenticated"}', true);
+  EXECUTE 'SET LOCAL ROLE authenticated';
+  PERFORM pg_temp.tvrd(current_user = 'authenticated',
+    'kontrola práv běží jako authenticated, ne jako postgres');
+
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.zmen_typ_akce(%L, %L)', _ev, 'commercial'),
+    'jen správce haly', 'zástupce klubu NEZMĚNÍ typ akce (typ hýbe cenou)');
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.uprav_sazbu_akce(%L, 900)', _ev),
+    'jen správce haly', 'zástupce klubu NEPŘECENÍ akci');
+
+  _v := public.uprav_drahy_akce(_ev, ARRAY[_d1, _d2]);
+  PERFORM pg_temp.tvrd((_v->>'pridano')::int = 1,
+    'zástupce klubu dráhu ve SVÉ akci přidat smí');
+
+  EXECUTE 'RESET ROLE';
+END $$;
+
+-- Brigádník bez vztahu ke klubu (33333333) nesmí nic.
+DO $$
+DECLARE _ev uuid; _d1 uuid;
+BEGIN
+  SELECT hodnota::uuid INTO _ev FROM _s WHERE klic = 'prava_ev';
+  SELECT hodnota::uuid INTO _d1 FROM _s WHERE klic = 'prava_d1';
+
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"33333333-3333-3333-3333-333333333333","role":"authenticated"}', true);
+  EXECUTE 'SET LOCAL ROLE authenticated';
+
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.uprav_drahy_akce(%L, ARRAY[%L]::uuid[])', _ev, _d1),
+    'nemáte právo', 'cizí člověk dráhy akce neupraví');
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.uprav_sazbu_akce(%L, 900)', _ev),
+    'jen správce haly', '… ani ji nepřecení');
+
+  EXECUTE 'RESET ROLE';
+END $$;
+
 DO $$ BEGIN RAISE NOTICE '=== VŠECHNY TESTY PROŠLY ==='; END $$;
 
 ROLLBACK;

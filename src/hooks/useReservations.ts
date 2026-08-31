@@ -368,14 +368,30 @@ export const useReservations = (range: DateRange | null) => {
     enabled: !!user,
   });
 
-  /** Kdo je k akci PŘIŘAZENÝ (živá trenérská směna). */
+  /**
+   * Kdo je k akci PŘIŘAZENÝ (živá trenérská směna).
+   *
+   * ⚠️ NEČTE SE ZE `shifts` NAPŘÍMO. Ta tabulka nemá SELECT politiku pro
+   * zástupce klubu (permisivní `USING (true)` padla v `unified_calendar`),
+   * takže zástupci vracela NULA ŘÁDKŮ BEZ CHYBY — dialog mu pak tvrdil
+   * „trenér nepřiřazen" i po úspěšném přiřazení a on přiřadil znovu.
+   * Vznikaly tak duplicitní placené směny.
+   *
+   * Rozšířit RLS by znamenalo pustit klubu i `hourly_rate`, což je mzdový
+   * náklad haly. Proto RPC, které vydá jméno komukoli z klubu a sazbu jen
+   * adminovi.
+   */
   const trenerAkce = async (eventId: string) => {
-    const { data } = await supabase
-      .from('shifts')
-      .select('claimed_by, status, hourly_rate')
-      .eq('event_id', eventId).eq('required_role', 'trainer')
-      .neq('status', 'cancelled').maybeSingle();
-    return data ?? null;
+    const { data, error } = await supabase.rpc('trener_akce', { _event_id: eventId });
+    if (error) throw rpcError(error, 'Trenéra akce se nepodařilo načíst.');
+    const radek = (data ?? [])[0];
+    if (!radek) return null;
+    return {
+      claimed_by: radek.user_id as string | null,
+      jmeno: radek.jmeno as string | null,
+      status: radek.status as string,
+      hourly_rate: radek.hourly_rate as number | null,
+    };
   };
 
   // PŘIŘAZENÍM VZNIKÁ PLACENÁ SMĚNA (600 Kč/h). Není to jen údaj u akce —
@@ -401,17 +417,20 @@ export const useReservations = (range: DateRange | null) => {
   /**
    * PŘÁNÍ trenéra — nezávazné, nic nespouští.
    *
-   * Píše se do sloupce napřímo, ne přes RPC: je to obyčejný údaj na rezervaci
-   * a kdo na ni smí sáhnout, řeší RLS. Placenou směnu z toho nikdy nevznikne —
-   * na to je `prirad_trenera`.
+   * Jde přes RPC, ne přímým zápisem do sloupce. Přímý zápis byl špatně na obě
+   * strany: ČLENOVI KLUBU padal na whitelistu v `guard_reservation_rep_changes`
+   * („Pole „preferovany_trener" smí měnit jen správce"), tedy přesně tomu,
+   * komu je funkce určená — a ADMINOVI naopak neověřoval nic, takže šlo přání
+   * pověsit na turnaj i na údržbu a nastavit jako trenéra kohokoli v systému.
+   *
+   * Placená směna z toho pořád nevznikne — na to je `prirad_trenera`.
    */
   const nastavPraniTrenera = useMutation({
     mutationFn: async (a: { reservation_ids: string[]; user_id: string | null }) => {
-      const { error } = await supabase
-        .from('reservations')
-        .update({ preferovany_trener: a.user_id })
-        .in('id', a.reservation_ids);
-      if (error) throw new Error(error.message?.trim() || 'Přání se nepodařilo uložit.');
+      const { error } = await supabase.rpc('nastav_prani_trenera', {
+        _reservation_ids: a.reservation_ids, _user_id: a.user_id,
+      });
+      if (error) throw rpcError(error, 'Přání se nepodařilo uložit.');
     },
     onSuccess: invalidate,
   });

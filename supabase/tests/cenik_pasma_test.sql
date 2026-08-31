@@ -168,10 +168,14 @@ END $$;
 -- -----------------------------------------------------------------------------
 DO $$
 BEGIN
+  -- Od 20260831234000 hlídá díru mezi provozem a ceníkem odložený constraint
+  -- trigger, takže tenhle DELETE by na konci transakce neprošel — blok proto
+  -- končí ROLLBACKem a kontrola se nikdy nevyhodnotí. Je to schválně: testuje
+  -- se poslední záchrana `cena_ledu` pro data, která se sem dostala jinudy.
   DELETE FROM public.cenik_pasma WHERE den_typ = 'vsedni' AND od_hodina = 6;
   PERFORM pg_temp.ocekavej_chybu(
     $q$SELECT public.cena_ledu('2026-09-02 09:00+02','2026-09-02 11:00+02')$q$,
-    'nemá v ceníku pásmo', 'hodina bez pásma skončí chybou, ne nulou ani výchozí sazbou');
+    'nemá v ceníku cenu', 'hodina bez pásma skončí chybou, ne nulou ani výchozí sazbou');
 END $$;
 ROLLBACK;
 BEGIN;

@@ -504,14 +504,20 @@ export function ReservationDialog({
           rate_per_hour: meniSazbu && !editing.event_id ? rateNum : undefined,
         });
 
-        if (meniSazbu && editing.event_id) {
-          await api.upravSazbuAkce({ event_id: editing.event_id, sazba: rateNum! });
-        }
-
-        // ZMĚNA TYPU AKCE (C) — jako první, protože přepočítá cenu; případná
-        // ruční sazba níž pak platí nad novým typem, ne naopak.
+        // ZMĚNA TYPU AKCE (C) JDE PRVNÍ, protože přepočítá cenu podle nového
+        // typu — a ručně zadaná sazba níž pak platí NAD ním.
+        //
+        // Obráceně to bylo tiché zahození peněz: `zmen_typ_akce` nastaví
+        // `rate_per_hour = NULL` a nechá trigger ocenit z ceníku, takže sazba
+        // uložená o pár řádků dřív zmizela a akce se vyfakturovala za ceníkovou
+        // cenu. Uživatel přitom viděl „Rezervace upravena" a svoje číslo
+        // v poli. Komentář na tomhle místě to popisoval správně, kód ne.
         if (isAdmin && editing.event_id && kind !== kindOf(editing)) {
           await api.zmenTypAkce({ event_id: editing.event_id, typ: kind });
+        }
+
+        if (meniSazbu && editing.event_id) {
+          await api.upravSazbuAkce({ event_id: editing.event_id, sazba: rateNum! });
         }
 
         // DRÁHY (B) — přidání i ubrání jedním voláním nad celou akcí.
