@@ -593,6 +593,75 @@ kontrola v migraci ji rovnou usvědčila.)
 
 ---
 
+## 6e. Čekající účet neviděl nic? Viděl. (31. 8. 2026)
+
+Před vypnutím potvrzování e-mailu jsem změřil, co doopravdy vidí účet, který se
+zaregistroval a čeká na schválení. Ne úvahou nad politikami — dotazem pod
+`SET LOCAL ROLE authenticated` s tokenem účtu, který v databázi nemá ani profil,
+**na ostrých datech** (transakce se vrátila zpět):
+
+| co | před | po |
+|---|---|---|
+| `reservations_calendar` | **80 řádků** — jména klubů i firem, názvy akcí, časy | 0 |
+| `events` | **42 řádků** | 0 |
+| `profiles`, `profiles_public`, `profiles_self` | **3 řádky** — jména všech lidí | 0 (vlastní řádek 1) |
+| `settings_public` | 1 řádek | 0 |
+| `reservations`, `subjects`, `cenik_pasma`, `shifts`, `reservations_billing`, `subjects_rates` | 0 | 0 |
+
+**Peníze neunikaly** — částky jsou maskované, ceník i „Kdo dluží" vracely nulu
+řádků. Unikal ROZVRH HALY VČETNĚ JMEN ZÁKAZNÍKŮ.
+
+**Proč to blok C nechytil:** zavřel `has_role`, `is_subject_member`
+a `is_subject_rep`, jenže tahle tři místa se RLS neptají — `events` a `profiles`
+měly SELECT politiku `USING (true)` a čtyři pohledy běží se
+`security_invoker = off`, tedy pod vlastníkem, kde RLS podkladových tabulek
+nehraje roli.
+
+**Proč to bylo naléhavé:** dokud Auth vyžaduje potvrzení e-mailu, musí útočník
+aspoň ovládat schránku. Po vypnutí potvrzování znamená „kdokoli přihlášený"
+doslova kdokoli — vyplní registrační formulář s vymyšleným e-mailem a čte.
+Migrace `20260831235000_cekajici_ucet_nevidi_nic.sql` proto šla na produkci
+**dřív, než se potvrzování vypne**.
+
+**Co zůstává otevřené schválně:** `clubs_public` (id + název klubu) je čitelný
+i nepřihlášeným — bez něj si člověk v registraci nevybere klub. A **vlastní
+profil vidí i čekající účet**, jinak by `AuthContext` nezjistil `stav`
+a místo věty „Čeká se na potvrzení" by naskočilo „Profil se nepodařilo načíst".
+
+Rozhodnutí klienta z 31. 7. („obsazenost a název klubu vidí všichni přihlášení")
+platí dál — jen se upřesnilo, že „přihlášený" znamená vpuštěný dovnitř, ne
+kdokoli, kdo prošel registračním formulářem.
+
+Testy: `supabase/tests/cekajici_ucet_test.sql` (34 tvrzení, celé pod
+`SET LOCAL ROLE authenticated`). Ověřeno mutací: bez brány v pohledu čte
+čekající účet 36 řádků kalendáře a test zčervená.
+
+### Past, na kterou to narazilo
+
+`settings_public` se čte i **bez přihlášeného uživatele** (pg_cron, Edge funkce
+sahající na pohled). Holá brána `WHERE ucet_aktivni()` mu vrátila nula řádků
+místo řádku s maskovanými sazbami a shodila `cenik_viditelnost_test.sql`.
+Řeší to výjimka pro běh pod databázovou rolí — týž vzorec, jaký má
+`billing_reconcile`: `auth.uid() IS NULL AND session_user IN ('postgres',
+'supabase_admin')`, ne holé `auth.uid() IS NULL` (to by z chybějícího `sub`
+v tokenu udělalo klíč).
+
+### Dvě věci pro PM
+
+1. **Potvrzování e-mailu je pořád ZAPNUTÉ** (`mailer_autoconfirm: false`)
+   a z Claude Code se vypnout nedá: platformní API vrací pro
+   `fcwubbytqxubgptftnru` `403 „Your account does not have the necessary
+   privileges"` (pro demo tentýž příkaz projde) a nastavení žije v konfiguraci
+   GoTrue, ne v databázi. Musí to cvaknout Tomáš v dashboardu.
+2. **Na produkci sedí čekající účet, který nemá žádnou žádost o klub** — a tím
+   pádem se nikomu neobjeví ve frontě `/requests`. Registroval se bez vybraného
+   klubu (nemá ani `full_name`), takže ho nejde schválit; a doplnit si klub sám
+   nemůže, protože na Profil se čekající účet nedostane. Dnes to umí rozseknout
+   jen admin ručně v databázi. Jestli se to má stávat běžně, patří na čekací
+   obrazovku výběr klubu — to je ale rozhodnutí, ne oprava.
+
+---
+
 ## 7. Čemu nevěřit a co si ověřit
 
 Kromě pastí z `docs/ETAPA2-STAV.md`, kapitola 5, přibylo tohle:
