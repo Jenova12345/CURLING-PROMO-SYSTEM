@@ -1387,6 +1387,7 @@ export type Database = {
           invoice_id: string | null
           invoiced_at: string | null
           note: string | null
+          preferovany_trener: string | null
           rate_per_hour: number | null
           series_id: string | null
           sheet_id: string
@@ -1417,6 +1418,7 @@ export type Database = {
           invoice_id?: string | null
           invoiced_at?: string | null
           note?: string | null
+          preferovany_trener?: string | null
           rate_per_hour?: number | null
           series_id?: string | null
           sheet_id: string
@@ -1447,6 +1449,7 @@ export type Database = {
           invoice_id?: string | null
           invoiced_at?: string | null
           note?: string | null
+          preferovany_trener?: string | null
           rate_per_hour?: number | null
           series_id?: string | null
           sheet_id?: string
@@ -1547,6 +1550,27 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "invoices_list"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reservations_preferovany_trener_fkey"
+            columns: ["preferovany_trener"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "reservations_preferovany_trener_fkey"
+            columns: ["preferovany_trener"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "reservations_preferovany_trener_fkey"
+            columns: ["preferovany_trener"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
           },
           {
             foreignKeyName: "reservations_sheet_id_fkey"
@@ -2471,6 +2495,8 @@ export type Database = {
           hours: number | null
           id: string | null
           note: string | null
+          preferovany_trener: string | null
+          preferovany_trener_jmeno: string | null
           rate_per_hour: number | null
           series_id: string | null
           sheet_id: string | null
@@ -2536,6 +2562,27 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "stab_kontrola"
             referencedColumns: ["event_id"]
+          },
+          {
+            foreignKeyName: "reservations_preferovany_trener_fkey"
+            columns: ["preferovany_trener"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "reservations_preferovany_trener_fkey"
+            columns: ["preferovany_trener"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "reservations_preferovany_trener_fkey"
+            columns: ["preferovany_trener"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
           },
           {
             foreignKeyName: "reservations_sheet_id_fkey"
@@ -3082,6 +3129,11 @@ export type Database = {
           konec: string
           zacatek: string
         }[]
+      }
+      odeber_trenera: { Args: { _event_id: string }; Returns: Json }
+      prirad_trenera: {
+        Args: { _event_id: string; _user_id: string }
+        Returns: Json
       }
       reject_subject_request: {
         Args: { _duvod?: string; _request_id: string }

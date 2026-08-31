@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   format, startOfDay, addDays, subDays, startOfWeek, addWeeks, subWeeks,
   startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths,
@@ -235,6 +235,44 @@ const Calendar = () => {
 
   const detailLanes = lanesOfEvent(detail);
   const detailCelkem = celkemZaAkci(detail);
+
+  // Kdo je k tréninku PŘIŘAZENÝ (živá trenérská směna). Načítá se až při
+  // otevření detailu — je to jeden dotaz navíc a týká se jen tréninků.
+  const [trener, setTrener] = useState<{ claimed_by: string | null } | null>(null);
+  useEffect(() => {
+    let zruseno = false;
+    if (!detail?.event_id || detail.event_type !== 'training') { setTrener(null); return; }
+    api.trenerAkce(detail.event_id).then((t) => { if (!zruseno) setTrener(t as never); });
+    return () => { zruseno = true; };
+  }, [detail?.event_id, detail?.event_type]);
+
+  const jmenoTrenera = (uid?: string | null) =>
+    api.treneri.find((t) => t.user_id === uid)?.jmeno ?? 'neznámý';
+
+  const priradit = async (uid: string) => {
+    if (!detail?.event_id) return;
+    try {
+      await api.priradTrenera({ event_id: detail.event_id, user_id: uid });
+      setTrener({ claimed_by: uid });
+      toast({
+        title: 'Trenér přiřazen',
+        description: `${jmenoTrenera(uid)} — tím vznikla placená směna 600 Kč/h.`,
+      });
+    } catch (e) {
+      toast({ title: 'Nepovedlo se', description: e instanceof Error ? e.message : '', variant: 'destructive' });
+    }
+  };
+
+  const odebrat = async () => {
+    if (!detail?.event_id) return;
+    try {
+      await api.odeberTrenera(detail.event_id);
+      setTrener(null);
+      toast({ title: 'Trenér odebrán', description: 'Směna byla zrušena, trénink zase nikoho nestojí.' });
+    } catch (e) {
+      toast({ title: 'Nepovedlo se', description: e instanceof Error ? e.message : '', variant: 'destructive' });
+    }
+  };
   const cancelLanes = lanesOfEvent(cancelling);
 
   return (
@@ -348,6 +386,8 @@ const Calendar = () => {
           createSeries: (input) => { limit(); return api.createSeries(input); },
           updateBooking: api.updateBooking,
           upravSazbuAkce: api.upravSazbuAkce,
+          treneri: api.treneri,
+          nastavPraniTrenera: api.nastavPraniTrenera,
           moveBooking: api.moveBooking,
           checkConflicts: api.checkConflicts,
           aresLookup: api.aresLookup,
@@ -432,6 +472,53 @@ const Calendar = () => {
                     {detail.event_id && detailLanes === 1 && (
                       <div className="text-muted-foreground text-xs">Storno zruší i volné/nepotvrzené směny této akce; potvrzené zůstanou.</div>
                     )}
+                    {/* TRENÉR — jen u tréninku (blok C, varianta D).
+                        Přání je nezávazné; přiřazení zakládá PLACENOU směnu. */}
+                    {detail.event_type === 'training' && detail.event_id && (
+                      <div className="mt-2 space-y-1 border-t pt-2">
+                        <div className="text-xs font-medium">Trenér</div>
+
+                        {detail.preferovany_trener_jmeno && (
+                          <div className="text-xs text-muted-foreground">
+                            Přání hráče: {detail.preferovany_trener_jmeno}
+                            {trener?.claimed_by ? '' : ' — zatím nepřiřazeno'}
+                          </div>
+                        )}
+
+                        {trener?.claimed_by ? (
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs">
+                              Přiřazen: <span className="font-medium">{jmenoTrenera(trener.claimed_by)}</span>
+                              {' '}<span className="text-muted-foreground">(směna 600 Kč/h)</span>
+                            </span>
+                            {detail.can_approve && (
+                              <Button size="sm" variant="outline" className="h-6 px-2 text-xs"
+                                onClick={odebrat}>Odebrat</Button>
+                            )}
+                          </div>
+                        ) : detail.can_approve ? (
+                          <div className="flex items-center gap-2">
+                            <select
+                              aria-label="Přiřadit trenéra"
+                              className="h-7 rounded-md border border-input bg-background px-2 text-xs"
+                              defaultValue=""
+                              onChange={(e) => e.target.value && priradit(e.target.value)}
+                            >
+                              <option value="">Přiřadit trenéra…</option>
+                              {api.treneri.map((t) => (
+                                <option key={t.user_id} value={t.user_id}>{t.jmeno}</option>
+                              ))}
+                            </select>
+                            <span className="text-[11px] text-muted-foreground">
+                              přiřazením vznikne placená směna
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="text-xs text-muted-foreground">Trenéra přiřazuje správce haly nebo zástupce klubu.</div>
+                        )}
+                      </div>
+                    )}
+
                     {isAdmin && detail.event_id && (detail.event_type === 'commercial' || detail.event_type === 'recruitment') && (
                       <ObsazeniDetail eventId={detail.event_id} />
                     )}

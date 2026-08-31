@@ -347,6 +347,75 @@ export const useReservations = (range: DateRange | null) => {
     return rows[0] ?? null;
   };
 
+  // ---- TRENÉR K TRÉNINKU (blok C) -----------------------------------------
+
+  /** Lidé s rolí `trainer` — koho lze přiřadit a koho si lze přát. */
+  const { data: treneri = [] } = useQuery({
+    queryKey: ['treneri'],
+    queryFn: async (): Promise<Array<{ user_id: string; jmeno: string }>> => {
+      const { data: role, error } = await supabase
+        .from('user_roles').select('user_id').eq('role', 'trainer');
+      if (error) throw error;
+      const ids = [...new Set((role ?? []).map((r) => r.user_id as string))];
+      if (ids.length === 0) return [];
+      const { data: prof } = await supabase
+        .from('profiles_public').select('user_id, full_name').in('user_id', ids);
+      return (prof ?? []).map((p) => ({
+        user_id: p.user_id as string,
+        jmeno: (p.full_name as string) ?? '(bez jména)',
+      })).sort((a, b) => a.jmeno.localeCompare(b.jmeno, 'cs'));
+    },
+    enabled: !!user,
+  });
+
+  /** Kdo je k akci PŘIŘAZENÝ (živá trenérská směna). */
+  const trenerAkce = async (eventId: string) => {
+    const { data } = await supabase
+      .from('shifts')
+      .select('claimed_by, status, hourly_rate')
+      .eq('event_id', eventId).eq('required_role', 'trainer')
+      .neq('status', 'cancelled').maybeSingle();
+    return data ?? null;
+  };
+
+  // PŘIŘAZENÍM VZNIKÁ PLACENÁ SMĚNA (600 Kč/h). Není to jen údaj u akce —
+  // proto to jde přes RPC, které si ověří práva i roli trenéra.
+  const priradTrenera = useMutation({
+    mutationFn: async (a: { event_id: string; user_id: string }) => {
+      const { error } = await supabase.rpc('prirad_trenera', {
+        _event_id: a.event_id, _user_id: a.user_id,
+      });
+      if (error) throw rpcError(error, 'Trenéra se nepodařilo přiřadit.');
+    },
+    onSuccess: invalidate,
+  });
+
+  const odeberTrenera = useMutation({
+    mutationFn: async (eventId: string) => {
+      const { error } = await supabase.rpc('odeber_trenera', { _event_id: eventId });
+      if (error) throw rpcError(error, 'Trenéra se nepodařilo odebrat.');
+    },
+    onSuccess: invalidate,
+  });
+
+  /**
+   * PŘÁNÍ trenéra — nezávazné, nic nespouští.
+   *
+   * Píše se do sloupce napřímo, ne přes RPC: je to obyčejný údaj na rezervaci
+   * a kdo na ni smí sáhnout, řeší RLS. Placenou směnu z toho nikdy nevznikne —
+   * na to je `prirad_trenera`.
+   */
+  const nastavPraniTrenera = useMutation({
+    mutationFn: async (a: { reservation_ids: string[]; user_id: string | null }) => {
+      const { error } = await supabase
+        .from('reservations')
+        .update({ preferovany_trener: a.user_id })
+        .in('id', a.reservation_ids);
+      if (error) throw new Error(error.message?.trim() || 'Přání se nepodařilo uložit.');
+    },
+    onSuccess: invalidate,
+  });
+
   // Přecenění CELÉ komerční akce — všechny dráhy naráz (BUG 1).
   //
   // `update_booking` mění sazbu jen na jedné rezervaci, takže akce na dvou
@@ -416,6 +485,11 @@ export const useReservations = (range: DateRange | null) => {
     createSeries: createSeries.mutateAsync,
     updateBooking: updateBooking.mutateAsync,
     upravSazbuAkce: upravSazbuAkce.mutateAsync,
+    treneri,
+    trenerAkce,
+    priradTrenera: priradTrenera.mutateAsync,
+    odeberTrenera: odeberTrenera.mutateAsync,
+    nastavPraniTrenera: nastavPraniTrenera.mutateAsync,
     moveBooking: moveBooking.mutateAsync,
     cancelBooking: cancelBooking.mutateAsync,
     approveReservation: approveReservation.mutateAsync,

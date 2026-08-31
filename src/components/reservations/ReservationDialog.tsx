@@ -45,11 +45,14 @@ const WEEKDAYS: [number, string][] = [
 ];
 
 export interface ReservationApi {
-  createBooking: (input: BookingInput) => Promise<unknown>;
+  createBooking: (input: BookingInput) => Promise<{ event_id: string; reservation_ids: string[] } | unknown>;
   createSeries: (input: SeriesInput) => Promise<SeriesResult>;
   updateBooking: (args: { id: string; title?: string; note?: string | null; rate_per_hour?: number | null }) => Promise<unknown>;
   /** Přecení CELOU akci (všechny dráhy) — jen komerční akce s `event_id`. */
   upravSazbuAkce: (args: { event_id: string; sazba: number }) => Promise<unknown>;
+  /** Lidé s rolí trenéra — pro nezávazné přání u tréninku (R7, varianta D). */
+  treneri: Array<{ user_id: string; jmeno: string }>;
+  nastavPraniTrenera: (args: { reservation_ids: string[]; user_id: string | null }) => Promise<unknown>;
   moveBooking: (args: { id: string; start_at: string; end_at: string; sheet_id?: string }) => Promise<unknown>;
   checkConflicts: (args: { sheet_ids: string[]; start_at: string; end_at: string; kind: BookingKind; ignore_event?: string }) => Promise<Conflict[]>;
   aresLookup: (ico: string) => Promise<{ name: string; address: string; dic: string }>;
@@ -178,6 +181,7 @@ export function ReservationDialog({
       setTitle(editing.event_title ?? '');
       setTitleTouched(true);
       setRate(editing.rate_per_hour != null ? String(editing.rate_per_hour) : '');
+      setPraniTrenera(editing.preferovany_trener ?? '');
       setRepeat(false);
     } else {
       const start = defaultStart ?? new Date();
@@ -261,6 +265,9 @@ export function ReservationDialog({
   // Sáhl už admin do celkové ceny? Pak ji dopočet nesmí přepisovat pod rukama.
   // Týž vzor jako `titleTouched` a `instructorsTouched` výš.
   const [celkemTouched, setCelkemTouched] = useState(false);
+  // Nezávazné přání, koho by si hráč přál jako trenéra. Nic nespouští a nic
+  // nestojí — placenou směnu zakládá až přiřazení v detailu akce.
+  const [praniTrenera, setPraniTrenera] = useState('');
   const hodinAkce = Math.max(0, endHour - startHour);
   const drahAkce = Math.max(1, isEdit ? editingLanes : sheetIds.length);
   const jednotek = hodinAkce * drahAkce;   // „dráhohodiny" — z nich se počítá celková cena
@@ -427,7 +434,16 @@ export function ReservationDialog({
           duration: res.skipped?.length ? 12000 : 4000,
         });
       } else {
-        await api.createBooking({ ...buildInput(), override });
+        const vysledek = await api.createBooking({ ...buildInput(), override }) as
+          { reservation_ids?: string[] } | undefined;
+        // Přání se ukládá až po založení — `create_booking` ho nezná a přepisovat
+        // kvůli nezávaznému údaji celou tu funkci by bylo horší než jeden dotaz navíc.
+        if (kind === 'training' && praniTrenera && vysledek?.reservation_ids?.length) {
+          await api.nastavPraniTrenera({
+            reservation_ids: vysledek.reservation_ids,
+            user_id: praniTrenera,
+          });
+        }
         toast({ title: override ? 'Rezervace založena, kolidující akce byly zrušeny' : 'Rezervace vytvořena' });
       }
       setConflicts(null);
@@ -478,6 +494,13 @@ export function ReservationDialog({
 
         if (meniSazbu && editing.event_id) {
           await api.upravSazbuAkce({ event_id: editing.event_id, sazba: rateNum! });
+        }
+
+        if (kind === 'training' && (editing.preferovany_trener ?? '') !== praniTrenera) {
+          await api.nastavPraniTrenera({
+            reservation_ids: [editing.id!],
+            user_id: praniTrenera || null,
+          });
         }
         toast({ title: 'Rezervace upravena' });
         onOpenChange(false);
@@ -732,6 +755,30 @@ export function ReservationDialog({
                 )}
 
                 {!isAdmin && <p className="text-xs text-muted-foreground">Sazbu určuje správce podle ceníku.</p>}
+              </div>
+            )}
+
+            {/* PŘÁNÍ TRENÉRA — jen u tréninku, nezávazné (R7, varianta D).
+                Zachytí, koho by si hráč přál, aby to zástupce nemusel
+                obvolávat. Skutečné přiřazení dělá admin nebo zástupce
+                v detailu akce a teprve TÍM vzniká placená směna. */}
+            {kind === 'training' && api.treneri.length > 0 && (
+              <div className="space-y-2">
+                <Label htmlFor="res-trener">Preferovaný trenér (nepovinné)</Label>
+                <select
+                  id="res-trener"
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  value={praniTrenera}
+                  onChange={(e) => setPraniTrenera(e.target.value)}
+                >
+                  <option value="">Bez přání</option>
+                  {api.treneri.map((t) => (
+                    <option key={t.user_id} value={t.user_id}>{t.jmeno}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground">
+                  Je to jen přání — trenéra přiřazuje správce haly nebo zástupce klubu.
+                </p>
               </div>
             )}
 
