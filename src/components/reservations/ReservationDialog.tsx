@@ -134,16 +134,28 @@ export function ReservationDialog({
 
   const { open: openHour, close: closeHour } = hoursForDay(settings?.opening_hours, date);
 
+  // PŘEDVYPLNĚNÁ SAZBA U KLUBOVÉHO LEDU BY PÁSMOVÝ CENÍK VYPNULA.
+  //
+  // Formulář posílá `rate_per_hour` (řádek níž v `submit`), a trigger
+  // `set_reservation_pricing` sáhne po pásmech jen tehdy, když sazba PŘIJDE
+  // PRÁZDNÁ — vyplněná sazba je pro něj vědomé rozhodnutí admina a má přednost.
+  // Kdyby se sem tedy dál předvyplňovala klubová sazba, admin by klubový
+  // trénink založil za 600 Kč/h a pásmový ceník by se na jeho rezervace vůbec
+  // nedostal. Necháváme prázdno („z ceníku") a cenu spočítá databáze.
+  //
+  // Komerční sazba se předvyplňuje dál — ta pásmová není a jedno číslo za
+  // hodinu je tam pořád ta správná odpověď.
   const defaultRateFor = (k: BookingKind, sid: string): string => {
     if (k === 'maintenance') return '';
     const subj = subjects.find((s) => s.id === sid);
+    // Individuálně dohodnutá sazba subjektu přebíjí ceník i pásma.
     if (subj?.default_rate != null) return String(subj.default_rate);
-    const s = settings;
-    const r =
-      k === 'commercial' ? s?.commercial_default_rate
-      : k === 'tournament' ? (s?.tournament_rate ?? s?.club_default_rate)
-      : (s?.training_rate ?? s?.club_default_rate);
-    return r != null ? String(r) : '';
+    if (k === 'commercial' || subj?.type === 'commercial') {
+      const r = settings?.commercial_default_rate;
+      return r != null ? String(r) : '';
+    }
+    // Klubový led (trénink i turnaj) — ocení ho pásmový ceník v databázi.
+    return '';
   };
 
   useEffect(() => {

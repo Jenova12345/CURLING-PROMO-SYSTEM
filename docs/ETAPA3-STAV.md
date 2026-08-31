@@ -411,22 +411,47 @@ Blok prošel bránami až napodruhé. Nálezy, které stojí za zapamatování:
   existující data. Neprojdou — `ADD CONSTRAINT` validuje okamžitě a revert se
   zastavil uprostřed. Dnes je tam `NOT VALID` a je vysvětleno proč.
 
-### ⚠️ Otevřená otázka na PM — mění účtované částky
+### Rozhodnutí PM (31. 8. 2026) — na co pásma platí a na co ne
 
-Pásma platí na VŠECHEN klubový led kromě komerčních akcí a náboru, takže pro
-kluby **přestaly platit `settings.training_rate` (600) a `tournament_rate`
-(800)** — obě jsou v Nastavení dál vidět a editovatelné, ale pro kluby mrtvé.
+**Pásmový ceník platí na klubový led VČETNĚ TRÉNINKŮ.** To je celý smysl bloku:
+klubový trénink je přesně ten led, kterého se odstupňování podle denní doby týká.
 
-    klubový turnaj 17–19    dřív 1 600 Kč   →   nově 2 400 Kč
-    klubový večerní trénink dřív   600 Kč/h →   nově 1 200 Kč/h
+    klubový večerní trénink    dřív 600 Kč/h   →   nově 1 200 Kč/h
 
-Vypadá to jako záměr (trénink a turnaj JSOU ten klubový led, jinak by ceník
-podle denní doby skoro na nic nedosáhl), ale je to rozhodnutí o cenách.
-**Do potvrzení platí, co je v kódu.** Otázka je v hlavičce migrace.
+⚠️ **Zdražení večerního tréninku ještě potvrdí klient.** Do té doby platí, co je
+v kódu; sazby jsou v `cenik_pasma` a jdou změnit bez migrace.
 
-Nepotvrzené zůstává i **ranní pásmo 6–14 za 800 Kč/h** a ceník zatím **nejde
-měnit z aplikace** — v `src/` na `cenik_pasma` není reference, takže „admin si
-to upraví v Nastavení" dnes znamená ruční SQL.
+**Klubové turnaje mají PEVNOU cenu** — ne pásmovou a ne hodinovou:
+
+| Turnaj | Cena |
+|---|---|
+| jednodenní | 14 000 Kč |
+| víkendový | 26 000 Kč |
+
+Je to **celková částka za akci** — nenásobí se hodinami ani počtem drah a na
+dokladu má být jedním řádkem.
+
+**`settings.training_rate` (600) a `tournament_rate` (800) jsou legacy.**
+V Nastavení jsou skryté (`src/pages/Settings.tsx`), v databázi zůstávají — starší
+rezervace se podle nich ocenily a bez nich by se nedalo dohledat proč. Formulář
+ceníku je do payloadu neposílá, aby je neuložil jako NULL.
+
+### ⚠️ Co z toho rozhodnutí ZATÍM NENÍ hotové
+
+**Pevná cena turnajů není implementovaná.** Je to jiný model ceny než všechno
+dosavadní: oceňuje se **akce**, ne rezervace — zatímco `reservations.amount`
+i „Kdo kolik dluží" dnes sčítají rezervace, a `mapping.ts` skládá řádky dokladu
+po rezervacích. Udělat z toho jeden řádek za akci znamená sáhnout na
+`reservations_billing`, podkladové RPC i mapovací vrstvu, včetně kontrolního
+součtu.
+
+Do té doby se **klubové turnaje oceňují pásmově** (17–19 = 2 400 Kč místo
+14 000) a rozdíl se doúčtovává ručně. Je to známá díra, ne přehlédnutí —
+patří jí vlastní blok s vlastními bránami.
+
+**Ranní pásmo 6–14 za 800 Kč/h** taky pořád čeká na potvrzení klienta, a ceník
+zatím **nejde měnit z aplikace** — v `src/` na `cenik_pasma` není reference,
+takže „admin si to upraví v Nastavení" dnes znamená ruční SQL.
 
 ---
 

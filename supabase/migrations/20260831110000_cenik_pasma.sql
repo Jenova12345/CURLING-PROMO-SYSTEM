@@ -15,24 +15,33 @@
 -- Komerční zákazník má dál jednu sazbu, nově 5 000 Kč/h BEZ DPH.
 --
 -- -----------------------------------------------------------------------------
--- ⚠️ OTÁZKA NA PM — NEZODPOVĚZENO, A MĚNÍ TO ÚČTOVANÉ ČÁSTKY
+-- ROZHODNUTÍ PM (31. 8. 2026): NA CO PÁSMA PLATÍ A NA CO NE
 -- -----------------------------------------------------------------------------
--- Pásma se vztahují na VŠECHEN klubový led kromě komerčních akcí a náboru.
--- Tím pro kluby PŘESTÁVAJÍ platit `settings.training_rate` a `tournament_rate`,
--- které jsou dnes vyplněné (600 a 800 Kč/h) a v Nastavení dál vidět.
+-- Pásmový ceník platí na klubový led VČETNĚ TRÉNINKŮ. To je ta hlavní věc,
+-- kterou tahle migrace zavádí, a je vědomá: klubový trénink je přesně ten led,
+-- kterého se odstupňování podle denní doby týká.
 --
--- Změřeno na seedu:
---   klubový turnaj 17–19   dřív 2 × 800 = 1 600 Kč   → nově 2 × 1 200 = 2 400 Kč
---   klubový trénink večer  dřív     600 Kč/h         → nově      1 200 Kč/h
+--   klubový večerní trénink   dřív 600 Kč/h   →   nově 1 200 Kč/h
 --
--- Vypadá to jako záměr (ceník podle denní doby by jinak na klubový led skoro
--- nedosáhl — trénink a turnaj JSOU ten klubový led), ale je to rozhodnutí
--- o cenách, ne technická věc. Do potvrzení PM platí, co je v kódu, a obě pole
--- jsou pro kluby MRTVÁ — ne rozbitá, jen se na ně nikdo neptá.
+-- ⚠️ ZDRAŽENÍ VEČERNÍHO TRÉNINKU JEŠTĚ POTVRDÍ KLIENT. Do té doby platí, co je
+-- v kódu — sazby jsou v `cenik_pasma` a jdou změnit bez migrace.
 --
--- Až to PM potvrdí: buď se ta dvě pole označí v Nastavení za neúčinná pro
--- kluby, nebo se pásma zúží a `tournament_rate`/`training_rate` dostanou
--- přednost. Obojí je pár řádků v `set_reservation_pricing`.
+-- KLUBOVÉ TURNAJE MAJÍ PEVNOU CENU, ne pásmovou a ne hodinovou:
+--   jednodenní turnaj   14 000 Kč
+--   víkendový turnaj    26 000 Kč
+-- Je to CELKOVÁ částka za akci — nenásobí se hodinami ani počtem drah a na
+-- dokladu má být jedním řádkem.
+--
+-- ⚠️ PEVNÁ CENA TURNAJŮ NENÍ V TÉHLE MIGRACI IMPLEMENTOVANÁ. Je to jiný model
+-- ceny než všechno dosavadní: oceňuje se AKCE, ne rezervace, zatímco `amount`
+-- i „Kdo kolik dluží" dnes sčítají rezervace. Klubové turnaje se proto zatím
+-- oceňují pásmově (17–19 = 2 400 Kč místo 14 000) a doúčtovávají se ručně.
+-- Je to známá díra, ne přehlédnutí — vlastní blok s vlastními bránami.
+--
+-- `settings.training_rate` (600) a `tournament_rate` (800) jsou tím pádem
+-- LEGACY. V Nastavení se skryly, v databázi ZŮSTÁVAJÍ — starší rezervace se
+-- podle nich ocenily a bez nich by se nedalo dohledat proč. Formulář ceníku je
+-- do payloadu neposílá, aby je neuložil jako NULL.
 --
 -- -----------------------------------------------------------------------------
 -- ROZHODNUTÍ PM: REZERVACE PŘES HRANICI PÁSMA SE POČÍTÁ PO HODINÁCH

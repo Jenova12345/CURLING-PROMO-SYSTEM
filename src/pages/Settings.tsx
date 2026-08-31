@@ -21,8 +21,6 @@ const Settings = () => {
 
   const [club, setClub] = useState('');
   const [commercial, setCommercial] = useState('');
-  const [training, setTraining] = useState('');
-  const [tournament, setTournament] = useState('');
   const [hours, setHours] = useState<OpeningHours>({});
   const [newSheet, setNewSheet] = useState('');
 
@@ -30,8 +28,6 @@ const Settings = () => {
     if (!settings) return;
     setClub(settings.club_default_rate != null ? String(settings.club_default_rate) : '');
     setCommercial(settings.commercial_default_rate != null ? String(settings.commercial_default_rate) : '');
-    setTraining(settings.training_rate != null ? String(settings.training_rate) : '');
-    setTournament(settings.tournament_rate != null ? String(settings.tournament_rate) : '');
     setHours((settings.opening_hours as OpeningHours) ?? {});
   }, [settings]);
 
@@ -63,17 +59,18 @@ const Settings = () => {
     // Klíčované, ne poziční: kdyby se pole někdy přeházela, poziční mapování
     // by tiše uložilo sazbu tréninku jako sazbu klubu. Typ `Cenik` je tu proto,
     // aby překlep v názvu sloupce neprošel — `Record<string, …>` by ho pustil.
+    // `training_rate` a `tournament_rate` tu SCHVÁLNĚ NEJSOU (rozhodnutí PM
+    // z 31. 8. 2026): klubový led se oceňuje pásmovým ceníkem, turnaje pevnou
+    // cenou. V databázi zůstávají kvůli historii — starší rezervace se podle
+    // nich ocenily — ale nesmí se přepsat na NULL. Skryté pole, které se pořád
+    // ukládá, by je vymazalo hned při prvním uložení ceníku.
     type Cenik = {
       club_default_rate?: number | null;
       commercial_default_rate?: number | null;
-      training_rate?: number | null;
-      tournament_rate?: number | null;
     };
     const pole: Array<{ sloupec: keyof Cenik; popis: string; vstup: string }> = [
       { sloupec: 'club_default_rate', popis: 'Klub — výchozí', vstup: club },
       { sloupec: 'commercial_default_rate', popis: 'Komerční akce', vstup: commercial },
-      { sloupec: 'training_rate', popis: 'Trénink', vstup: training },
-      { sloupec: 'tournament_rate', popis: 'Turnaj', vstup: tournament },
     ];
 
     const values: Cenik = {};
@@ -119,16 +116,15 @@ const Settings = () => {
           <Card>
             <CardHeader><CardTitle>Ceník (výchozí sazby podle typu akce)</CardTitle>
               <CardDescription>
-                Sazba se u rezervace předvyplní podle typu akce a uloží se jako snapshot (pozdější změna ceníku
-                nepřepočítá starší rezervace). Vlastní sazba subjektu má přednost. Prázdné pole u tréninku
-                a turnaje znamená „použij sazbu klubu".
+                Sazba se u rezervace uloží jako snapshot — pozdější změna ceníku nepřepočítá
+                starší rezervace. Vlastní sazba subjektu má přednost před vším.
+                <br />
+                <strong>Klubový led se oceňuje pásmovým ceníkem podle denní doby</strong> — ranní,
+                odpolední, večerní a víkendová sazba. Sazby tréninku a turnaje se proto už
+                nenastavují (rozhodnutí PM z 31. 8. 2026).
               </CardDescription></CardHeader>
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2"><Label htmlFor="rate-training">Trénink (Kč/h)</Label>
-                  <Input id="rate-training" value={training} inputMode="numeric" placeholder="jako klub" onChange={(e) => setTraining(e.target.value)} /></div>
-                <div className="space-y-2"><Label htmlFor="rate-tournament">Turnaj (Kč/h)</Label>
-                  <Input id="rate-tournament" value={tournament} inputMode="numeric" placeholder="jako klub" onChange={(e) => setTournament(e.target.value)} /></div>
                 <div className="space-y-2"><Label htmlFor="rate-com">Komerční akce (Kč/h)</Label>
                   <Input id="rate-com" value={commercial} inputMode="numeric" onChange={(e) => setCommercial(e.target.value)} /></div>
                 <div className="space-y-2"><Label htmlFor="rate-club">Klub — výchozí (Kč/h)</Label>
