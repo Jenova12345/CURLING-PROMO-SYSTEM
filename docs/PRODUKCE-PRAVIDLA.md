@@ -171,8 +171,16 @@ Rozhodnutí je na PM, ne technické.
   **Clear cache and deploy site***.
 - Klíč se jmenuje **`VITE_SUPABASE_PUBLISHABLE_KEY`**, ne `..._ANON_KEY`
   (`src/integrations/supabase/client.ts:6`).
-- **Jak poznat, že nový build dosedl:** změní se hash v názvu assetu
-  (`/assets/index-XXXX.js`). Když zůstane stejný, build proměnné neviděl.
+- **Jak poznat, že nový build dosedl — pozor, hash assetu na to nestačí.**
+  Vite počítá hash z OBSAHU bundlu. Když commit sáhne jen na dokumentaci nebo na
+  `index.html`, JS se nezmění a `/assets/index-XXXX.js` **zůstane stejný,
+  přestože deploy proběhl.** Ověřeno 31. 8. 2026: commit `66f74a6` (docs +
+  jednořádková změna `index.html`) dosedl za ~20 s, ale asset zůstal
+  `index-MzqHbFqd.js`.
+  - Změna hashe je spolehlivá jen tam, kde se **mění obsah bundlu** — typicky
+    při změně env proměnných nebo zdrojáků v `src/`.
+  - Univerzálnější kontrola je sáhnout na něco, co se opravdu změnilo (třeba
+    `preconnect` v HTML), nebo se podívat do Netlify deploy logu.
 - Chybějící env se projeví **bílou stránkou** a hláškou v konzoli
   `Invalid supabaseUrl: Must be a valid HTTP or HTTPS URL.` — build přitom
   projde zeleně. Zelený build tedy neznamená funkční web.
