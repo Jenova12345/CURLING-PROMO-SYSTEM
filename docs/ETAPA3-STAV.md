@@ -653,12 +653,20 @@ v tokenu udělalo klíč).
    `fcwubbytqxubgptftnru` `403 „Your account does not have the necessary
    privileges"` (pro demo tentýž příkaz projde) a nastavení žije v konfiguraci
    GoTrue, ne v databázi. Musí to cvaknout Tomáš v dashboardu.
-2. **Na produkci sedí čekající účet, který nemá žádnou žádost o klub** — a tím
-   pádem se nikomu neobjeví ve frontě `/requests`. Registroval se bez vybraného
-   klubu (nemá ani `full_name`), takže ho nejde schválit; a doplnit si klub sám
-   nemůže, protože na Profil se čekající účet nedostane. Dnes to umí rozseknout
-   jen admin ručně v databázi. Jestli se to má stávat běžně, patří na čekací
-   obrazovku výběr klubu — to je ale rozhodnutí, ne oprava.
+2. **Na produkci leží OSIŘELÝ profil** `ed63db05…` ve stavu `ceka`: nemá
+   `full_name`, nemá žádost o klub a hlavně **nemá záznam v `auth.users`**
+   (ověřeno `LEFT JOIN` oběma směry — v `auth.users` jsou jen dva účty, oba
+   `aktivni` a s potvrzeným e-mailem). Není to tedy čekající člověk, ale zbytek
+   po smazaném účtu nebo po ručním vložení. Přihlásit se pod ním nejde a ve
+   frontě `/requests` se neobjeví. Škodí jen tím, že kazí počty — smazat ho
+   smí jen člověk, který ví, odkud je.
+
+   ⚠️ Až se potvrzování e-mailu vypne, hlídej první REÁLNOU registraci: člověk,
+   který se zaregistruje **bez vybraného klubu**, žádost nevytvoří, takže se
+   nikomu neobjeví ve frontě — a doplnit si klub sám nemůže, protože na Profil
+   se čekající účet nedostane. Dnes to rozsekne jen admin ručně. Jestli se to
+   má stávat běžně, patří na čekací obrazovku výběr klubu; to je ale
+   rozhodnutí, ne oprava.
 
 ---
 
