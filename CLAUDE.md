@@ -62,7 +62,17 @@ jdou jako další migrace nad baseline, ne přepisem historie.
 3. Záloha před zásahem do produkce. Nikdy neaplikuj změnu na produkční DB bez čerstvé zálohy a odsouhlasení PM.
    - **Supabase CLI proti živé databázi = zakázáno bez výslovného souhlasu PM a čerstvé zálohy.** NIKDY nespouštěj `supabase db push` ani `supabase link` sám od sebe. Lokální vývoj (`supabase start`, `supabase db reset`) je bezpečný a míří jen na lokální Docker.
    - **Kam `db push` doopravdy míří:** na **nalinkovaný** projekt, ne na to, co je v `config.toml`. `project_id` v `supabase/config.toml` je jen lokální jméno Docker kontejnerů a cíl pushe neurčuje (dřívější znění téhle poznámky tvrdilo opak). Link žije v `supabase/.temp/`, což je v `.gitignore` — po čerstvém klonu tam nic není, takže **stav linku si vždycky ověř a nikdy ho nehádej**. Ověřuj **jen pro čtení**: `supabase projects list` (má sloupec `LINKED`) nebo `cat supabase/.temp/linked-project.json`. (Pozor: soubor `project-ref` tenhle CLI nezakládá — kdo se po něm shání, dostane „no such file" a mylně si to přečte jako „nic není nalinkované".) **Nikdy ne `supabase db push --dry-run`** — je to zakázaný příkaz jeden flag od ostrého běhu, na ověřování se nehodí.
-   - **Dva projekty, ať se nepletou:** `fareavttiwkamrukpfqk` = stará Lovable DB (jen směny a brigádníci, **rezervační tabulky tam vůbec nejsou**). `ltrazktulfxvzlvkxdsb` = curling-demo, kde běží rezervační systém i Etapa 2.
+   - **TŘI projekty, ať se nepletou** (od 31. 8. 2026):
+     - `fcwubbytqxubgptftnru` = **curling-promo-prod — OSTRÁ PRODUKCE.** Sem od
+       31. 8. 2026 zadává data klient. Web: https://curling-ostrava-system.netlify.app
+       **Platí pro ni `docs/PRODUKCE-PRAVIDLA.md` — přečti si je, než na ni sáhneš.**
+       Nejdůležitější: **NIKDY `db reset --linked`**, jen dopředné migrace,
+       a před **každým** `db push` čerstvý dump.
+     - `ltrazktulfxvzlvkxdsb` = curling-demo, kde běžel vývoj Etapy 1 a části 2.
+     - `fareavttiwkamrukpfqk` = stará Lovable DB „MladeKameny" (jen směny
+       a brigádníci, **rezervační tabulky tam vůbec nejsou**). Má **reálné
+       uživatelské účty, které chce klient zachovat — NEMIGROVAT, NERESETOVAT.**
+       Dřívější znění tohohle odstavce ji uvádělo jako produkci; to už neplatí.
 4. Nic nemazat natvrdo, vše auditovat.
 5. Změna je hotová, teprve až projde svými bránami.
 6. **Commit po každém PR, který prošel bránami.** Neschovávej odbraněnou práci
