@@ -9,6 +9,14 @@ export type EventType = Database['public']['Enums']['event_type'];
 
 export type Sheet = Database['public']['Tables']['sheets']['Row'];
 export type Subject = Database['public']['Tables']['subjects']['Row'];
+/**
+ * Nově založená firma tak, jak ji smí přečíst `authenticated`.
+ *
+ * Schválně NENÍ `Subject`: ten obsahuje `default_rate`, na který `authenticated`
+ * nemá SELECT grant, takže by se do návratové hodnoty nikdy nedostal. Typ, který
+ * slibuje pole, jež nemůžou dorazit, je jen tiše připravená chyba.
+ */
+export type NovaFirma = Pick<Subject, 'id' | 'name' | 'type' | 'ico' | 'dic' | 'address'>;
 // Nastavení tak, jak ho vidí frontend: čte se z pohledu `settings_public`,
 // protože sazby jsou v tabulce po A2b nedostupné a pohled je vydá jen adminovi.
 // Pro ostatní role přijdou sazby jako null — `can_see_rates` říká, jestli je to
@@ -340,17 +348,39 @@ export const useReservations = (range: DateRange | null) => {
   };
 
   // Založení komerčního subjektu (firmy) — jen admin (subjects RLS).
+  //
+  // ⚠️ `.select()` MUSÍ VYJMENOVAT SLOUPCE, holé `.select()` tady NEFUNGUJE.
+  //
+  // `subjects` má SLOUPCOVÉ granty: `authenticated` má SELECT na všech
+  // sloupcích KROMĚ `default_rate` (migrace „ceník jen adminovi" — sazba je
+  // peněžní údaj a nepatří všem). Holé `.select()` přeloží PostgREST na
+  // `RETURNING *`, což si vyžádá i `default_rate`, a Postgres celý příkaz
+  // odmítne:
+  //
+  //   ERROR: permission denied for table subjects
+  //
+  // Insert se přitom neprovede vůbec — práva na sloupce se kontrolují při
+  // plánování dotazu. Navenek to vypadalo jako „firmu nejde založit", i když
+  // zakládání funguje; rozbité bylo jen to, co se z něj vrací.
+  //
+  // Cesta přes stránku Subjekty tímhle netrpěla, protože `.select()` vůbec
+  // nepoužívá (`useSubjectsAdmin.createSubject`) — a proto tatáž firma přes
+  // Subjekty prošla a přes Kalendář ne.
+  //
+  // `default_rate` tu stejně nepotřebujeme: nová firma ho má NULL a dialog
+  // z návratové hodnoty čte jen `id` a `name`.
   const createSubject = useMutation({
     mutationFn: async (s: { name: string; ico?: string; dic?: string; address?: string }) => {
       const { data, error } = await supabase
         .from('subjects')
         .insert({ type: 'commercial', name: s.name, ico: s.ico || null, dic: s.dic || null, address: s.address || null })
-        .select().single();
+        .select('id, name, type, ico, dic, address')
+        .single();
       if (error) {
         if (error.code === '23505') throw new Error('Firma s tímto IČO už v systému je.');
         throw new Error('Nepodařilo se založit firmu.');
       }
-      return data as Subject;
+      return data as NovaFirma;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['my-subjects'] }),
   });

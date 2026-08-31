@@ -256,6 +256,44 @@ BEGIN
 END $$;
 RESET ROLE;
 
+-- -----------------------------------------------------------------------------
+-- SLOUPCOVÝ GRANT NA `subjects.default_rate` — a proč ho NESMÍ nikdo „opravit"
+--
+-- `authenticated` má SELECT na všech sloupcích `subjects` KROMĚ `default_rate`.
+-- Individuálně dohodnutá sazba je peněžní údaj a nepatří všem přihlášeným.
+--
+-- ⚠️ Tenhle grant má nepříjemný vedlejší účinek, na který se 31. 8. 2026
+-- narazilo v provozu: `insert(...).select()` v supabase-js se přeloží na
+-- `INSERT ... RETURNING *`, což si vyžádá i `default_rate` — a Postgres celý
+-- příkaz odmítne hláškou „permission denied for table subjects". Zakládání
+-- firmy z Kalendáře proto selhávalo, zatímco přes Subjekty (bez `.select()`)
+-- procházelo.
+--
+-- SPRÁVNÁ OPRAVA je vyjmenovat sloupce v `.select()`, ne udělit grant.
+-- Kdyby někdo v budoucnu „spravil" tu chybu grantem, sazby subjektů by uviděli
+-- všichni přihlášení — a tenhle test na to upozorní dřív, než se to stane.
+-- -----------------------------------------------------------------------------
+DO $$
+BEGIN
+  PERFORM pg_temp.tvrd(
+    NOT EXISTS (
+      SELECT 1 FROM information_schema.column_privileges
+       WHERE table_schema = 'public' AND table_name = 'subjects'
+         AND grantee = 'authenticated' AND privilege_type = 'SELECT'
+         AND column_name = 'default_rate'),
+    'authenticated NEMÁ SELECT na subjects.default_rate (sazba subjektu je jen pro admina)');
+
+  -- A pro jistotu i to, že ostatní sloupce grant MAJÍ — jinak by appka
+  -- nemohla vypsat ani jméno firmy.
+  PERFORM pg_temp.tvrd(
+    EXISTS (
+      SELECT 1 FROM information_schema.column_privileges
+       WHERE table_schema = 'public' AND table_name = 'subjects'
+         AND grantee = 'authenticated' AND privilege_type = 'SELECT'
+         AND column_name = 'name'),
+    '… ale na `name` ano (jinak by nešel vypsat seznam firem)');
+END $$;
+
 DO $$ BEGIN RAISE NOTICE '=== VŠECHNY TESTY PROŠLY ==='; END $$;
 
 ROLLBACK;

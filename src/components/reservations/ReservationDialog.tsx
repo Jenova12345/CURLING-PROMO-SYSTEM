@@ -23,7 +23,7 @@ import { nadpisSerie, souhrnSerie } from '@/lib/serie';
 import { hoursForDay } from '@/lib/openingHours';
 import { parseSazba } from '@/lib/money';
 import type {
-  Sheet, Subject, Settings, CalendarReservation, BookingKind, Conflict,
+  Sheet, Subject, NovaFirma, Settings, CalendarReservation, BookingKind, Conflict,
   BookingInput, SeriesInput, SeriesResult, Membership,
 } from '@/hooks/useReservations';
 
@@ -52,7 +52,7 @@ export interface ReservationApi {
   checkConflicts: (args: { sheet_ids: string[]; start_at: string; end_at: string; kind: BookingKind; ignore_event?: string }) => Promise<Conflict[]>;
   aresLookup: (ico: string) => Promise<{ name: string; address: string; dic: string }>;
   findSubjectByIco: (ico: string) => Promise<Subject | null>;
-  createSubject: (s: { name: string; ico?: string; dic?: string; address?: string }) => Promise<Subject>;
+  createSubject: (s: { name: string; ico?: string; dic?: string; address?: string }) => Promise<NovaFirma>;
   isCreating: boolean;
   isUpdating: boolean;
 }
