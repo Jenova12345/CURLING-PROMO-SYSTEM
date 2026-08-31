@@ -4,10 +4,10 @@ import { cn } from '@/lib/utils';
 import { NAV_ITEMS, filterNavItemsByRoles } from '@/config/navigation';
 
 const MobileNav = () => {
-  const { roles } = useAuth();
+  const { roles, isRep } = useAuth();
   const location = useLocation();
 
-  const filteredNavItems = filterNavItemsByRoles(NAV_ITEMS, roles);
+  const filteredNavItems = filterNavItemsByRoles(NAV_ITEMS, roles, isRep);
   const mobileNavItems = filteredNavItems.slice(0, 5);
 
   return (

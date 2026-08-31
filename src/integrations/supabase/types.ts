@@ -67,6 +67,60 @@ export type Database = {
         }
         Relationships: []
       }
+      billing_runs: {
+        Row: {
+          chyb: number
+          druh: string
+          id: string
+          invoice_id: string | null
+          klic: string
+          poznamka: string | null
+          preskoceno: number
+          spusteno_at: string
+          vystaveno: number
+          vytvoreno: number
+        }
+        Insert: {
+          chyb?: number
+          druh: string
+          id?: string
+          invoice_id?: string | null
+          klic: string
+          poznamka?: string | null
+          preskoceno?: number
+          spusteno_at?: string
+          vystaveno?: number
+          vytvoreno?: number
+        }
+        Update: {
+          chyb?: number
+          druh?: string
+          id?: string
+          invoice_id?: string | null
+          klic?: string
+          poznamka?: string | null
+          preskoceno?: number
+          spusteno_at?: string
+          vystaveno?: number
+          vytvoreno?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_runs_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_runs_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_list"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       billing_settings: {
         Row: {
           auto_issue: boolean
@@ -196,6 +250,91 @@ export type Database = {
           },
           {
             foreignKeyName: "billing_settings_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
+      cenik_pasma: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          deleted_at: string | null
+          den_typ: Database["public"]["Enums"]["den_typ"]
+          do_hodina: number
+          id: string
+          od_hodina: number
+          popis: string
+          sazba: number
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          deleted_at?: string | null
+          den_typ: Database["public"]["Enums"]["den_typ"]
+          do_hodina: number
+          id?: string
+          od_hodina: number
+          popis: string
+          sazba: number
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          deleted_at?: string | null
+          den_typ?: Database["public"]["Enums"]["den_typ"]
+          do_hodina?: number
+          id?: string
+          od_hodina?: number
+          popis?: string
+          sazba?: number
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cenik_pasma_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "cenik_pasma_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "cenik_pasma_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "cenik_pasma_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "cenik_pasma_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "cenik_pasma_updated_by_fkey"
             columns: ["updated_by"]
             isOneToOne: false
             referencedRelation: "profiles_self"
@@ -355,6 +494,249 @@ export type Database = {
         }
         Relationships: []
       }
+      fakturoid_invoice_reservations: {
+        Row: {
+          created_at: string
+          fakturoid_invoice_id: string
+          id: string
+          reservation_id: string
+        }
+        Insert: {
+          created_at?: string
+          fakturoid_invoice_id: string
+          id?: string
+          reservation_id: string
+        }
+        Update: {
+          created_at?: string
+          fakturoid_invoice_id?: string
+          id?: string
+          reservation_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fakturoid_invoice_reservations_fakturoid_invoice_id_fkey"
+            columns: ["fakturoid_invoice_id"]
+            isOneToOne: false
+            referencedRelation: "fakturoid_invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fakturoid_invoice_reservations_fakturoid_invoice_id_fkey"
+            columns: ["fakturoid_invoice_id"]
+            isOneToOne: false
+            referencedRelation: "fakturoid_invoices_list"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fakturoid_invoice_reservations_reservation_id_fkey"
+            columns: ["reservation_id"]
+            isOneToOne: true
+            referencedRelation: "reservations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fakturoid_invoice_reservations_reservation_id_fkey"
+            columns: ["reservation_id"]
+            isOneToOne: true
+            referencedRelation: "reservations_billing"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fakturoid_invoice_reservations_reservation_id_fkey"
+            columns: ["reservation_id"]
+            isOneToOne: true
+            referencedRelation: "reservations_calendar"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fakturoid_invoices: {
+        Row: {
+          cislo: string | null
+          created_at: string
+          created_by: string | null
+          deleted_at: string | null
+          druh: string
+          event_id: string | null
+          id: string
+          idempotency_key: string
+          nas_soucet: number
+          obdobi_do: string | null
+          obdobi_od: string | null
+          odeslano_at: string | null
+          pdf_path: string | null
+          pdf_sha256: string | null
+          provider: string
+          provider_invoice_id: string | null
+          provider_subject_id: string | null
+          provider_subtotal: number | null
+          provider_total: number | null
+          public_url: string | null
+          radku: number
+          rezervace: string[]
+          rezim: string
+          status: string | null
+          subject_id: string
+          updated_at: string
+          updated_by: string | null
+          uvolneni_duvod: string | null
+          uvolneno_at: string | null
+          variabilni_symbol: string | null
+          varovani: string | null
+          vystaveno_at: string | null
+          zabrano_at: string
+        }
+        Insert: {
+          cislo?: string | null
+          created_at?: string
+          created_by?: string | null
+          deleted_at?: string | null
+          druh: string
+          event_id?: string | null
+          id?: string
+          idempotency_key: string
+          nas_soucet: number
+          obdobi_do?: string | null
+          obdobi_od?: string | null
+          odeslano_at?: string | null
+          pdf_path?: string | null
+          pdf_sha256?: string | null
+          provider?: string
+          provider_invoice_id?: string | null
+          provider_subject_id?: string | null
+          provider_subtotal?: number | null
+          provider_total?: number | null
+          public_url?: string | null
+          radku: number
+          rezervace: string[]
+          rezim?: string
+          status?: string | null
+          subject_id: string
+          updated_at?: string
+          updated_by?: string | null
+          uvolneni_duvod?: string | null
+          uvolneno_at?: string | null
+          variabilni_symbol?: string | null
+          varovani?: string | null
+          vystaveno_at?: string | null
+          zabrano_at?: string
+        }
+        Update: {
+          cislo?: string | null
+          created_at?: string
+          created_by?: string | null
+          deleted_at?: string | null
+          druh?: string
+          event_id?: string | null
+          id?: string
+          idempotency_key?: string
+          nas_soucet?: number
+          obdobi_do?: string | null
+          obdobi_od?: string | null
+          odeslano_at?: string | null
+          pdf_path?: string | null
+          pdf_sha256?: string | null
+          provider?: string
+          provider_invoice_id?: string | null
+          provider_subject_id?: string | null
+          provider_subtotal?: number | null
+          provider_total?: number | null
+          public_url?: string | null
+          radku?: number
+          rezervace?: string[]
+          rezim?: string
+          status?: string | null
+          subject_id?: string
+          updated_at?: string
+          updated_by?: string | null
+          uvolneni_duvod?: string | null
+          uvolneno_at?: string | null
+          variabilni_symbol?: string | null
+          varovani?: string | null
+          vystaveno_at?: string | null
+          zabrano_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fakturoid_invoices_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "fakturoid_invoices_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "fakturoid_invoices_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "fakturoid_invoices_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fakturoid_invoices_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "stab_kontrola"
+            referencedColumns: ["event_id"]
+          },
+          {
+            foreignKeyName: "fakturoid_invoices_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "clubs_public"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fakturoid_invoices_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fakturoid_invoices_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects_rates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fakturoid_invoices_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "fakturoid_invoices_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_public"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "fakturoid_invoices_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles_self"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
       invoice_counter: {
         Row: {
           posledni: number
@@ -483,6 +865,7 @@ export type Database = {
           id: string
           issued_at: string | null
           issued_by: string | null
+          je_plne_storno: boolean
           kind: Database["public"]["Enums"]["invoice_kind"]
           obdobi_do: string
           obdobi_od: string
@@ -532,6 +915,7 @@ export type Database = {
           id?: string
           issued_at?: string | null
           issued_by?: string | null
+          je_plne_storno?: boolean
           kind: Database["public"]["Enums"]["invoice_kind"]
           obdobi_do: string
           obdobi_od: string
@@ -561,7 +945,6 @@ export type Database = {
           updated_by?: string | null
           variabilni_symbol?: string | null
           vat_mode?: Database["public"]["Enums"]["vat_mode"]
-          vat_rate_ice?: number
         }
         Update: {
           cislo?: string | null
@@ -582,6 +965,7 @@ export type Database = {
           id?: string
           issued_at?: string | null
           issued_by?: string | null
+          je_plne_storno?: boolean
           kind?: Database["public"]["Enums"]["invoice_kind"]
           obdobi_do?: string
           obdobi_od?: string
@@ -611,7 +995,6 @@ export type Database = {
           updated_by?: string | null
           variabilni_symbol?: string | null
           vat_mode?: Database["public"]["Enums"]["vat_mode"]
-          vat_rate_ice?: number
         }
         Relationships: [
           {
@@ -641,6 +1024,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "events"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "stab_kontrola"
+            referencedColumns: ["event_id"]
           },
           {
             foreignKeyName: "invoices_issued_by_fkey"
@@ -949,6 +1339,7 @@ export type Database = {
           full_name: string | null
           id: string
           phone: string | null
+          stav: Database["public"]["Enums"]["ucet_stav"]
           updated_at: string
           user_id: string
         }
@@ -958,6 +1349,7 @@ export type Database = {
           full_name?: string | null
           id?: string
           phone?: string | null
+          stav?: Database["public"]["Enums"]["ucet_stav"]
           updated_at?: string
           user_id: string
         }
@@ -967,6 +1359,7 @@ export type Database = {
           full_name?: string | null
           id?: string
           phone?: string | null
+          stav?: Database["public"]["Enums"]["ucet_stav"]
           updated_at?: string
           user_id?: string
         }
@@ -980,6 +1373,7 @@ export type Database = {
           cancel_reason: string | null
           cancelled_at: string | null
           cancelled_by: string | null
+          cenove_pasma: Json | null
           corrected_amount: number | null
           corrected_hours: number | null
           correction_reason: string | null
@@ -1009,6 +1403,7 @@ export type Database = {
           cancel_reason?: string | null
           cancelled_at?: string | null
           cancelled_by?: string | null
+          cenove_pasma?: Json | null
           corrected_amount?: number | null
           corrected_hours?: number | null
           correction_reason?: string | null
@@ -1038,6 +1433,7 @@ export type Database = {
           cancel_reason?: string | null
           cancelled_at?: string | null
           cancelled_by?: string | null
+          cenove_pasma?: Json | null
           corrected_amount?: number | null
           corrected_hours?: number | null
           correction_reason?: string | null
@@ -1130,6 +1526,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "events"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reservations_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "stab_kontrola"
+            referencedColumns: ["event_id"]
           },
           {
             foreignKeyName: "reservations_invoice_id_fkey"
@@ -1401,11 +1804,6 @@ export type Database = {
           completed_at: string | null
           created_at: string
           event_id: string
-          // NOT NULL od migrace 20260827090000_sazby_roli. V `Insert` a `Update`
-          // je pole schválně VOLITELNÉ, i když ho generátor vypisuje jako povinné:
-          // sazbu doplňuje z ceníku BEFORE INSERT trigger `set_shift_rate`,
-          // o kterém `supabase gen types` neví. Kdo typy pregeneruje, dostane
-          // chybu na `useEvents.ts` (insert bez sazby) — a tohle je důvod.
           hourly_rate: number
           hours_worked: number | null
           id: string
@@ -1423,7 +1821,7 @@ export type Database = {
           completed_at?: string | null
           created_at?: string
           event_id: string
-          hourly_rate?: number
+          hourly_rate: number
           hours_worked?: number | null
           id?: string
           notes?: string | null
@@ -1479,6 +1877,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "shifts_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "stab_kontrola"
+            referencedColumns: ["event_id"]
+          },
+          {
             foreignKeyName: "shifts_payout_id_fkey"
             columns: ["payout_id"]
             isOneToOne: false
@@ -1493,6 +1898,7 @@ export type Database = {
           created_by: string | null
           id: string
           level: Database["public"]["Enums"]["subject_rep_level"]
+          muze_potvrzovat: boolean
           subject_id: string
           user_id: string
         }
@@ -1501,6 +1907,7 @@ export type Database = {
           created_by?: string | null
           id?: string
           level?: Database["public"]["Enums"]["subject_rep_level"]
+          muze_potvrzovat?: boolean
           subject_id: string
           user_id: string
         }
@@ -1509,6 +1916,7 @@ export type Database = {
           created_by?: string | null
           id?: string
           level?: Database["public"]["Enums"]["subject_rep_level"]
+          muze_potvrzovat?: boolean
           subject_id?: string
           user_id?: string
         }
@@ -1804,6 +2212,32 @@ export type Database = {
         }
         Relationships: []
       }
+      fakturoid_invoices_list: {
+        Row: {
+          cislo: string | null
+          druh: string | null
+          id: string | null
+          idempotency_key: string | null
+          nas_soucet: number | null
+          obdobi_do: string | null
+          obdobi_od: string | null
+          odeslano_at: string | null
+          pdf_path: string | null
+          provider_subtotal: number | null
+          provider_total: number | null
+          public_url: string | null
+          rezervaci: number | null
+          rezim: string | null
+          rozdil: number | null
+          soucet_proti: string | null
+          status: string | null
+          subjekt: string | null
+          variabilni_symbol: string | null
+          varovani: string | null
+          vystaveno_at: string | null
+        }
+        Relationships: []
+      }
       invoices_list: {
         Row: {
           cislo: string | null
@@ -1910,6 +2344,7 @@ export type Database = {
           id: string | null
           phone: string | null
           smim_videt_udaje: boolean | null
+          stav: Database["public"]["Enums"]["ucet_stav"] | null
           updated_at: string | null
           user_id: string | null
         }
@@ -1920,6 +2355,7 @@ export type Database = {
           id?: string | null
           phone?: never
           smim_videt_udaje?: never
+          stav?: Database["public"]["Enums"]["ucet_stav"] | null
           updated_at?: string | null
           user_id?: string | null
         }
@@ -1930,6 +2366,7 @@ export type Database = {
           id?: string | null
           phone?: never
           smim_videt_udaje?: never
+          stav?: Database["public"]["Enums"]["ucet_stav"] | null
           updated_at?: string | null
           user_id?: string | null
         }
@@ -1943,9 +2380,6 @@ export type Database = {
           correction_reason: string | null
           created_by: string | null
           created_by_name: string | null
-          // Skutečný dluh (u komerce včetně DPH) a týž údaj bez daně.
-          // Dopočítává pohled, ne frontend — sazbu má databáze
-          // (`billing_settings.vat_rate_ice`), viz migrace 20260831090000.
           dluh: number | null
           dluh_zaklad: number | null
           end_at: string | null
@@ -2097,6 +2531,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "reservations_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "stab_kontrola"
+            referencedColumns: ["event_id"]
+          },
+          {
             foreignKeyName: "reservations_sheet_id_fkey"
             columns: ["sheet_id"]
             isOneToOne: false
@@ -2190,6 +2631,23 @@ export type Database = {
           },
         ]
       }
+      stab_kontrola: {
+        Row: {
+          drah: number | null
+          event_id: string | null
+          event_type: Database["public"]["Enums"]["event_type"] | null
+          instruktoru_chybi: number | null
+          instruktoru_smen: number | null
+          instruktoru_v_rozpisu: number | null
+          smen_aktivnich: number | null
+          smen_navic: number | null
+          smen_obsazenych: number | null
+          stabu_v_rozpisu: number | null
+          start_time: string | null
+          title: string | null
+        }
+        Relationships: []
+      }
       subject_requests_list: {
         Row: {
           created_at: string | null
@@ -2274,6 +2732,7 @@ export type Database = {
         }
         Returns: Json
       }
+      billing_automation_tick: { Args: never; Returns: Json }
       billing_health: {
         Args: never
         Returns: {
@@ -2293,6 +2752,7 @@ export type Database = {
         Args: { _do: string; _od: string }
         Returns: {
           dluzi: number
+          dobropisovano: number
           fakturovano: number
           k_fakturaci: number
           neschvalene: number
@@ -2315,6 +2775,17 @@ export type Database = {
       cancel_booking: {
         Args: { p_reason?: string; p_reservation_id: string; p_scope?: string }
         Returns: Json
+      }
+      cena_ledu: {
+        Args: { _end: string; _start: string }
+        Returns: {
+          castka: number
+          rozpis: Json
+        }[]
+      }
+      cenove_pasma_sedi: {
+        Args: { _amount: number; _rozpis: Json }
+        Returns: boolean
       }
       check_booking_conflicts: {
         Args: {
@@ -2385,9 +2856,127 @@ export type Database = {
         Returns: string
       }
       delete_invoice_draft: { Args: { _invoice_id: string }; Returns: number }
+      dobropis_invoice: {
+        Args: { _duvod?: string; _invoice_id: string; _polozky: string[] }
+        Returns: Json
+      }
+      dorovnej_stab: {
+        Args: { _event_id: string; _jen_doplnit?: boolean }
+        Returns: Json
+      }
       fail_invoice_pdf: {
         Args: { _chyba: string; _invoice_id: string }
         Returns: undefined
+      }
+      fakturoid_je_vyfakturovana: {
+        Args: { _reservation: string }
+        Returns: boolean
+      }
+      fakturoid_najdi_podle_klice: {
+        Args: { _klic: string }
+        Returns: {
+          cislo: string
+          idempotency_key: string
+          odeslano_at: string
+          pdf_path: string
+          provider_invoice_id: string
+          provider_subject_id: string
+          provider_total: number
+          public_url: string
+          rezervace: string[]
+          rezim: string
+          status: string
+          variabilni_symbol: string
+          varovani: string
+        }[]
+      }
+      fakturoid_oznac_odeslano: { Args: { _klic: string }; Returns: boolean }
+      fakturoid_podklady_akce: {
+        Args: { _event: string }
+        Returns: {
+          castka: number
+          cenove_pasma: Json
+          end_at: string
+          event_title: string
+          hodiny: number
+          id: string
+          sazba: number
+          sheet_name: string
+          start_at: string
+          subject_id: string
+        }[]
+      }
+      fakturoid_podklady_klub: {
+        Args: { _do: string; _od: string; _subject: string }
+        Returns: {
+          castka: number
+          cenove_pasma: Json
+          end_at: string
+          event_title: string
+          hodiny: number
+          id: string
+          sazba: number
+          sheet_name: string
+          start_at: string
+        }[]
+      }
+      fakturoid_smi_volat: { Args: never; Returns: boolean }
+      fakturoid_subjekt: {
+        Args: { _id: string }
+        Returns: {
+          address: string
+          dic: string
+          ico: string
+          id: string
+          name: string
+        }[]
+      }
+      fakturoid_uvolni_zabrani: {
+        Args: { _duvod?: string; _klic: string }
+        Returns: boolean
+      }
+      fakturoid_zapis_pdf: {
+        Args: { _cesta: string; _klic: string; _sha?: string }
+        Returns: boolean
+      }
+      fakturoid_zapis_vazbu: {
+        Args: {
+          _cislo: string
+          _do?: string
+          _druh?: string
+          _event?: string
+          _klic: string
+          _nas_soucet?: number
+          _od?: string
+          _provider_invoice_id: string
+          _provider_subject_id: string
+          _provider_subtotal?: number
+          _provider_total: number
+          _public_url: string
+          _radku?: number
+          _rezervace?: string[]
+          _rezim?: string
+          _status: string
+          _subject?: string
+          _varovani?: string
+          _vs: string
+        }
+        Returns: boolean
+      }
+      fakturoid_zkus_zabrat: {
+        Args: {
+          _do: string
+          _druh: string
+          _event: string
+          _klic: string
+          _nas_soucet: number
+          _od: string
+          _radku: number
+          _rezervace: string[]
+          _rezim: string
+          _subject: string
+        }
+        Returns: boolean
       }
       fakturovatelne_rezervace: {
         Args: { _do: string; _od: string; _subject_id: string }
@@ -2424,6 +3013,10 @@ export type Database = {
         }
         Returns: undefined
       }
+      forget_billing_run: {
+        Args: { _druh: string; _klic: string }
+        Returns: undefined
+      }
       get_user_role: {
         Args: { _user_id: string }
         Returns: Database["public"]["Enums"]["app_role"]
@@ -2439,6 +3032,7 @@ export type Database = {
       is_subject_member: { Args: { _subject: string }; Returns: boolean }
       is_subject_rep: { Args: { _subject: string }; Returns: boolean }
       issue_invoice: { Args: { _invoice_id: string }; Returns: Json }
+      ma_pravo_navic: { Args: { _subject: string }; Returns: boolean }
       mark_invoice_paid: {
         Args: { _datum?: string; _invoice_id: string }
         Returns: Json
@@ -2451,6 +3045,10 @@ export type Database = {
           p_start: string
         }
         Returns: Json
+      }
+      nastav_pravo_navic: {
+        Args: { _hodnota: boolean; _subject: string; _user: string }
+        Returns: undefined
       }
       nevyfakturovane_akce: {
         Args: { _obdobi_do: string; _obdobi_od: string; _subject_id: string }
@@ -2501,6 +3099,8 @@ export type Database = {
         Returns: number
       }
       retry_invoice_pdf: { Args: { _invoice_id: string }; Returns: undefined }
+      role_reqs_je_platny: { Args: { _rozpis: Json }; Returns: boolean }
+      role_reqs_soucet: { Args: { _rozpis: Json }; Returns: number }
       set_invoice_counter: {
         Args: { _hodnota: number; _rada: string; _rok: number }
         Returns: number
@@ -2509,6 +3109,7 @@ export type Database = {
         Args: { _duvod?: string; _invoice_id: string }
         Returns: Json
       }
+      ucet_aktivni: { Args: { _uid?: string }; Returns: boolean }
       unmark_invoice_paid: { Args: { _invoice_id: string }; Returns: undefined }
       update_booking: {
         Args: {
@@ -2530,6 +3131,7 @@ export type Database = {
         | "instructor"
         | "bar_staff"
         | "manager"
+      den_typ: "vsedni" | "vikend"
       event_type:
         | "commercial"
         | "training"
@@ -2544,6 +3146,7 @@ export type Database = {
       subject_rep_level: "rep" | "member"
       subject_request_status: "ceka" | "schvalena" | "zamitnuta"
       subject_type: "club" | "commercial"
+      ucet_stav: "ceka" | "aktivni" | "zamitnut" | "deaktivovan"
       vat_mode: "neplatce" | "identifikovana_osoba" | "platce"
     }
     CompositeTypes: {
@@ -2685,6 +3288,7 @@ export const Constants = {
         "bar_staff",
         "manager",
       ],
+      den_typ: ["vsedni", "vikend"],
       event_type: [
         "commercial",
         "training",
@@ -2700,6 +3304,7 @@ export const Constants = {
       subject_rep_level: ["rep", "member"],
       subject_request_status: ["ceka", "schvalena", "zamitnuta"],
       subject_type: ["club", "commercial"],
+      ucet_stav: ["ceka", "aktivni", "zamitnut", "deaktivovan"],
       vat_mode: ["neplatce", "identifikovana_osoba", "platce"],
     },
   },

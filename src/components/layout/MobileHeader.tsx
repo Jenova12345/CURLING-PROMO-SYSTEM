@@ -11,11 +11,11 @@ import { BRAND } from '@/config/brand';
 import { NotificationBell } from '@/components/layout/NotificationBell';
 
 const MobileHeader = () => {
-  const { profile, roles, signOut } = useAuth();
+  const { profile, roles, signOut, isRep } = useAuth();
   const location = useLocation();
   const [isOpen, setIsOpen] = useState(false);
 
-  const filteredNavItems = filterNavItemsByRoles(NAV_ITEMS, roles);
+  const filteredNavItems = filterNavItemsByRoles(NAV_ITEMS, roles, isRep);
 
   // Display roles - join with comma if multiple
   const displayRoles = roles.length > 0 

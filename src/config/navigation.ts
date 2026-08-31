@@ -9,6 +9,7 @@ import {
   FileText,
   UserPlus,
   Building2,
+  ShieldCheck,
   Settings,
   User,
   HelpCircle,
@@ -20,6 +21,14 @@ export interface NavItem {
   label: string;
   icon: LucideIcon;
   roles: string[];
+  /**
+   * Položka jen pro ZÁSTUPCE KLUBU.
+   *
+   * „Zástupce" není role v `app_role` — je to vztah ke klubu
+   * (`subject_reps.level = 'rep'`, rozhodnutí PM R2). Filtr podle rolí ho tedy
+   * nepozná a musí se předat zvlášť.
+   */
+  vyzadujeZastupce?: boolean;
 }
 
 export const NAV_ITEMS: NavItem[] = [
@@ -34,6 +43,15 @@ export const NAV_ITEMS: NavItem[] = [
     label: 'Kalendář',
     icon: Calendar,
     roles: ['admin', 'trainer', 'part_time_staff', 'instructor', 'bar_staff', 'manager', 'pro_player', 'hobby_player']
+  },
+  {
+    path: '/muj-klub',
+    label: 'Můj klub',
+    icon: ShieldCheck,
+    // Role tu nejsou omezující — rozhoduje `vyzadujeZastupce`. Členem klubu
+    // může být kdokoli, ale tuhle stránku vidí jen jeho zástupce.
+    roles: ['admin', 'trainer', 'part_time_staff', 'instructor', 'bar_staff', 'manager', 'pro_player', 'hobby_player'],
+    vyzadujeZastupce: true,
   },
   {
     path: '/shifts',
@@ -132,9 +150,12 @@ export const filterNavItemsByRole = (
 // New multi-role filter function
 export const filterNavItemsByRoles = (
   items: NavItem[], 
-  roles: string[]
+  roles: string[],
+  jeZastupce = false,
 ): NavItem[] => {
   return items.filter(item => {
+    // Položky pro zástupce klubu se řídí vztahem ke klubu, ne rolí.
+    if (item.vyzadujeZastupce && !jeZastupce) return false;
     if (roles.length === 0) {
       return DEFAULT_PATHS.includes(item.path);
     }
