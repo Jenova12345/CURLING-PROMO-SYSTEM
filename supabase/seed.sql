@@ -211,9 +211,18 @@ INSERT INTO public.shift_applications (shift_id, user_id, status) VALUES
 -- tak, jak ho volá aplikace — každý `supabase db reset` tím rovnou proklepne i RPC
 -- vrstvu. Uživatele simulujeme nastavením JWT claimu (auth.uid()).
 
--- Placeholder ceník podle typu akce (POZOR: jen demo, produkce si sazby nastaví sama)
+-- Ceník podle typu akce.
+--
+-- ⚠️ `club_default_rate` UŽ NENÍ HLAVNÍ KLUBOVÁ CENA. Od migrace
+-- `20260831110000_cenik_pasma.sql` se klubový led oceňuje PÁSMOVĚ podle denní
+-- doby (`cenik_pasma`), a tahle hodnota je jen záloha pro případy, na které
+-- pásma nesahají — komerční akce klubu, nábor, subjekt s vlastní sazbou.
+--
+-- `commercial_default_rate = 5000` je rozhodnutí PM (31. 8. 2026) a je to
+-- sazba BEZ DPH; klubová pásma jsou naopak VČETNĚ DPH. Míchat je v jednom
+-- součtu nedává smysl — na to je `dluh` v `reservations_billing`.
 UPDATE public.settings
-   SET club_default_rate = 600, commercial_default_rate = 1500,
+   SET club_default_rate = 600, commercial_default_rate = 5000,
        training_rate = 600, tournament_rate = 800;
 
 -- Starší seed rezervace ber jako potvrzené (vznikly „před" zavedením schvalování)

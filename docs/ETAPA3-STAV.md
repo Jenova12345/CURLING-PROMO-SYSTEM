@@ -49,6 +49,7 @@ nová implementace `InvoiceProvider`, aniž se sáhne na jádro.
 | — `8dcee24` | Nálezy code review: kontrola řádků místo částky, izolace PDF, síťové chyby |
 | — `0e7eb29` | Druhé kolo review: zavření okna mezi zámkem 2 a claimem |
 | **PR 4** | Migrace `fakturoid_invoices`, `SupabaseStore`, Edge funkce, režim vystavení, oddělení chyb |
+| **Ceník ledu** | Pásmový klubový ceník (`cenik_pasma`), rozpis na rezervaci, řádky dokladu po sazbách, komerční 5 000 Kč/h |
 
 **Kód žije v `billing/`, schválně MIMO `src/`.** Do `src/` sahá Vite bundle
 a `FAKTUROID_CLIENT_SECRET` nesmí mít ani teoretickou cestu do prohlížeče.
@@ -356,6 +357,79 @@ odběratelů). Patří k tomu zpracovatelská smlouva a záznam o činnostech zp
 
 ---
 
+## 6b. Pásmový ceník ledu — co to rozbilo a co to drží
+
+Klubová cena závisí na DENNÍ DOBĚ (`cenik_pasma`), rezervace přes hranici pásma
+se počítá po hodinách: 16–19 = 1×1000 + 2×1200 = **3 400 Kč**.
+
+**Tím přestalo platit `amount = hodiny × rate_per_hour`.** `rate_per_hour` je
+u pásmové rezervace ODVOZENÝ PRŮMĚR (3 400 / 3 = 1 133,33), autoritativní je
+`amount` + `reservations.cenove_pasma` (rozpis v jsonb). Kdo bude někdy počítat
+částku ze sazby, dostane 3 399,99 — haléř vedle, na každé takové faktuře.
+
+**Doklad má proto JEDEN ŘÁDEK NA SAZBU**, ne na rezervaci. Kvůli tomu musel
+`fakturoid_radku_sedi` povolit víc řádků než rezervací (z rovnosti se stalo
+minimum — míň pořád znamená, že rezervace na doklad nedoputovala).
+
+### Co našly brány (a co to stálo)
+
+Blok prošel bránami až napodruhé. Nálezy, které stojí za zapamatování:
+
+- **Přepis dlouhé funkce zase ubral guard.** `check_reservation_money` se
+  přepisovala ručně a ztratila stropy `rate_per_hour > 50000`,
+  `corrected_hours > 24` i povinný `correction_reason`. CHECK constrainty držely,
+  takže se nic špatného nevyfakturovalo — ale uživatel místo vysvětlení dostal
+  jméno constraintu. **Pravidlo 7 z CLAUDE.md platí i pro funkce, které se
+  „jen trochu" upravují.** (`set_reservation_pricing` generovaná z živého
+  schématu byla čistá — diff to potvrdil.)
+- **Snapshot ceny je snapshot ČASU.** Přesunutá rezervace držela starou částku:
+  16–19 (3 400 Kč) přejelo na 9–12 a pořád stálo 3 400 místo 2 400. Prodloužená
+  měla rozpis kratší než hodiny, což `mapping.ts` odmítne — doklad by nešel
+  vystavit vůbec. Přesun i prodloužení dnes rezervaci přecení.
+- **Ruční sazba u pásmové rezervace nepřepočítávala částku.** Admin nastavil
+  900 Kč/h, UI ukázalo 900, systém fakturoval 3 400 místo 2 700. Dnes ruční
+  sazba pásma přebije a rozpis se zahodí.
+- **Rozpis se k dokladu vůbec nedostával.** `mapping.ts` ho uměl složit, ale
+  `fakturoid_podklady_klub` ho nevracela — každá klubová faktura s rezervací
+  přes dvě pásma by spadla na validaci. Každá vrstva zvlášť fungovala; chyběl
+  test přes celou cestu. Ten je dnes v `cenik_pasma_test.sql`, sekce 5d.
+- **`'null'::jsonb` NENÍ SQL NULL.** Podstrčením téhle hodnoty do
+  `cenove_pasma` šlo vypnout pravidlo o celých korunách i dopočet `amount` —
+  vznikla rezervace se sazbou 1 234,56 Kč/h a `amount = NULL`. Sloupec je
+  odvozený, takže se dnes na vstupu zahazuje, a tvar i součet hlídá CHECK
+  (`reservations_cenove_pasma_sedi`), ne jen trigger.
+- **SECURITY DEFINER funkce obešla RLS nad ceníkem.** `cena_ledu` měla EXECUTE
+  pro `authenticated`, takže si člen klubu mohl vyjet cenu hodinu po hodině
+  a složit celý ceník, přestože mu `SELECT * FROM cenik_pasma` vrací nula řádků.
+  Dnes má REVOKE pro všechny — volá ji jen SECURITY DEFINER trigger, který
+  žádný grant nepotřebuje.
+- **Kontrola v migraci rozbíjela idempotenci.** Závěrečný blok měl natvrdo
+  3 400 Kč, takže druhý běh na databázi s upraveným ceníkem hlásil rozbitý
+  ceník. Dnes se strukturální invarianty ověřují vždycky a konkrétní částky jen
+  na nedotčeném ceníku.
+- **Revert nešel spustit.** Hlavička tvrdila, že rezervace s haléři projdou jako
+  existující data. Neprojdou — `ADD CONSTRAINT` validuje okamžitě a revert se
+  zastavil uprostřed. Dnes je tam `NOT VALID` a je vysvětleno proč.
+
+### ⚠️ Otevřená otázka na PM — mění účtované částky
+
+Pásma platí na VŠECHEN klubový led kromě komerčních akcí a náboru, takže pro
+kluby **přestaly platit `settings.training_rate` (600) a `tournament_rate`
+(800)** — obě jsou v Nastavení dál vidět a editovatelné, ale pro kluby mrtvé.
+
+    klubový turnaj 17–19    dřív 1 600 Kč   →   nově 2 400 Kč
+    klubový večerní trénink dřív   600 Kč/h →   nově 1 200 Kč/h
+
+Vypadá to jako záměr (trénink a turnaj JSOU ten klubový led, jinak by ceník
+podle denní doby skoro na nic nedosáhl), ale je to rozhodnutí o cenách.
+**Do potvrzení platí, co je v kódu.** Otázka je v hlavičce migrace.
+
+Nepotvrzené zůstává i **ranní pásmo 6–14 za 800 Kč/h** a ceník zatím **nejde
+měnit z aplikace** — v `src/` na `cenik_pasma` není reference, takže „admin si
+to upraví v Nastavení" dnes znamená ruční SQL.
+
+---
+
 ## 7. Čemu nevěřit a co si ověřit
 
 Kromě pastí z `docs/ETAPA2-STAV.md`, kapitola 5, přibylo tohle:
@@ -378,6 +452,13 @@ Kromě pastí z `docs/ETAPA2-STAV.md`, kapitola 5, přibylo tohle:
   `uzivatelskaZprava()` / `proUzivatele()`, nikdy `err.message`.
 - **`fakturovatelne_rezervace` má EXECUTE odebrané i `service_role`** — volá se
   jen z jiné SECURITY DEFINER funkce (`fakturoid_podklady_klub` / `_akce`).
+- **`amount = hodiny × rate_per_hour` UŽ NEPLATÍ.** U pásmové rezervace je
+  sazba odvozený průměr a součin dá o haléř míň. Autoritativní je `amount`
+  a `cenove_pasma`.
+- **`'null'::jsonb` projde každým testem na `IS NULL`.** V jsonb sloupci to není
+  prázdná hodnota, ale hodnota „null" — a podmínky typu
+  `IF NEW.sloupec IS NULL` se na ni chytnou obráceně, než čekáš. Testuj
+  `jsonb_typeof(...)`, ne `IS NULL`.
 
 ---
 

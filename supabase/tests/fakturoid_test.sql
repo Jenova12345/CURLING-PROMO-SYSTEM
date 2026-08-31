@@ -38,7 +38,8 @@ SELECT
   (SELECT id FROM subjects WHERE deleted_at IS NULL ORDER BY id LIMIT 1)  AS subjekt,
   (SELECT id FROM reservations ORDER BY id LIMIT 1)                       AS r1,
   (SELECT id FROM reservations ORDER BY id OFFSET 1 LIMIT 1)              AS r2,
-  (SELECT id FROM reservations ORDER BY id OFFSET 2 LIMIT 1)              AS r3;
+  (SELECT id FROM reservations ORDER BY id OFFSET 2 LIMIT 1)              AS r3,
+  (SELECT id FROM reservations ORDER BY id OFFSET 3 LIMIT 1)              AS r4;
 
 -- ===========================================================================
 -- 1) ZÁMEK 3 — atomický claim
@@ -78,13 +79,17 @@ END $$;
 -- Nekonzistentní `radku` proletí blokem `EXCEPTION WHEN unique_violation`
 -- (je to `check_violation`) a shodí celou funkci. Je to správně — je to chyba
 -- volajícího, ne závod — ale musí to být VIDĚT, ne se tvářit jako „nezabráno".
+--
+-- MÉNĚ ŘÁDKŮ NEŽ REZERVACÍ je ta chyba, kterou `fakturoid_radku_sedi` hlídá.
+-- (Dřív tu stálo `radku = 5` na jednu rezervaci — od pásmového ceníku je ale
+-- víc řádků než rezervací normální stav, viz test hned pod tímhle.)
 DO $$
-DECLARE _stav text := 'prošlo'; _s uuid; _r uuid;
+DECLARE _stav text := 'prošlo'; _s uuid; _r uuid; _r2 uuid;
 BEGIN
-  SELECT subjekt, r3 INTO _s, _r FROM fx;
+  SELECT subjekt, r3, r4 INTO _s, _r, _r2 FROM fx;
   BEGIN
     PERFORM public.fakturoid_zkus_zabrat('t-radku','club_monthly',_s,NULL,
-      '2026-08-01','2026-08-31',1200,5,'koncept',ARRAY[_r]);
+      '2026-08-01','2026-08-31',1200,1,'koncept',ARRAY[_r,_r2]);
   EXCEPTION
     WHEN check_violation THEN _stav := 'check';
     WHEN OTHERS THEN _stav := 'jina';
@@ -192,10 +197,24 @@ BEGIN
   SELECT subjekt INTO _s FROM fx;
   BEGIN
     INSERT INTO fakturoid_invoices (idempotency_key, druh, subject_id, nas_soucet, radku, rezervace)
-    VALUES ('t-check','club_monthly',_s,100,5,ARRAY[gen_random_uuid()]);
+    VALUES ('t-check','club_monthly',_s,100,1,ARRAY[gen_random_uuid(),gen_random_uuid()]);
   EXCEPTION WHEN check_violation THEN _ok := true;
   END;
-  PERFORM pg_temp.tvrd('radku musí sedět na počet rezervací', _ok);
+  PERFORM pg_temp.tvrd('MÉNĚ řádků než rezervací neprojde (rezervace by chyběla na dokladu)', _ok);
+END $$;
+
+-- Druhá strana téhož pravidla, a od pásmového ceníku ta podstatnější: rezervace
+-- přes dvě pásma dá DVA řádky (1 h × 1 000 a 2 h × 1 200), takže řádků je víc
+-- než rezervací a doklad je v pořádku. Dokud constraint zněl na rovnost, tohle
+-- by neprošlo a pásmová faktura by se nedala uložit.
+DO $$
+DECLARE _ok boolean := false; _s uuid;
+BEGIN
+  SELECT subjekt INTO _s FROM fx;
+  INSERT INTO fakturoid_invoices (idempotency_key, druh, subject_id, nas_soucet, radku, rezervace)
+  VALUES ('t-check-pasma','club_monthly',_s,3400,2,ARRAY[gen_random_uuid()]);
+  _ok := true;
+  PERFORM pg_temp.tvrd('VÍC řádků než rezervací projde (rezervace přes dvě pásma)', _ok);
 END $$;
 
 DO $$

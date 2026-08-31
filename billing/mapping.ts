@@ -64,6 +64,17 @@ export interface BillableReservation {
   hodiny: number;
   sazba: number;
   castka: number;
+  /**
+   * Rozpis ceny po sazbách u PÁSMOVÉHO ceníku (`reservations.cenove_pasma`).
+   *
+   * Vyplněný jen u klubových rezervací oceněných podle denní doby. Když je,
+   * doklad z něj dostane JEDEN ŘÁDEK NA SAZBU místo jednoho na rezervaci —
+   * a je to nutnost, ne kosmetika: rezervace 16–19 stojí 1×1000 + 2×1200 =
+   * 3 400 Kč, ale `sazba` je odvozený průměr 1 133,33, takže 3 × 1 133,33
+   * dá 3 399,99. Haléř na každé takové faktuře, a kontrolní součet by ho
+   * hlásil jako zaokrouhlovací šum.
+   */
+  cenove_pasma?: readonly { sazba: number; hodin: number }[] | null;
   /** Volitelné — kdo objednal. Dnešní RPC ho nevrací, doplní se, až bude potřeba. */
   objednal?: string | null;
 }
@@ -195,6 +206,43 @@ const overRadek = (r: BillableReservation): void => {
     );
   }
 
+  // U PÁSMOVÉ CENY SE KONTROLUJE ROZPIS, ne `hodiny × sazba`.
+  //
+  // `sazba` je tam odvozený průměr (3 400 / 3 h = 1 133,33), takže součin
+  // z principu nevyjde — a právě proto se doklad skládá po pásmech. Kontrola
+  // se tedy neruší, jen se ptá na to, co je u pásmové ceny autoritativní:
+  // sedí součet rozpisu na částku, a sedí hodiny v rozpisu na hodiny rezervace?
+  const pasma = r.cenove_pasma;
+  if (pasma && pasma.length > 0) {
+    for (const p of pasma) {
+      if (!Number.isFinite(Number(p.hodin)) || Number(p.hodin) <= 0
+          || !Number.isFinite(Number(p.sazba)) || Number(p.sazba) < 0) {
+        throw new BillingValidationError(
+          `Rezervace ${r.id}: rozpis ceny obsahuje nepoužitelnou položku `
+          + `(${String(p.hodin)} h × ${String(p.sazba)} Kč/h).`, 'cenove_pasma',
+        );
+      }
+    }
+
+    const zRozpisu = pasma.reduce((s, p) => s + toSetiny(Number(p.hodin) * Number(p.sazba)), 0);
+    if (toSetiny(castka) !== zRozpisu) {
+      throw new BillingValidationError(
+        `Rezervace ${r.id}: částka ${castka} Kč nesedí na rozpis po pásmech `
+        + `(${pasma.map((p) => `${p.hodin}×${p.sazba}`).join(' + ')} = ${zeSetin(zRozpisu)} Kč). `
+        + 'Doklad by ukázal jinou částku než „Kdo kolik dluží".', 'castka',
+      );
+    }
+
+    const hodinVRozpisu = pasma.reduce((s, p) => s + Number(p.hodin), 0);
+    if (toSetiny(hodinVRozpisu) !== toSetiny(hodiny)) {
+      throw new BillingValidationError(
+        `Rezervace ${r.id}: rozpis pokrývá ${hodinVRozpisu} h, ale rezervace má ${hodiny} h. `
+        + 'Nějaká hodina by se nevyfakturovala, nebo naopak dvakrát.', 'cenove_pasma',
+      );
+    }
+    return;
+  }
+
   // round(hodiny × sazba, 2) přes haléře — tatáž kvantizace, jakou dělá `money.ts`
   // i Postgres. Porovnává se v celých haléřích, aby to nepadalo na binární zlomky.
   // (`toSetiny` sama kvantizuje na setiny, takže druhý průchod by byl no-op.)
@@ -208,21 +256,52 @@ const overRadek = (r: BillableReservation): void => {
   }
 };
 
-const naRadek = (
+/**
+ * Rezervace → ŘÁDKY dokladu. Jeden, nebo víc — podle toho, přes kolik pásem jde.
+ *
+ * PROČ VÍC ŘÁDKŮ: rezervace 16–19 stojí 1 h × 1 000 + 2 h × 1 200 = 3 400 Kč.
+ * Na dokladu jako jeden řádek by musela znít „3 h × 1 133,33", což je 3 399,99 —
+ * haléř vedle, na každé takové faktuře. Rozpis po sazbách dá přesnou částku
+ * a zákazník navíc vidí, proč to tolik stojí.
+ *
+ * Bez rozpisu (komerční sazba, vlastní sazba subjektu, starší rezervace) se
+ * chová jako dřív: jeden řádek `hodiny × sazba`.
+ */
+const naRadky = (
   r: BillableReservation,
   popis: (r: BillableReservation) => string,
   jePlatceDph: boolean,
-): InvoiceLine => {
+): InvoiceLine[] => {
   overRadek(r);
-  return {
-    name: popis(r),
-    quantity: Number(r.hodiny),
+  // U NEPLÁTCE se pole vůbec nepřidá. `vatRate: 0` by znamenalo „osvobozeno",
+  // což je jiný daňový režim než „neplátce" a doklad by to popsal špatně.
+  const dph = jePlatceDph ? { vatRate: SAZBA_DPH_LED } : {};
+  const zaklad = popis(r);
+
+  const pasma = r.cenove_pasma;
+  if (!pasma || pasma.length === 0) {
+    return [{ name: zaklad, quantity: Number(r.hodiny), unitName: JEDNOTKA, unitPrice: Number(r.sazba), ...dph }];
+  }
+
+  // JEDNO pásmo = jeden řádek beze změny popisu. Rozepisovat „(1 200 Kč/h)"
+  // u rezervace, která žádné jiné pásmo nemá, je jen šum na dokladu.
+  if (pasma.length === 1) {
+    return [{ name: zaklad, quantity: Number(pasma[0].hodin), unitName: JEDNOTKA, unitPrice: Number(pasma[0].sazba), ...dph }];
+  }
+
+  // Víc pásem: sazba patří do popisu, jinak by na dokladu stály dva řádky se
+  // stejným textem a různou cenou — a vypadalo by to jako chyba.
+  return pasma.map((p) => ({
+    // Oddělovač tisíců je OBYČEJNÁ mezera, ne `toLocaleString`. Ten tiskne úzkou
+    // nezlomitelnou mezeru (U+202F/U+00A0), kterou `parseSazba` sama odmítá jako
+    // „číslo s mezerou" — a text z dokladu se kopíruje zpátky do formulářů.
+    // Táž úvaha jako u chybových hlášek v `money.ts`.
+    name: `${zaklad} · ${String(Number(p.sazba)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')} Kč/h`,
+    quantity: Number(p.hodin),
     unitName: JEDNOTKA,
-    unitPrice: Number(r.sazba),
-    // U NEPLÁTCE se pole vůbec nepřidá. `vatRate: 0` by znamenalo „osvobozeno",
-    // což je jiný daňový režim než „neplátce" a doklad by to popsal špatně.
-    ...(jePlatceDph ? { vatRate: SAZBA_DPH_LED } : {}),
-  };
+    unitPrice: Number(p.sazba),
+    ...dph,
+  }));
 };
 
 /**
@@ -273,7 +352,7 @@ export const mapujKomercniAkci = (vstup: {
     type: 'commercial_event',
     idempotencyKey: klicAkce(vstup.eventId),
     party: mapujSubjekt(vstup.subjekt, { jePlatceDph: vstup.jePlatceDph }),
-    lines: rezervace.map((r) => naRadek(r, popisAkce, vstup.jePlatceDph)),
+    lines: rezervace.flatMap((r) => naRadky(r, popisAkce, vstup.jePlatceDph)),
     // KOMERČNÍ DOKLAD MÁ CENY BEZ DPH. Firma si daň odečte, takže na dokladu
     // chce vidět základ zvlášť a daň zvlášť — a komerční ceník je proto vedený
     // bez daně. U neplátce zůstává pole nevyplněné, otázka tam nedává smysl.
@@ -314,7 +393,7 @@ export const mapujKlubMesicne = (vstup: {
     type: 'club_monthly',
     idempotencyKey: klicKlubu(vstup.subjekt.id, vstup.obdobiOd),
     party: mapujSubjekt(vstup.subjekt, { jePlatceDph: vstup.jePlatceDph }),
-    lines: rezervace.map((r) => naRadek(r, popisKlubu, vstup.jePlatceDph)),
+    lines: rezervace.flatMap((r) => naRadky(r, popisKlubu, vstup.jePlatceDph)),
     // KLUBOVÝ DOKLAD MÁ CENY VČETNĚ DPH. Klub vidí jedno číslo za hodinu ledu
     // a to platí; klubový ceník je vedený s daní. Tohle je jediné místo, kde se
     // klubová a komerční faktura rozcházejí v tom, CO `unitPrice` znamená —

@@ -6,7 +6,7 @@ import {
   type BillableReservation, type SubjectForBilling,
 } from './mapping.ts';
 import { BillingValidationError } from './errors.ts';
-import { fromHal, roundCzk, toHal } from '../src/lib/money.ts';
+import { fromHal, roundCzk, toHal, toSetiny } from '../src/lib/money.ts';
 
 const KLUB: SubjectForBilling = {
   id: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa',
@@ -372,5 +372,118 @@ describe('DPH — co mapování rozhoduje', () => {
       expect(platce.lines[0].unitPrice).toBe(neplatce.lines[0].unitPrice);
       expect(soucetRadku(platce.lines)).toBe(soucetRadku(neplatce.lines));
     });
+  });
+});
+
+// =============================================================================
+// PÁSMOVÝ CENÍK — ŘÁDKY DOKLADU
+//
+// Rezervace přes hranici pásma se NEDĚLÍ (rozhodnutí PM), ale na dokladu musí
+// mít řádek na každou sazbu. Jinak by 3 h přes dvě pásma zněly „3 × 1 133,33"
+// = 3 399,99 Kč — haléř vedle přesné částky 3 400, a to na každé takové faktuře.
+// =============================================================================
+describe('pásmový ceník na dokladu', () => {
+  const preseDvePasma: BillableReservation = {
+    id: 'p1', start_at: '2026-09-02T14:00:00Z', end_at: '2026-09-02T17:00:00Z',
+    sheet_name: 'Dráha 1', event_title: 'Trénink', hodiny: 3, sazba: 1133.33, castka: 3400,
+    cenove_pasma: [{ sazba: 1000, hodin: 1 }, { sazba: 1200, hodin: 2 }],
+  };
+  const SUBJ = { id: 'k1', name: 'SK Curling', ico: '26512345', dic: null, address: 'Ostrava' };
+  const draft = (r: BillableReservation) => mapujKlubMesicne({
+    subjekt: SUBJ, obdobiOd: '2026-09-01', jePlatceDph: true, rezervace: [r],
+  })!;
+
+  it('rezervace přes dvě pásma dá DVA řádky', () => {
+    expect(draft(preseDvePasma).lines).toHaveLength(2);
+  });
+
+  it('a jejich součet je PŘESNĚ částka z rezervace, ne o haléř vedle', () => {
+    // Tohle je celý důvod, proč se řádky rozepisují.
+    expect(soucetRadku(draft(preseDvePasma).lines)).toBe(3400);
+    // A takhle by to dopadlo bez rozpisu: 3 × 1 133,33 = 3 399,99, tedy o haléř
+    // míň. Porovnává se v HALÉŘÍCH, ne v korunách — `roundCzk` by ten rozdíl
+    // zaokrouhlil zpátky na 3 400 a test by neukazoval nic.
+    expect(toSetiny(3 * 1133.33)).toBe(339999);
+    expect(toSetiny(3400)).toBe(340000);
+  });
+
+  it('řádky nesou sazbu v popisu, ať nejsou dva stejné texty s jinou cenou', () => {
+    const l = draft(preseDvePasma).lines;
+    expect(l[0].name).toContain('1 000 Kč/h');
+    expect(l[1].name).toContain('1 200 Kč/h');
+    expect(l[0].unitPrice).toBe(1000);
+    expect(l[1].unitPrice).toBe(1200);
+    expect(l[0].quantity).toBe(1);
+    expect(l[1].quantity).toBe(2);
+  });
+
+  it('každý řádek nese sazbu DPH', () => {
+    expect(draft(preseDvePasma).lines.every((l) => l.vatRate === SAZBA_DPH_LED)).toBe(true);
+  });
+
+  it('JEDNO pásmo = jeden řádek a popis se nešpiní sazbou', () => {
+    const jedno: BillableReservation = {
+      ...preseDvePasma, id: 'p2', hodiny: 2, sazba: 1200, castka: 2400,
+      cenove_pasma: [{ sazba: 1200, hodin: 2 }],
+    };
+    const l = draft(jedno).lines;
+    expect(l).toHaveLength(1);
+    expect(l[0].name).not.toContain('Kč/h');
+    expect(soucetRadku(l)).toBe(2400);
+  });
+
+  it('bez rozpisu se nic nemění — komerční sazba jede jako dřív', () => {
+    const bez: BillableReservation = {
+      ...preseDvePasma, id: 'p3', hodiny: 2, sazba: 5000, castka: 10000, cenove_pasma: null,
+    };
+    const l = draft(bez).lines;
+    expect(l).toHaveLength(1);
+    expect(l[0].unitPrice).toBe(5000);
+    expect(soucetRadku(l)).toBe(10000);
+  });
+
+  // ---------------------------------------------------------------------------
+  // ZÁBRADLÍ. Rozpis chodí z databáze, takže „nemůže přijít rozbitý" platí jen
+  // do první migrace, která to pokazí. Když nesedí, musí doklad SPADNOUT —
+  // vystavit ho a rozejít se s „Kdo kolik dluží" je to horší z obou selhání.
+  // ---------------------------------------------------------------------------
+  it('rozpis, který nesedí na částku, doklad ZASTAVÍ', () => {
+    const rozbity: BillableReservation = {
+      ...preseDvePasma, cenove_pasma: [{ sazba: 1000, hodin: 1 }, { sazba: 1200, hodin: 1 }],
+    };
+    expect(() => draft(rozbity)).toThrow(BillingValidationError);
+    expect(() => draft(rozbity)).toThrow(/nesedí na rozpis/);
+  });
+
+  it('rozpis, který nepokrývá všechny hodiny, doklad ZASTAVÍ', () => {
+    // Součet sedí na 3 400, ale pokrývá jen 2 h ze 3 — hodina by se
+    // nevyfakturovala a nikdo by si toho na dokladu nevšiml.
+    const chybiHodina: BillableReservation = {
+      ...preseDvePasma, cenove_pasma: [{ sazba: 1700, hodin: 2 }],
+    };
+    expect(() => draft(chybiHodina)).toThrow(/pokrývá 2 h, ale rezervace má 3 h/);
+  });
+
+  it('nepoužitelná položka v rozpisu doklad ZASTAVÍ', () => {
+    for (const spatna of [{ sazba: 1000, hodin: 0 }, { sazba: -1000, hodin: 3 }]) {
+      expect(() => draft({ ...preseDvePasma, cenove_pasma: [spatna] }))
+        .toThrow(BillingValidationError);
+    }
+  });
+
+  it('rozpis se promítne i do počtu řádků celého dokladu', () => {
+    // Dvě rezervace, jedna přes dvě pásma → tři řádky. Kvůli tomuhle musel
+    // povolit `fakturoid_radku_sedi` víc řádků než rezervací.
+    const druha: BillableReservation = {
+      ...preseDvePasma, id: 'p4', start_at: '2026-09-09T14:00:00Z', end_at: '2026-09-09T16:00:00Z',
+      hodiny: 2, sazba: 1000, castka: 2000, cenove_pasma: [{ sazba: 1000, hodin: 2 }],
+    };
+    const d = mapujKlubMesicne({
+      subjekt: SUBJ, obdobiOd: '2026-09-01', jePlatceDph: true,
+      rezervace: [preseDvePasma, druha],
+    })!;
+    expect(d.lines).toHaveLength(3);
+    expect(d.sourceReservationIds).toHaveLength(2);
+    expect(soucetRadku(d.lines)).toBe(5400);
   });
 });
