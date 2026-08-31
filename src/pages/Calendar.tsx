@@ -95,6 +95,26 @@ const Calendar = () => {
   const lanesOfEvent = (r: CalendarReservation | null) =>
     r?.event_id ? reservations.filter((x) => x.event_id === r.event_id).length : 1;
 
+  /**
+   * Celková cena AKCE přes všechny dráhy.
+   *
+   * Komerční akce na dvou drahách je jedna akce se dvěma rezervacemi. Detail
+   * dosud ukazoval jen částku té jedné rezervace (20 000), takže to vypadalo,
+   * že akce stojí polovinu toho, co se doopravdy vyfakturuje.
+   *
+   * Vrací `null`, když částku nesmíme vidět nebo některá chybí — radši nic než
+   * součet, který je tiše neúplný.
+   */
+  const celkemZaAkci = (r: CalendarReservation | null): number | null => {
+    if (!r?.event_id) return null;
+    const casti = reservations.filter((x) => x.event_id === r.event_id);
+    if (casti.length < 2) return null;                 // jedna dráha → součet je ta částka sama
+    if (casti.some((x) => !x.can_see_amount)) return null;
+    const castky = casti.map((x) => Number(x.corrected_amount ?? x.amount));
+    if (castky.some((c) => !Number.isFinite(c))) return null;
+    return castky.reduce((a, b) => a + b, 0);
+  };
+
   // Mřížka se kreslí přes obálku celého týdne, ale validuje se vždy podle
   // konkrétního dne — otevírací doba se v Nastavení dá zadat pro každý den zvlášť.
   const { open: openHour, close: closeHour } = useMemo(
@@ -214,6 +234,7 @@ const Calendar = () => {
   const monthLead = view === 'month' ? (startOfMonth(currentDate).getDay() + 6) % 7 : 0;
 
   const detailLanes = lanesOfEvent(detail);
+  const detailCelkem = celkemZaAkci(detail);
   const cancelLanes = lanesOfEvent(cancelling);
 
   return (
@@ -353,7 +374,9 @@ const Calendar = () => {
                     <div className="flex flex-wrap items-center gap-2 pt-1">
                       <Badge variant="outline">{EVENT_TYPE_LABELS[detail.event_type ?? 'training'] ?? 'Akce'}</Badge>
                       <Badge variant="secondary">{sheetName(detail.sheet_id)}</Badge>
-                      {detailLanes > 1 && <Badge variant="secondary">obě dráhy</Badge>}
+                      {detailLanes > 1 && (
+                        <Badge variant="secondary">jedna akce přes {detailLanes} dráhy</Badge>
+                      )}
                       {detail.series_id && <Badge variant="secondary">opakovaná</Badge>}
                       {!detail.approved_at && (
                         <Badge variant="outline" className="border-amber-500 text-amber-600">
@@ -362,8 +385,26 @@ const Calendar = () => {
                       )}
                     </div>
                     {detail.can_see_amount && (detail.corrected_amount ?? detail.amount) != null && (
-                      <div className="pt-1">Částka: {fmtKc(Number(detail.corrected_amount ?? detail.amount))}
-                        {' '}({fmtHodin(Number(detail.corrected_hours ?? detail.hours))} × {fmtSazba(Number(detail.rate_per_hour))})</div>
+                      <div className="pt-1">
+                        {/* U akce přes víc drah je hlavní číslo CELEK. Ta částka
+                            u jedné dráhy je jen její podíl — kdo by četl jen ji,
+                            myslel by si, že akce stojí polovinu. */}
+                        {detailLanes > 1 && detailCelkem != null ? (
+                          <>
+                            <div className="font-medium">
+                              Celkem za akci: {fmtKc(detailCelkem)}
+                            </div>
+                            <div className="text-muted-foreground text-xs">
+                              {detailLanes} dráhy × {fmtHodin(Number(detail.corrected_hours ?? detail.hours))}
+                              {' '}× {fmtSazba(Number(detail.rate_per_hour))}
+                              {' '}· tato dráha {fmtKc(Number(detail.corrected_amount ?? detail.amount))}
+                            </div>
+                          </>
+                        ) : (
+                          <>Částka: {fmtKc(Number(detail.corrected_amount ?? detail.amount))}
+                            {' '}({fmtHodin(Number(detail.corrected_hours ?? detail.hours))} × {fmtSazba(Number(detail.rate_per_hour))})</>
+                        )}
+                      </div>
                     )}
                     {detail.event_id && shiftFill[detail.event_id] && (
                       <div>Obsazení štábu: {shiftFill[detail.event_id].filled}/{shiftFill[detail.event_id].total}</div>

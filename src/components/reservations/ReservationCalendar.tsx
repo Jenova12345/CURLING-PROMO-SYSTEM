@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { format, addDays, isSameDay, startOfWeek } from 'date-fns';
 import { cs } from 'date-fns/locale';
-import { Clock } from 'lucide-react';
+import { Clock, Link2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { fmtKc } from '@/lib/money';
 import type { Sheet, CalendarReservation, ShiftFill } from '@/hooks/useReservations';
@@ -58,6 +58,32 @@ export function ReservationCalendar({
   openHour, closeHour, canBook, onSlotClick, onReservationClick, onMove, onOutsideHours,
   hoursForDay,
 }: Props) {
+  /**
+   * Akce, které jedou přes VÍC DRAH — kolik drah a kolik stojí dohromady.
+   *
+   * Kalendář má sloupec na dráhu, takže komerční akce na dvou drahách se
+   * nutně kreslí jako dva bloky. To je v pořádku, ale bez označení to vypadá
+   * jako dvě samostatné akce po 20 000 místo jedné za 40 000.
+   *
+   * Součet se počítá jen tehdy, když je částka vidět u VŠECH drah — částečný
+   * součet by byl horší než žádný.
+   */
+  const akce = useMemo(() => {
+    const m = new Map<string, { drah: number; celkem: number | null }>();
+    for (const r of reservations) {
+      if (!r.event_id) continue;
+      const cur = m.get(r.event_id) ?? { drah: 0, celkem: 0 as number | null };
+      const castka = Number(r.corrected_amount ?? r.amount);
+      m.set(r.event_id, {
+        drah: cur.drah + 1,
+        celkem: cur.celkem == null || !r.can_see_amount || !Number.isFinite(castka)
+          ? null
+          : cur.celkem + castka,
+      });
+    }
+    return m;
+  }, [reservations]);
+
   const openMin = openHour * 60;
   const totalMin = (closeHour - openHour) * 60;
   const gridHeight = totalMin * PX_PER_MIN;
@@ -200,6 +226,8 @@ export function ReservationCalendar({
           const isCommercial = r.event_type === 'commercial' || r.event_type === 'recruitment';
           const label = r.event_title ?? r.subject_name ?? 'Rezervace';
           const dragging = preview?.id === r.id;
+          const skupina = r.event_id ? akce.get(r.event_id) : undefined;
+          const vicDrah = (skupina?.drah ?? 1) > 1;
 
           return (
             <button
@@ -216,6 +244,9 @@ export function ReservationCalendar({
               className={cn(
                 'absolute left-1 right-1 rounded-md border border-l-4 p-1.5 text-left shadow-sm',
                 'hover:ring-2 hover:ring-ring overflow-hidden',
+                // Akce přes víc drah dostane výraznější rám, aby bylo vidět,
+                // že ty bloky patří k sobě a nejsou to dvě samostatné akce.
+                vicDrah && 'ring-1 ring-inset ring-primary/40',
                 TYPE_STYLE[r.event_type ?? 'training'] ?? 'border-l-slate-400 bg-slate-50',
                 !r.approved_at && 'border-dashed',
                 canDrag && r.can_manage && 'cursor-grab touch-none',
@@ -225,10 +256,21 @@ export function ReservationCalendar({
                 top, height,
                 transform: dragging ? `translate(${preview!.dx}px, ${preview!.dy}px)` : undefined,
               }}
-              title={`${label} · ${timeLabel}${r.approved_at ? '' : ' · čeká na potvrzení zástupcem'}`}
+              title={
+                `${label} · ${timeLabel}`
+                + (vicDrah ? ` · jedna akce přes ${skupina!.drah} dráhy` : '')
+                + (vicDrah && skupina?.celkem != null ? ` · celkem ${fmtKc(skupina.celkem)}` : '')
+                + (r.approved_at ? '' : ' · čeká na potvrzení zástupcem')
+              }
             >
               <div className="flex items-center gap-1">
                 {/* název vidí každý přihlášený — maskuje se jen částka */}
+                {vicDrah && (
+                  <Link2
+                    className="h-3 w-3 shrink-0 text-primary"
+                    aria-label={`Jedna akce přes ${skupina!.drah} dráhy`}
+                  />
+                )}
                 <span className="truncate text-xs font-medium">{label}</span>
                 {!r.approved_at && <Clock className="h-3 w-3 shrink-0 text-amber-600" />}
                 {isCommercial && fill && (
@@ -240,7 +282,14 @@ export function ReservationCalendar({
               </div>
               <div className="truncate text-[11px] text-muted-foreground">{timeLabel}</div>
               {view === 'day' && r.can_see_amount && amount != null && (
-                <div className="text-[11px] text-muted-foreground">{fmtKc(Number(amount))}</div>
+                <div className="text-[11px] text-muted-foreground">
+                  {vicDrah && skupina?.celkem != null ? (
+                    // U akce přes víc drah je hlavní číslo CELEK; částka téhle
+                    // dráhy je jen podíl a sama o sobě mate.
+                    <>celkem {fmtKc(skupina.celkem)} <span className="opacity-70">
+                      (tato dráha {fmtKc(Number(amount))})</span></>
+                  ) : fmtKc(Number(amount))}
+                </div>
               )}
             </button>
           );
