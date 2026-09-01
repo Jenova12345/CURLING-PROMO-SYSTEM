@@ -66,6 +66,25 @@ CREATE OR REPLACE FUNCTION pg_temp.testovaci_akce() RETURNS uuid
   SELECT id FROM public.events WHERE title = 'TEST sazby_roli' LIMIT 1;
 $$;
 
+-- VLASTNÍ AKCE PRO KAŽDOU TRENÉRSKOU SMĚNU.
+--
+-- Od migrace 20260901160000 pouští `shifts_jeden_trener_na_akci` na akci jen
+-- JEDNU živou trenérskou směnu. Tenhle soubor jich zakládá tři (ceníková sazba,
+-- ruční 999, ruční 600) a dřív je věšel na jednu sdílenou akci — což nebylo
+-- záměrem, testuje se tu SNAPSHOT SAZBY, ne kolik trenérů smí mít akce.
+-- Sdílená akce zůstává pro zbytek souboru (hromadné UPDATE testy níž ji
+-- potřebují), trenérské směny dostávají každá svou.
+CREATE OR REPLACE FUNCTION pg_temp.trenerska_akce() RETURNS uuid
+ LANGUAGE plpgsql VOLATILE AS $$
+DECLARE _id uuid;
+BEGIN
+  INSERT INTO public.events (title, event_type, start_time, end_time, required_staff, role_reqs)
+  VALUES ('TEST sazby_roli trenér', 'commercial',
+          '2026-09-01 10:00+02', '2026-09-01 12:00+02', 0, '{}'::jsonb)
+  RETURNING id INTO _id;
+  RETURN _id;
+END $$;
+
 INSERT INTO public.events (title, event_type, start_time, end_time, required_staff, role_reqs)
 VALUES ('TEST sazby_roli', 'commercial',
         '2026-09-01 10:00+02', '2026-09-01 12:00+02', 0, '{}'::jsonb);
@@ -233,7 +252,7 @@ DECLARE _id uuid; _sazba numeric;
 BEGIN
   -- 5a) Role z ceníku → sazba z ceníku
   INSERT INTO public.shifts (event_id, status, required_role)
-  VALUES (pg_temp.testovaci_akce(), 'open', 'trainer')
+  VALUES (pg_temp.trenerska_akce(), 'open', 'trainer')
   RETURNING id, hourly_rate INTO _id, _sazba;
   PERFORM pg_temp.tvrd(_sazba = 600, 'směna trenéra dostala 600 Kč/h z ceníku');
 
@@ -245,14 +264,14 @@ BEGIN
   -- 5b) RUČNÍ SAZBA MÁ PŘEDNOST a nikdy se nepřepisuje. To je celá podstata
   --     „ručně přepsatelné" z R9 — a taky důvod, proč sloupec nesmí mít DEFAULT.
   INSERT INTO public.shifts (event_id, status, required_role, hourly_rate)
-  VALUES (pg_temp.testovaci_akce(), 'open', 'trainer', 999)
+  VALUES (pg_temp.trenerska_akce(), 'open', 'trainer', 999)
   RETURNING hourly_rate INTO _sazba;
   PERFORM pg_temp.tvrd(_sazba = 999, 'ručně zadaná sazba přebije ceník');
 
   -- Zvlášť ta, která se ceníkové hodnotě náhodou rovná: kdyby se rozhodovalo
   -- podle „liší se od ceníku", tenhle případ by prošel omylem.
   INSERT INTO public.shifts (event_id, status, required_role, hourly_rate)
-  VALUES (pg_temp.testovaci_akce(), 'open', 'trainer', 600)
+  VALUES (pg_temp.trenerska_akce(), 'open', 'trainer', 600)
   RETURNING hourly_rate INTO _sazba;
   PERFORM pg_temp.tvrd(_sazba = 600, 'ručně zadaná sazba shodná s ceníkem projde beze změny');
 
