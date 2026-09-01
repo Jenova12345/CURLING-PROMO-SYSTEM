@@ -11,6 +11,14 @@
 // a naplánovat pravidelné volání (pg_cron / Supabase Scheduler, např. každých 5 minut).
 //
 // Volá se servisním klíčem (service_role) — RLS na email_outbox pouští jen admina.
+//
+// ⚠️ VOLAJÍCÍ SE OVĚŘUJE, A TO ZDE. Platformní `verify_jwt` propustí i
+// PUBLISHABLE klíč, který jede v každém prohlížeči — takže „přihlášený
+// uživatel" tu není žádná závora. Bez téhle kontroly by frontu mohl vyprázdnit
+// kdokoli: pošta by odešla z domény haly a e-maily, které při odesílání
+// selžou, se po pěti pokusech (`attempts >= 5`) trvale odloží. Dnes je funkce
+// neškodná jen proto, že RESEND_API_KEY není nastavený — až bude, byla by to
+// otevřená brána. Vzor je vedle: `invoice-pdf/index.ts`.
 // ---------------------------------------------------------------------------
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
@@ -36,11 +44,21 @@ Deno.serve(async (req) => {
   const apiKey = Deno.env.get("RESEND_API_KEY");
   const from = Deno.env.get("EMAIL_FROM") ?? "Curling Promo Ostrava <onboarding@resend.dev>";
 
-  const supabase = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-    { auth: { persistSession: false } },
-  );
+  const url = Deno.env.get("SUPABASE_URL");
+  const servisniKlic = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!url || !servisniKlic) {
+    return json({ error: "Chybí SUPABASE_URL nebo SERVICE_ROLE_KEY." }, 500);
+  }
+
+  // Servisní klíč obchází RLS, takže tahle funkce nesmí být volatelná zvenčí
+  // bez něj. `verify_jwt` na to nestačí — vyhoví mu i publishable klíč
+  // z bundlu. Táž závora jako v `invoice-pdf/index.ts`.
+  const auth = req.headers.get("Authorization") ?? "";
+  if (!auth.includes(servisniKlic)) {
+    return json({ error: "Frontu e-mailů obsluhuje jen server." }, 401);
+  }
+
+  const supabase = createClient(url, servisniKlic, { auth: { persistSession: false } });
 
   const { data: queue, error } = await supabase
     .from("email_outbox")

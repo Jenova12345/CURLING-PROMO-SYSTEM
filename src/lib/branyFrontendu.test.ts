@@ -103,3 +103,19 @@ describe('Registrace: klub se nedá přeskočit', () => {
     expect(auth).not.toContain('registerClub || undefined');
   });
 });
+
+describe('Edge funkce: frontu obsluhuje jen server', () => {
+  // `verify_jwt` na platformě propustí i PUBLISHABLE klíč, který jede v každém
+  // prohlížeči — takže „přihlášený uživatel" není závora. Funkce, které jedou
+  // pod servisním klíčem (a obcházejí tím RLS), si musí volajícího ověřit samy.
+  const FUNKCE = ['send-emails', 'invoice-pdf'];
+
+  it.each(FUNKCE)('%s porovnává Authorization se servisním klíčem', (jmeno) => {
+    const zdroj = cti(`supabase/functions/${jmeno}/index.ts`);
+    expect(zdroj, `${jmeno} nečte hlavičku Authorization`).toMatch(/headers\.get\(['"]Authorization['"]\)/);
+    expect(zdroj,
+      `${jmeno} neporovnává Authorization se servisním klíčem — pak ji zavolá ` +
+      'kdokoli s veřejným klíčem z bundlu.',
+    ).toMatch(/auth\.includes\(/);
+  });
+});
