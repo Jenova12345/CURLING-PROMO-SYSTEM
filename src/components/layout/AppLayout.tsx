@@ -65,10 +65,10 @@ const AppLayout = () => {
           </h1>
           <p className="text-sm text-muted-foreground">
             {zamitnut
-              ? 'Přiřazení ke klubu neprošlo. Ozvi se správci haly nebo zástupci svého klubu — žádost jde podat znovu.'
+              ? 'Přiřazení ke klubu neprošlo. Ozvi se správci haly nebo správci svého klubu — žádost jde podat znovu.'
               : zavreny
               ? 'Přístup byl pozastaven. Obnovit ho může správce haly.'
-              : 'Registrace proběhla. Teď musí tvoje přiřazení ke klubu schválit správce haly nebo zástupce klubu — do té doby se do systému nedostaneš.'}
+              : 'Registrace proběhla. Teď musí tvoje přiřazení ke klubu schválit správce haly nebo správce klubu — do té doby se do systému nedostaneš.'}
           </p>
           <p className="text-sm text-muted-foreground">
             Jakmile to někdo odklikne, stačí se znovu přihlásit.

@@ -30,7 +30,7 @@ const MujKlub = () => {
   >(null);
 
   if (!isRep && !isAdmin) {
-    return <div className="p-6 text-muted-foreground">Tuhle stránku vidí zástupce klubu.</div>;
+    return <div className="p-6 text-muted-foreground">Tuhle stránku vidí správce klubu.</div>;
   }
 
   const prepni = async (subject_id: string, nazev: string, clen: ClenKlubu) => {
@@ -68,7 +68,7 @@ const MujKlub = () => {
           <ShieldCheck className="h-7 w-7" /> Můj klub
         </h1>
         <p className="text-muted-foreground mt-1 text-sm md:text-base">
-          Členové klubů, kterých jste zástupcem. Přidávat a odebírat členy může správce haly.
+          Členové klubů, kterých jste správcem. Přidávat a odebírat členy může správce haly.
         </p>
       </div>
 
@@ -82,7 +82,7 @@ const MujKlub = () => {
       {!isLoading && !error && kluby.length === 0 && (
         <Card>
           <CardContent className="py-6 text-muted-foreground">
-            Nejste zástupcem žádného klubu. Zástupce jmenuje správce haly.
+            Nejste správcem žádného klubu. Správce klubu jmenuje správce haly.
           </CardContent>
         </Card>
       )}
@@ -110,12 +110,12 @@ const MujKlub = () => {
                 {klub.clenove.map((c) => (
                   <TableRow key={c.user_id}>
                     <TableCell className="font-medium">{c.jmeno}</TableCell>
-                    <TableCell>{c.level === 'rep' ? 'Zástupce' : 'Člen'}</TableCell>
+                    <TableCell>{c.level === 'rep' ? 'Správce klubu' : 'Člen'}</TableCell>
                     <TableCell>
                       {c.level === 'rep' ? (
                         // Zástupce potvrzuje z titulu své úrovně, právo navíc
                         // by u něj nic neznamenalo — RPC ho ani nenastaví.
-                        <span className="text-muted-foreground text-sm">z titulu zástupce</span>
+                        <span className="text-muted-foreground text-sm">z titulu správce klubu</span>
                       ) : (
                         <Switch
                           checked={c.muze_potvrzovat}

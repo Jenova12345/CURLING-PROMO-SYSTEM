@@ -19,13 +19,23 @@ export const useShiftApplications = () => {
   const { data: applications = [], isLoading } = useQuery({
     queryKey: ['shift_applications'],
     queryFn: async () => {
+      // ŘADÍ SE PODLE DATA AKCE, ne podle pořadí zadání.
+      //
+      // `created_at` je okamžik, kdy někdo přihlášku odeslal — pro toho, kdo
+      // frontu vyřizuje, je to nezajímavé číslo, které navíc míchá dohromady
+      // směny z různých dnů. Rozhoduje, co je nejdřív na řadě.
+      //
+      // Datum se dotahuje přes vnořený `shift → event`. Seřadit se to musí
+      // AŽ TADY, ne v dotazu: PostgREST umí `order` jen přes jednu úroveň
+      // vnoření, a tohle jsou dvě.
       const { data, error } = await (supabase as any)
         .from('shift_applications')
-        .select('*')
-        .order('created_at', { ascending: true });
+        .select('*, shift:shifts(event_id, event:events(start_time))');
       if (error) throw error;
 
-      const apps = (data || []) as ShiftApplication[];
+      const kdy = (a: any) => a?.shift?.event?.start_time ?? a?.created_at ?? '';
+      const apps = ((data || []) as any[])
+        .sort((x, y) => kdy(x).localeCompare(kdy(y))) as ShiftApplication[];
       const userIds = [...new Set(apps.map(a => a.user_id))];
       if (userIds.length > 0) {
         const { data: profiles } = await supabase

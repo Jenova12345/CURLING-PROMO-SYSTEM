@@ -18,7 +18,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useSubjectsAdmin, type Subject, type RepLevel } from '@/hooks/useSubjectsAdmin';
 import { parseSazba } from '@/lib/money';
 
-const LEVELS: [RepLevel, string][] = [['rep', 'Zástupce'], ['member', 'Člen']];
+const LEVELS: [RepLevel, string][] = [['rep', 'Správce klubu'], ['member', 'Člen']];
 
 const Subjects = () => {
   const { toast } = useToast();

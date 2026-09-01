@@ -314,7 +314,7 @@ export function ReservationCalendar({
                 `${label} · ${timeLabel}`
                 + (vicDrah ? ` · jedna akce přes ${skupina!.drah} dráhy` : '')
                 + (vicDrah && skupina?.celkem != null ? ` · celkem ${fmtKc(skupina.celkem)}` : '')
-                + (r.approved_at ? '' : ' · čeká na potvrzení zástupcem')
+                + (r.approved_at ? '' : ' · čeká na potvrzení správcem klubu')
               }
             >
               <div className="flex items-center gap-1">
@@ -419,7 +419,7 @@ export function ReservationCalendar({
           </span>
         ))}
         <span className="flex items-center gap-1.5">
-          <Clock className="h-3 w-3 text-amber-600" /> čeká na potvrzení zástupcem
+          <Clock className="h-3 w-3 text-amber-600" /> čeká na potvrzení správcem klubu
         </span>
         {view === 'week' && <span>Dráhy jsou vedle sebe v každém dni (pořadí podle názvu).</span>}
         {canDrag && <span>Rezervaci lze přetáhnout myší na jiný čas nebo den.</span>}

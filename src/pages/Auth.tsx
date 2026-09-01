@@ -43,6 +43,10 @@ const Auth = () => {
   // Register state
   const [registerEmail, setRegisterEmail] = useState('');
   const [registerPassword, setRegisterPassword] = useState('');
+  const [registerPasswordAgain, setRegisterPasswordAgain] = useState('');
+  // Přepínač zobrazení hesla. Platí pro OBĚ pole naráz — kdo si chce heslo
+  // zkontrolovat, chce vidět obě, a dvě nezávislá očička jsou jen klikání navíc.
+  const [heslaVidet, setHeslaVidet] = useState(false);
   // Vybraný klub. POVINNÝ — prázdno formulář neodešle.
   //
   // Dřív tu prázdno bylo plnohodnotná volba („zatím nevím"). Jenže bez klubu
@@ -153,6 +157,7 @@ const Auth = () => {
       name: registerName,
       email: registerEmail,
       password: registerPassword,
+      passwordAgain: registerPasswordAgain,
       // Klub je povinný: bez něj nevznikne žádost a účet by uvázl mimo frontu.
       subjectId: registerClub,
     });
@@ -198,12 +203,13 @@ const Auth = () => {
       // Clear form
       setRegisterEmail('');
       setRegisterPassword('');
+      setRegisterPasswordAgain('');
       setRegisterName('');
       setRegisterClub('');
       toast({
         title: 'Registrace úspěšná!',
         description: 'Přiřazení ke klubu teď musí schválit správce haly nebo '
-          + 'zástupce klubu. Do té doby se do systému nedostanete.',
+          + 'správce klubu. Do té doby se do systému nedostanete.',
         duration: 10000, // Show longer for important message
       });
     }
@@ -311,7 +317,7 @@ const Auth = () => {
                   <Label htmlFor="register-password">Heslo</Label>
                   <Input
                     id="register-password"
-                    type="password"
+                    type={heslaVidet ? 'text' : 'password'}
                     placeholder="••••••••"
                     value={registerPassword}
                     onChange={(e) => setRegisterPassword(e.target.value)}
@@ -319,9 +325,37 @@ const Auth = () => {
                     required
                     autoComplete="new-password"
                   />
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={heslaVidet}
+                      onChange={(e) => setHeslaVidet(e.target.checked)}
+                      className="h-3.5 w-3.5 rounded border-input"
+                    />
+                    Zobrazit hesla
+                  </label>
                   <p className="text-xs text-muted-foreground">
                     Minimálně {VALIDATION_LIMITS.PASSWORD_MIN} znaků
                   </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="register-password-again">Heslo znovu</Label>
+                  <Input
+                    id="register-password-again"
+                    type={heslaVidet ? 'text' : 'password'}
+                    placeholder="••••••••"
+                    value={registerPasswordAgain}
+                    onChange={(e) => setRegisterPasswordAgain(e.target.value)}
+                    maxLength={VALIDATION_LIMITS.PASSWORD_MAX}
+                    required
+                    autoComplete="new-password"
+                  />
+                  {/* Neshodu ukazujeme HNED, ne až po odeslání — jinak se
+                      uživatel dozví o překlepu po vyplnění celého formuláře.
+                      Odeslání zastaví i tak `registerFormSchema`. */}
+                  {registerPasswordAgain.length > 0 && registerPassword !== registerPasswordAgain && (
+                    <p className="text-xs text-destructive">Hesla se neshodují</p>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="register-club">Klub</Label>
@@ -347,7 +381,7 @@ const Auth = () => {
                   ) : (
                     <p className="text-xs text-muted-foreground">
                       Výběrem klubu vznikne žádost o přiřazení. Členství potvrzuje správce haly
-                      nebo zástupce klubu — do té doby se do systému nedostanete.
+                      nebo správce klubu — do té doby se do systému nedostanete.
                     </p>
                   )}
                 </div>

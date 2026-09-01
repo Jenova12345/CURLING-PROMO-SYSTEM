@@ -253,7 +253,14 @@ export const registerFormSchema = z.object({
   name: nameSchema,
   email: emailSchema,
   password: passwordSchema,
+  // Druhé pole se NEVALIDUJE na délku ani sílu — kdyby ano, uživatel by u něj
+  // dostal „heslo musí mít aspoň 6 znaků" místo toho, co ho zajímá: že se
+  // hesla neshodují. Sílu hlídá `password` výš.
+  passwordAgain: z.string(),
   subjectId: clubChoiceSchema,
+}).refine((d) => d.password === d.passwordAgain, {
+  message: 'Hesla se neshodují',
+  path: ['passwordAgain'],
 });
 
 /**

@@ -55,7 +55,7 @@ const ClenstviVKlubu = () => {
       if (!zivy) return;
       setClenstvi(reps.map((r) => ({
         nazev: nazvy?.find((n) => n.id === r.subject_id)?.name ?? '(klub už neexistuje)',
-        uroven: r.level === 'rep' ? 'zástupce klubu' : 'člen',
+        uroven: r.level === 'rep' ? 'správce klubu' : 'člen',
       })));
     })();
     return () => { zivy = false; };

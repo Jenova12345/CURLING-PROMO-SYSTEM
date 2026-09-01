@@ -314,7 +314,7 @@ const Calendar = () => {
 
       {!canBook && (
         <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
-          Rezervovat můžou členové a zástupci klubů. Pokud za klub rezervovat potřebujete, ozvěte se správci haly.
+          Rezervovat můžou členové a správci klubů. Pokud za klub rezervovat potřebujete, ozvěte se správci haly.
         </div>
       )}
 
@@ -527,7 +527,7 @@ const Calendar = () => {
                             </span>
                           </div>
                         ) : (
-                          <div className="text-xs text-muted-foreground">Trenéra přiřazuje správce haly nebo zástupce klubu.</div>
+                          <div className="text-xs text-muted-foreground">Trenéra přiřazuje správce haly nebo správce klubu.</div>
                         )}
                       </div>
                     )}

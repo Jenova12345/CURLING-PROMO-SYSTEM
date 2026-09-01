@@ -119,3 +119,19 @@ describe('Edge funkce: frontu obsluhuje jen server', () => {
     ).toMatch(/auth\.includes\(/);
   });
 });
+
+describe('Registrace: heslo se zadává dvakrát a jde zobrazit', () => {
+  const auth = cti('src/pages/Auth.tsx');
+
+  it('formulář má druhé pole na heslo', () => {
+    expect(auth).toContain('id="register-password-again"');
+    expect(auth).toContain('passwordAgain: registerPasswordAgain');
+  });
+
+  it('obě pole poslouchají jeden přepínač zobrazení', () => {
+    // Dvě nezávislá očička jsou klikání navíc: kdo si heslo kontroluje,
+    // chce vidět obě pole naráz.
+    const kolik = (auth.match(/type=\{heslaVidet \? 'text' : 'password'\}/g) ?? []).length;
+    expect(kolik, 'přepínač zobrazení nepokrývá obě pole').toBe(2);
+  });
+});

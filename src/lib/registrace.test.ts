@@ -17,10 +17,11 @@ const PLATNY = {
   name: 'Jan Novák',
   email: 'jan@example.cz',
   password: 'DostatecneDlouhe1',
+  passwordAgain: 'DostatecneDlouhe1',
   subjectId: 'aaaa1111-0000-0000-0000-000000000001',
 };
 
-describe('registerFormSchema: klub je povinný', () => {
+describe('registerFormSchema: klub je povinný a hesla se musí shodovat', () => {
   it('kompletní formulář projde', () => {
     const v = safeValidate(registerFormSchema, PLATNY);
     expect(v.success).toBe(true);
@@ -56,10 +57,25 @@ describe('registerFormSchema: klub je povinný', () => {
   });
 
   // Ostatní pravidla formuláře se přidáním klubu nesměla rozbít.
+  it('neshodná hesla NEPROJDOU', () => {
+    const v = safeValidate(registerFormSchema, { ...PLATNY, passwordAgain: 'NecoJineho9' });
+    expect(v.success, 'registrace s neshodnými hesly prošla').toBe(false);
+    if (!v.success) expect(v.error).toContain('neshodují');
+  });
+
+  it('prázdné druhé pole NEPROJDE', () => {
+    expect(safeValidate(registerFormSchema, { ...PLATNY, passwordAgain: '' }).success).toBe(false);
+  });
+
+  it('chybějící druhé pole NEPROJDE (kdyby ho někdo přestal posílat)', () => {
+    const { passwordAgain, ...bez } = PLATNY;
+    expect(safeValidate(registerFormSchema, bez).success).toBe(false);
+  });
+
   it('krátké heslo pořád neprojde', () => {
     // Pod hranicí VALIDATION_LIMITS.PASSWORD_MIN (6). „krátké" má přesně 6
     // znaků, takže projde — proto tu stojí kratší řetězec, ne libovolný.
-    expect(safeValidate(registerFormSchema, { ...PLATNY, password: 'ab1' }).success).toBe(false);
+    expect(safeValidate(registerFormSchema, { ...PLATNY, password: 'ab1', passwordAgain: 'ab1' }).success).toBe(false);
   });
   it('nesmyslný e-mail pořád neprojde', () => {
     expect(safeValidate(registerFormSchema, { ...PLATNY, email: 'tohle-není-mail' }).success).toBe(false);

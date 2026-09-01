@@ -798,8 +798,8 @@ export function ReservationDialog({
             )}
 
             {/* PŘÁNÍ TRENÉRA — jen u tréninku, nezávazné (R7, varianta D).
-                Zachytí, koho by si hráč přál, aby to zástupce nemusel
-                obvolávat. Skutečné přiřazení dělá admin nebo zástupce
+                Zachytí, koho by si hráč přál, aby to správce klubu nemusel
+                obvolávat. Skutečné přiřazení dělá admin nebo správce
                 v detailu akce a teprve TÍM vzniká placená směna. */}
             {kind === 'training' && api.treneri.length > 0 && (
               <div className="space-y-2">
@@ -816,7 +816,7 @@ export function ReservationDialog({
                   ))}
                 </select>
                 <p className="text-xs text-muted-foreground">
-                  Je to jen přání — trenéra přiřazuje správce haly nebo zástupce klubu.
+                  Je to jen přání — trenéra přiřazuje správce haly nebo správce klubu.
                 </p>
               </div>
             )}

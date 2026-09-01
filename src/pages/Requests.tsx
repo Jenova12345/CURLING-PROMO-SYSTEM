@@ -30,21 +30,21 @@ const Requests = () => {
   // svých klubů, o což se stará politika na `subject_requests`, ne tahle
   // podmínka. Tady jde jen o to, komu se stránka vůbec ukáže.
   if (!isAdmin && !isRep) {
-    return <div className="p-6 text-muted-foreground">Žádosti o přiřazení vyřizuje správce haly nebo zástupce klubu.</div>;
+    return <div className="p-6 text-muted-foreground">Žádosti o přiřazení vyřizuje správce haly nebo správce klubu.</div>;
   }
 
   const schval = async (z: SubjectRequest) => {
     const level = uroven[z.id!] ?? 'member';
     if (level === 'rep' && !window.confirm(
       `Udělat ze žadatele „${z.zadatel}" ZÁSTUPCE klubu ${z.klub}?\n\n`
-      + 'Zástupce potvrzuje rezervace ostatních členů klubu a rezervuje za celý klub.',
+      + 'Správce klubu potvrzuje rezervace ostatních členů klubu a rezervuje za celý klub.',
     )) return;
 
     try {
       await approve({ id: z.id!, level });
       toast({
         title: 'Přiřazeno',
-        description: `${z.zadatel} → ${z.klub} (${level === 'rep' ? 'zástupce' : 'člen'}).`,
+        description: `${z.zadatel} → ${z.klub} (${level === 'rep' ? 'správce klubu' : 'člen'}).`,
       });
     } catch (e) {
       toast({ title: 'Nepovedlo se', description: (e as Error).message, variant: 'destructive' });
@@ -121,7 +121,7 @@ const Requests = () => {
                         <option value="member">člen</option>
                         {/* Zástupce smí jmenovat JEN admin (blok C) — zástupci se
                             ta volba ani nenabízí, aby nenarazil na chybu z databáze. */}
-                        {isAdmin && <option value="rep">zástupce</option>}
+                        {isAdmin && <option value="rep">správce klubu</option>}
                       </select>
                     </TableCell>
                     <TableCell className="text-right">
@@ -172,7 +172,7 @@ const Requests = () => {
                         {STAV[z.status ?? '']?.text ?? z.status}
                       </Badge>
                     </TableCell>
-                    <TableCell>{z.uroven === 'rep' ? 'zástupce' : z.uroven === 'member' ? 'člen' : '—'}</TableCell>
+                    <TableCell>{z.uroven === 'rep' ? 'správce klubu' : z.uroven === 'member' ? 'člen' : '—'}</TableCell>
                     <TableCell className="whitespace-nowrap">{kdy(z.decided_at)}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{z.decision_reason ?? '—'}</TableCell>
                   </TableRow>

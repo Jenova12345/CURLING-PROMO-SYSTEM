@@ -51,7 +51,11 @@ export const useShifts = () => {
           *,
           event:events(*)
         `)
-        .order('created_at', { ascending: false });
+        // ŘADÍ SE PODLE DATA AKCE, ne podle pořadí zadání. `created_at` je
+        // okamžik, kdy někdo řádek založil — pro brigádníka i pro rozpis je to
+        // nezajímavé číslo, které navíc míchá dohromady směny z různých dnů.
+        // Vzestupně: nejbližší akce nahoře, ať je vidět, co je na řadě.
+        .order('start_time', { referencedTable: 'events', ascending: true });
 
       if (error) throw error;
       
