@@ -2844,6 +2844,8 @@ export type Database = {
         Returns: {
           dluzi: number
           dobropisovano: number
+          fakturoid: number
+          fakturoid_rozdil: number
           fakturovano: number
           k_fakturaci: number
           neschvalene: number

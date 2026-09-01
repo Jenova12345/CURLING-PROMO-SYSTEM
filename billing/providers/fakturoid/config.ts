@@ -107,6 +107,19 @@ export const nactiConfig = (env: Record<string, string | undefined>): FakturoidC
       'IS_VAT_PAYER',
     );
   }
+  // PRÁZDNO UŽ NENÍ „NEPLÁTCE", ALE CHYBA.
+  //
+  // Dřív chybějící proměnná mlčky znamenala neplátce — a zapomenutý secret
+  // v Supabase by tak poslal doklady do ostré číselné řady BEZ 12 % DPH.
+  // Přišlo by se na to u finančního úřadu, ne v logu, a opravit to jde jen
+  // dobropisem. Daňový režim se proto musí říct nahlas.
+  if (zadanoDph === '') {
+    throw new BillingValidationError(
+      'IS_VAT_PAYER musí být vyplněné („true" pro plátce, „false" pro neplátce). '
+      + 'Prázdno se nebere jako neplátce — daňový režim se nehádá.',
+      'IS_VAT_PAYER',
+    );
+  }
 
   return {
     slug: env.FAKTUROID_SLUG!.trim(),
@@ -123,3 +136,70 @@ export const nactiConfig = (env: Record<string, string | undefined>): FakturoidC
 /** Základ API pro daný účet. */
 export const zakladUrl = (slug: string): string =>
   `https://app.fakturoid.cz/api/v3/accounts/${encodeURIComponent(slug)}`;
+
+/**
+ * Sedí náš daňový režim s tím, co má hala nastavené v databázi?
+ *
+ * `IS_VAT_PAYER` je proměnná prostředí, `billing_settings.vat_mode` je
+ * nastavení v aplikaci. Jsou to dva zdroje téže pravdy a NIKDE se dosud
+ * neporovnávaly — takže se mohly rozejít a poznalo by se to až na dokladu.
+ *
+ * Volá se před vystavením, ne při startu: `vat_mode` se dá přepnout kdykoli
+ * za běhu.
+ */
+export const overDanovyRezim = (jePlatceDph: boolean, vatModeZDb: string | null | undefined): void => {
+  const dbPlatce = (vatModeZDb ?? '').trim().toLowerCase() !== 'neplatce';
+  if (dbPlatce !== jePlatceDph) {
+    throw new BillingValidationError(
+      `Daňový režim se rozchází: IS_VAT_PAYER říká ${jePlatceDph ? 'plátce' : 'neplátce'}, `
+      + `ale billing_settings.vat_mode je „${vatModeZDb ?? '(nenastaveno)'}". `
+      + 'Doklad by odešel v jiném režimu, než v jakém hala účtuje.',
+      'IS_VAT_PAYER',
+    );
+  }
+};
+
+/**
+ * Smí se na TENHLE účet Fakturoidu doopravdy zapisovat?
+ *
+ * `FAKTUROID_LIVE` se dosud načítalo do configu a NIKDO HO NEČETL — gatovalo
+ * jen přeskakování integračních testů. Ostrý doklad se tedy dal vystavit
+ * jedním příkazem, aniž by kdokoli cokoli vědomě zapnul.
+ *
+ * Zápis proto vyžaduje DVĚ nezávislá potvrzení:
+ *   1. `FAKTUROID_LIVE=true` — vědomé zapnutí,
+ *   2. shodu `FAKTUROID_SLUG` s účtem, který je výslovně povolený
+ *      (`FAKTUROID_POVOLENY_UCET`, jinak `FAKTUROID_TEST_SLUG`).
+ *
+ * Druhá podmínka je ta důležitá: po přepnutí slugu na ostrý účet přestane
+ * platit, dokud někdo ten ostrý účet výslovně nevypíše. Překlep ve slugu tím
+ * pádem nevystaví doklad cizímu účtu, jen se odmítne.
+ */
+export const overPovolenyUcet = (
+  cfg: { slug: string; live: boolean },
+  env: Record<string, string | undefined>,
+): void => {
+  if (!cfg.live) {
+    throw new BillingValidationError(
+      'Zápis do Fakturoidu je vypnutý (FAKTUROID_LIVE není true). '
+      + 'Zapni ho vědomě, až budeš chtít doklad opravdu vystavit.',
+      'FAKTUROID_LIVE',
+    );
+  }
+  const povoleny = (env.FAKTUROID_POVOLENY_UCET ?? env.FAKTUROID_TEST_SLUG ?? '').trim();
+  if (povoleny === '') {
+    throw new BillingValidationError(
+      'Není řečeno, na který účet Fakturoidu se smí psát. '
+      + 'Vyplň FAKTUROID_POVOLENY_UCET (nebo FAKTUROID_TEST_SLUG u testovacího účtu).',
+      'FAKTUROID_POVOLENY_UCET',
+    );
+  }
+  if (povoleny !== cfg.slug) {
+    throw new BillingValidationError(
+      `Účet „${cfg.slug}" není mezi povolenými (povolený je „${povoleny}"). `
+      + 'Na ostrý účet se píše až po vědomém povolení — jinak by překlep ve slugu '
+      + 'vystavil doklad cizímu účtu.',
+      'FAKTUROID_SLUG',
+    );
+  }
+};

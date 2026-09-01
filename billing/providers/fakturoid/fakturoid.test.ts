@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { FakturoidProvider } from './index.ts';
-import { nactiConfig, zakladUrl } from './config.ts';
+import { nactiConfig, overDanovyRezim, overPovolenyUcet, zakladUrl } from './config.ts';
 import { basicHlavicka, TOKEN_URL, TokenCache } from './auth.ts';
 import {
   prodlevaPoLimitu, smiSeOpakovat, zkrat,
@@ -81,10 +81,45 @@ describe('config', () => {
     expect(() => nactiConfig({ ...ENV, BILLING_DUE_DAYS: 'čtrnáct' })).toThrow(BillingValidationError);
   });
 
-  it('FAKTUROID_LIVE a IS_VAT_PAYER jsou default vypnuté', () => {
-    const c = nactiConfig({ ...ENV, FAKTUROID_LIVE: undefined, IS_VAT_PAYER: undefined });
-    expect(c.live).toBe(false);
-    expect(c.jePlatceDph).toBe(false);
+  it('FAKTUROID_LIVE je default vypnuté', () => {
+    expect(nactiConfig({ ...ENV, FAKTUROID_LIVE: undefined }).live).toBe(false);
+  });
+
+  it('chybějící IS_VAT_PAYER je CHYBA, ne tiché „neplátce"', () => {
+    // Dřív prázdno znamenalo neplátce — zapomenutý secret by tak poslal
+    // ostré doklady bez 12 % DPH a opravit by to šlo jen dobropisem.
+    expect(() => nactiConfig({ ...ENV, IS_VAT_PAYER: undefined })).toThrow(BillingValidationError);
+    expect(() => nactiConfig({ ...ENV, IS_VAT_PAYER: '  ' })).toThrow(BillingValidationError);
+    expect(nactiConfig({ ...ENV, IS_VAT_PAYER: 'true' }).jePlatceDph).toBe(true);
+    expect(nactiConfig({ ...ENV, IS_VAT_PAYER: 'false' }).jePlatceDph).toBe(false);
+  });
+
+  it('daňový režim se musí shodovat s billing_settings.vat_mode', () => {
+    expect(() => overDanovyRezim(false, 'neplatce')).not.toThrow();
+    expect(() => overDanovyRezim(true, 'platce')).not.toThrow();
+    // rozchod = doklad by odešel v jiném režimu, než v jakém hala účtuje
+    expect(() => overDanovyRezim(false, 'platce')).toThrow(BillingValidationError);
+    expect(() => overDanovyRezim(true, 'neplatce')).toThrow(BillingValidationError);
+    // nenastavené vat_mode se bere jako plátce (default DB), takže neplátce neprojde
+    expect(() => overDanovyRezim(false, null)).toThrow(BillingValidationError);
+  });
+
+  it('na účet se nezapíše bez LIVE a bez shody se schváleným účtem', () => {
+    const test = { slug: 'curling-test', live: true };
+    const ostry = { slug: 'curling-ostry', live: true };
+
+    // 1) vypnuté LIVE = žádný zápis, i když slug sedí
+    expect(() => overPovolenyUcet({ ...test, live: false }, { FAKTUROID_TEST_SLUG: 'curling-test' }))
+      .toThrow(/FAKTUROID_LIVE/);
+    // 2) LIVE + shoda s testovacím účtem = projde
+    expect(() => overPovolenyUcet(test, { FAKTUROID_TEST_SLUG: 'curling-test' })).not.toThrow();
+    // 3) přepnutí slugu na ostrý účet samo o sobě NESTAČÍ — to je jádro nálezu 4
+    expect(() => overPovolenyUcet(ostry, { FAKTUROID_TEST_SLUG: 'curling-test' }))
+      .toThrow(/není mezi povolenými/);
+    // 4) až vědomé vypsání ostrého účtu ho pustí
+    expect(() => overPovolenyUcet(ostry, { FAKTUROID_POVOLENY_UCET: 'curling-ostry' })).not.toThrow();
+    // 5) nikde neřečeno = odmítnout, ne hádat
+    expect(() => overPovolenyUcet(ostry, {})).toThrow(/FAKTUROID_POVOLENY_UCET/);
   });
 
   it('slug se do URL escapuje', () => {

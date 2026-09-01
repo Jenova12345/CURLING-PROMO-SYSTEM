@@ -18,7 +18,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
-import { nactiConfig } from '@/billing/providers/fakturoid/config.ts';
+import { nactiConfig, overDanovyRezim, overPovolenyUcet } from '@/billing/providers/fakturoid/config.ts';
 import { FakturoidProvider } from '@/billing/providers/fakturoid/index.ts';
 import { SupabaseStore, type RpcKlient } from '@/billing/supabaseStore.ts';
 import { vystavDoklad } from '@/billing/pipeline.ts';
@@ -104,6 +104,22 @@ Deno.serve(async (req) => {
     // `as unknown as RpcKlient`: `SupabaseStore` potřebuje jen `.rpc`, ale
     // generiky `createClient` bez typů schématu se s tím úzkým rozhraním
     // strukturálně neshodnou. Zúžení je tu vědomé a jednosměrné.
+    // ---- Dvě brány před vystavením (nálezy 4 a 7) --------------------------
+    // Obě až TADY, ne při startu: `vat_mode` se dá přepnout za běhu a nechceme,
+    // aby funkce, která právě běží, účtovala podle režimu z doby svého nasazení.
+    //
+    // 1) Na který účet vůbec smíme psát. `config.live` se dosud načítalo
+    //    a NIKDO HO NEČETL — ostrý doklad se dal vystavit, aniž by to kdokoli
+    //    vědomě zapnul.
+    overPovolenyUcet(config, Deno.env.toObject());
+
+    // 2) Sedí náš daňový režim s tím, co má hala nastavené? Bez téhle kontroly
+    //    se dva zdroje téže pravdy mohly rozejít a poznalo by se to na dokladu.
+    const { data: nastaveni, error: chybaRezimu } = await db
+      .from('billing_settings').select('vat_mode').eq('singleton', true).maybeSingle();
+    if (chybaRezimu) return json({ error: `Nepodařilo se načíst daňový režim: ${chybaRezimu.message}` }, 500);
+    overDanovyRezim(config.jePlatceDph, nastaveni?.vat_mode ?? null);
+
     const store = new SupabaseStore(db as unknown as RpcKlient);
     const provider = new FakturoidProvider({ config, fetch: globalThis.fetch as never });
 

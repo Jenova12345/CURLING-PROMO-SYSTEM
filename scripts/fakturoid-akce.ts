@@ -17,7 +17,7 @@ import { execSync } from 'node:child_process';
 import { loadEnv } from 'vite';
 import { createClient } from '@supabase/supabase-js';
 
-import { nactiConfig } from '../billing/providers/fakturoid/config.ts';
+import { nactiConfig, overDanovyRezim, overPovolenyUcet } from '../billing/providers/fakturoid/config.ts';
 import { FakturoidProvider } from '../billing/providers/fakturoid/index.ts';
 import { SupabaseStore, type RpcKlient } from '../billing/supabaseStore.ts';
 import { vystavDoklad } from '../billing/pipeline.ts';
@@ -149,6 +149,15 @@ const main = async () => {
     console.log(`  DPH:        ${sazba} % · ceny na řádcích jsou BEZ DANĚ (vat_price_mode=without_vat)`);
     console.log('              číslo a VS přiděluje Fakturoid\n');
   }
+
+  // Tytéž dvě brány jako v Edge funkci (nálezy 4 a 7). Schválně až tady, ne
+  // při startu skriptu: bez argumentu se jen vypisuje nabídka akcí a na to
+  // není důvod nic hlídat.
+  overPovolenyUcet(config, { ...loadEnv('', process.cwd(), ''), ...process.env });
+  const { data: nastaveni, error: chybaRezimu } = await db
+    .from('billing_settings').select('vat_mode').eq('singleton', true).maybeSingle();
+  if (chybaRezimu) throw new Error(`Nepodařilo se načíst daňový režim: ${chybaRezimu.message}`);
+  overDanovyRezim(config.jePlatceDph, (nastaveni as { vat_mode?: string } | null)?.vat_mode ?? null);
 
   const v = await vystavDoklad({
     draft,
