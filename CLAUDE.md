@@ -2,6 +2,50 @@
 
 Kontext projektu pro Claude Code. Přečti si to na začátku každé session.
 
+---
+
+## ⛔ NEPODKROČITELNÁ PRAVIDLA — přečti dřív, než na cokoli sáhneš
+
+Od 31. 8. 2026 zadává do systému data **klient, na ostré produkci**. Každé
+z těchhle pravidel tu je proto, že jeho porušení už jednou něco stálo — ne
+jako opatrnost do zásoby.
+
+1. **Čerstvá záloha před KAŽDÝM `db push`.** Ne „před dnešní dávkou", ale před
+   každým jednotlivým pushem. Používej na to **`scripts/safe-deploy.sh <popisek>`**
+   — dump si sám ověří velikost i celistvost a při chybě migraci vůbec nespustí.
+   Ruční `supabase db push` znamená, že jsi zálohu obešel.
+
+2. **KROK 0 u každého úkolu: nejdřív zjisti, jak to je dnes.** Ne odhadem,
+   dotazem do živého schématu. Půlka „chyb" v tomhle repu byla funkce, která
+   už existovala, nebo naopak komentář slibující něco, co nikdy nevzniklo
+   (`reservation_cancelled` byl vypsaný v komentáři u tabulky roky a nezakládalo
+   ho nic). Když KROK 0 ukáže, že je to jinak, než zní zadání — napiš to
+   a nestav to podruhé.
+
+3. **Peníze a přístupy ověřuj reálným tokenem, ne jako `postgres`.**
+   Testy práv patří pod `SET LOCAL ROLE authenticated`. Jako `postgres` projde
+   všechno (obchází granty i RLS), takže test tvrdí, že jsou dveře zavřené,
+   a nevidí otevřené okno vedle. Dvakrát to takhle propustilo blokér.
+
+4. **Ke každé opravě mutační test.** Vypni tu opravu a přesvědč se, že test
+   opravdu zčervená. Test, který projde i bez opravy, nehlídá nic — a už se to
+   tady stalo pětkrát, včetně případu, kdy dedup notifikací umlčel obě brány,
+   které měl test měřit.
+
+5. **Secrets nikdy do chatu ani do gitu.** Heslo k produkční DB žije
+   v `.env.local` (gitignorováno, bez prefixu `VITE_`). Do příkazové řádky
+   nepatří (je vidět v `ps`), do commitu ani do zprávy pro uživatele taky ne.
+
+6. **Migrace jsou dopředné, po jedné.** Žádné přepisování historie, žádný
+   `db reset --linked`, žádné mazání natvrdo. Na ostré produkci by reset smazal
+   klientova data — viz `docs/PRODUKCE-PRAVIDLA.md`.
+
+7. **Když se cokoli neověří čistě → zastav a napiš to.** Neřeš to sám, nehrň
+   to dál. Rozdíl v kontrolním součtu, test, který projde i po mutaci, dump
+   podezřelé velikosti — to všechno je důvod přestat, ne obejít.
+
+---
+
 ## O co jde
 
 Přebíráme existující webovou aplikaci pro **curlingovou halu v Ostravě** z nástroje
@@ -59,9 +103,12 @@ jdou jako další migrace nad baseline, ne přepisem historie.
 ## Pracovní postup (povinný pro každou změnu)
 1. Plánuj první. U každého netriviálního úkolu nejdřív připrav plán a nech si ho schválit, než začneš měnit kód nebo databázi.
 2. Agenti jako kontrolní brány. Před dokončením každé změny ji nech zkontrolovat příslušnými specializovanými agenty. Povinné brány: (a) Bezpečnost/RLS u čehokoli kolem přístupů, auth, RLS a klíčů; (b) Databáze/migrace u každé migrace (bezpečná, vratná, bez ztráty dat); (c) Code review u implementace před commitem.
-3. Záloha před zásahem do produkce. Nikdy neaplikuj změnu na produkční DB bez čerstvé zálohy a odsouhlasení PM.
+3. Záloha před zásahem do produkce. Nikdy neaplikuj změnu na produkční DB bez čerstvé
+   zálohy a odsouhlasení PM. Na obojí je **`scripts/safe-deploy.sh <popisek>`** — udělá dump,
+   ověří, že není useknutý, vypíše, na který projekt míří, a teprve pak pustí `db push`.
+   Zálohu z něj nejde přeskočit; ruční `db push` znamená, že jsi ji obešel.
    - **Supabase CLI proti živé databázi = zakázáno bez výslovného souhlasu PM a čerstvé zálohy.** NIKDY nespouštěj `supabase db push` ani `supabase link` sám od sebe. Lokální vývoj (`supabase start`, `supabase db reset`) je bezpečný a míří jen na lokální Docker.
-   - **Kam `db push` doopravdy míří:** na **nalinkovaný** projekt, ne na to, co je v `config.toml`. `project_id` v `supabase/config.toml` je jen lokální jméno Docker kontejnerů a cíl pushe neurčuje (dřívější znění téhle poznámky tvrdilo opak). Link žije v `supabase/.temp/`, což je v `.gitignore` — po čerstvém klonu tam nic není, takže **stav linku si vždycky ověř a nikdy ho nehádej**. Ověřuj **jen pro čtení**: `supabase projects list` (má sloupec `LINKED`) nebo `cat supabase/.temp/linked-project.json`. (Pozor: soubor `project-ref` tenhle CLI nezakládá — kdo se po něm shání, dostane „no such file" a mylně si to přečte jako „nic není nalinkované".) **Nikdy ne `supabase db push --dry-run`** — je to zakázaný příkaz jeden flag od ostrého běhu, na ověřování se nehodí.
+   - **Kam `db push` doopravdy míří:** na **nalinkovaný** projekt, ne na to, co je v `config.toml`. `project_id` v `supabase/config.toml` je jen lokální jméno Docker kontejnerů a cíl pushe neurčuje (dřívější znění téhle poznámky tvrdilo opak). Link žije v `supabase/.temp/`, což je v `.gitignore` — po čerstvém klonu tam nic není, takže **stav linku si vždycky ověř a nikdy ho nehádej**. Ověřuj **jen pro čtení**: `supabase projects list` (má sloupec `LINKED`) nebo `cat supabase/.temp/linked-project.json`. (Ověřeno 2. 9. 2026: soubor `project-ref` tenhle CLI **zakládá** — dřívější znění tvrdilo opak. Rozhodující je stejně `linked-project.json`: nese i jméno projektu, takže je z něj vidět, jestli míříš na produkci, nebo na demo.) **Nikdy ne `supabase db push --dry-run`** — je to zakázaný příkaz jeden flag od ostrého běhu, na ověřování se nehodí.
    - **TŘI projekty, ať se nepletou** (od 31. 8. 2026):
      - `fcwubbytqxubgptftnru` = **curling-promo-prod — OSTRÁ PRODUKCE.** Sem od
        31. 8. 2026 zadává data klient. Web: https://curling-ostrava-system.netlify.app

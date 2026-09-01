@@ -1,10 +1,14 @@
 # Etapa 3 — Fakturoid · STAV
 
-**Aktualizováno:** 24. 8. 2026 · **Větev:** `main`
+**Aktualizováno:** 2. 9. 2026 · **Větev:** `main`
 
-> **Nepushnuto.** Commity leží lokálně, push a merge zůstávají na vyžádání
-> (pravidlo repa). Frontend se z GitHubu nasazuje sám, takže push je rozhodnutí,
-> ne rutina.
+> **Nasazeno na OSTROU produkci** (`fcwubbytqxubgptftnru`) a pushnuto.
+> Od 31. 8. 2026 do systému zadává data klient, takže „lokální commit" už není
+> bezpečné místo, kde nechat práci ležet — nasazuje se po dávkách, každá
+> po čerstvé záloze přes `scripts/safe-deploy.sh`.
+>
+> **Ostrý Fakturoid je pořád VYPNUTÝ.** Klíče míří na testovací účet
+> `tomastest`, cutover na ostrý účet je vědomý ruční krok — viz kapitola 8.
 
 Předávací dokument. Kdo přebírá práci, ať čte tohle první — pak
 `billing/README.md` (pravidla vrstvy) a `docs/ETAPA2-STAV.md` (interní fakturace,
@@ -56,6 +60,56 @@ nová implementace `InvoiceProvider`, aniž se sáhne na jádro.
 a `FAKTUROID_CLIENT_SECRET` nesmí mít ani teoretickou cestu do prohlížeče.
 Hlídá to `billing/hranice.test.ts` — `npm run lint` je v tomhle repu červený už
 na HEADu, takže jako brána nefunguje a ESLint pravidlo by nikdo neuviděl.
+
+---
+
+## 2b. Vlna B — připravenost na cutover (2. 9. 2026)
+
+Čtyři nálezy z předcutoverového review. Společný jmenovatel: **dvě fakturační
+cesty se navzájem neviděly.** Interní engine zamyká rezervaci přes
+`reservations.invoice_id`, fakturoidí přes vazební řádek — a ani jeden se
+neptal na ten druhý.
+
+| Nález | Co bylo | Čím je to zavřené |
+|---|---|---|
+| 5 | Rezervaci mohl zabrat interní i fakturoidí doklad zároveň. Mezi nimi stál jen `vat_mode`, tedy **nastavení, ne zámek**. | Dva zrcadlové triggery — `trg_reservations_jeden_doklad` (BEFORE UPDATE OF `invoice_id`) a `trg_fakturoid_vazba_jeden_doklad` (BEFORE INSERT na vazbu). Každý hlídá z jedné strany. |
+| 6 | „Kdo kolik dluží" fakturoidí doklady **nepočítalo vůbec**. `rozdil = 0` vycházel, ale měřil jen půlku systému: vystavená rezervace zůstala navěky v `k_fakturaci`. | `billing_reconcile` má nově sloupce `fakturoid` (co drží fakturoidí doklad) a `fakturoid_rozdil` (Σ dokladů − Σ rezervací na nich, **musí být 0**). Zabrané rezervace z `k_fakturaci` vypadnou. |
+| 7 | Prázdné `IS_VAT_PAYER` mlčky znamenalo „neplátce". Zapomenutý secret by poslal ostré doklady **bez 12 % DPH** — a to se opravuje dobropisem, ne přepnutím. | Prázdno je nově **chyba**. Před každým vystavením se režim navíc porovná s `billing_settings.vat_mode` (`overDanovyRezim`) — dva zdroje téže pravdy se přestaly moct rozejít. |
+| 4 | `FAKTUROID_LIVE` se načítalo do configu a **nikdo ho nečetl** — gatovalo jen přeskakování integračních testů. Ostrý doklad šlo vystavit jedním příkazem, aniž by to kdokoli vědomě zapnul. | `overPovolenyUcet` chce **dvě nezávislá potvrzení**: `FAKTUROID_LIVE=true` **a** shodu `FAKTUROID_SLUG` s účtem vypsaným v `FAKTUROID_POVOLENY_UCET` (bez něj se bere `FAKTUROID_TEST_SLUG`). Volá se v Edge funkci i v `scripts/fakturoid-akce.ts`. |
+
+Navíc: `fakturoid_smi_volat` **padalo** na prázdném `request.jwt.claims` (pooler
+recykluje spojení) místo slušného odmítnutí — `NULLIF(..., '')` to srovnalo.
+
+**Proč to samo o sobě nestačí a cutover je pořád ruční:** přepnutí
+`FAKTUROID_SLUG` na ostrý účet teď skončí odmítnutím, dokud někdo ten účet
+výslovně nevypíše do `FAKTUROID_POVOLENY_UCET`. To je záměr — překlep ve slugu
+nesmí vystavit doklad cizímu účtu.
+
+**Mutace, které to prokázaly:** bez zámku projde dvojí doklad; bez odečtu
+fakturoidích dokladů zůstane `k_fakturaci` nenulové; se starou
+`fakturoid_smi_volat` test padá na `invalid input syntax for type json`.
+
+---
+
+## 2c. Upozornění na změnu rezervace (2. 9. 2026)
+
+KROK 0 ukázal, že se to nedělo **vůbec**: `reservation_cancelled` bylo od
+začátku vypsané v komentáři u `notifications.type`, jako by existovalo, ale
+nezakládalo ho nic. Správce mohl klubu posunout trénink nebo ho zrušit a klub
+se to dozvěděl jen tím, že si toho v kalendáři sám všiml.
+
+`trg_reservations_notify_change` teď upozorní **autora** rezervace, když s ní
+hne někdo jiný — u přesunu nese zpráva původní i nový čas, u zrušení důvod.
+Vlastní zásah a servisní zápisy (`auth.uid() IS NULL`) neupozorňují. Systém
+e-maily dál neposílá; tohle je upozornění v aplikaci a zvonek ho zobrazí bez
+změny frontendu (nerozlišuje typy).
+
+> **Past, která z toho vylezla a stojí za zapamatování.** Dedup „jedna zpráva
+> na akci" stál původně na `created_at >= now()`. V provozu to vychází (jedno
+> RPC = jedna transakce), ale `now()` je čas **začátku transakce** — a testovací
+> soubor je jedna dlouhá transakce, takže dedup umlčel i scénáře, které spolu
+> nesouvisely, a **obě brány byly falešně zelené**. Teď to drží transakčně
+> lokální značka (`set_config(..., true)`) a každý scénář má vlastní rezervaci.
 
 ---
 
@@ -704,7 +758,9 @@ Kromě pastí z `docs/ETAPA2-STAV.md`, kapitola 5, přibylo tohle:
 
 ## 8. Nasazení — pořadí
 
-1. **Záloha produkční DB** (pravidlo repa, bez ní se nic neaplikuje).
+1. **Záloha produkční DB** — `scripts/safe-deploy.sh <popisek>`. Dump si sám ověří
+   velikost i celistvost a při chybě `db push` vůbec nepustí. Ruční `db push`
+   znamená, že jsi zálohu obešel.
 2. Migrace `20260824120000_fakturoid_vazba.sql` — **nejdřív lokálně**.
 3. Tajemství do **Supabase secrets**, ne do Netlify env (to je pro frontend):
    ```
@@ -748,3 +804,23 @@ Kromě pastí z `docs/ETAPA2-STAV.md`, kapitola 5, přibylo tohle:
 **Integrační testy nikdy nepouštěj s produkčním slugem.** Kromě
 `FAKTUROID_LIVE=true` se musí do `FAKTUROID_TEST_SLUG` opsat jméno účtu, na který
 se smí psát. Doklad v ostré řadě **nejde smazat, jen dobropisovat**.
+
+### Co se od vlny B (2. 9. 2026) změnilo na samotném cutoveru
+
+Přepnout `FAKTUROID_SLUG` na ostrý účet **už nestačí** — zápis skončí
+odmítnutím. Ostrý účet se musí navíc výslovně vypsat:
+
+```
+FAKTUROID_LIVE=true
+FAKTUROID_SLUG=<ostrý účet>
+FAKTUROID_POVOLENY_UCET=<týž ostrý účet>   # druhé, nezávislé potvrzení
+IS_VAT_PAYER=true                          # prázdno je nově CHYBA, ne „neplátce"
+```
+
+`IS_VAT_PAYER` se před každým vystavením porovná s `billing_settings.vat_mode`;
+když se rozejdou, doklad se nevystaví. To je pojistka proti tomu, aby se ta
+„TŘI MÍSTA, JEDEN OKAMŽIK" z bodu 4 rozpadla na dvě a jedno.
+
+**Cutover dělá člověk, ne skript** — klíče do Supabase secrets, kontrola, že
+účet ve Fakturoidu je veden jako plátce, a teprve pak první doklad v režimu
+`koncept`.
