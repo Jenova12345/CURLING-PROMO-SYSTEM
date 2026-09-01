@@ -108,6 +108,15 @@ BEGIN
   -- A teď to jedno kliknutí, které rovnici rozbíjelo.
   PERFORM public.zmen_typ_akce(_ev, 'commercial');
 
+  -- ⚠️ ZNOVU SCHVÁLIT. Od 20260902110000 shodí každá změna ceny razítko
+  -- schválení (bug #5: kdo podepsal 2 400, neměl pod sebou mít 1 600), a bez
+  -- razítka rezervace vypadne z `fakturoid_podklady_akce`. Tady se testuje
+  -- DAŇOVÝ REŽIM, ne schvalovací kolečko, takže se rezervace potvrdí znovu —
+  -- přesně jak by to v provozu udělal zástupce po přecenění.
+  UPDATE public.reservations
+     SET approved_at = now(), approved_by = '11111111-1111-1111-1111-111111111111'
+   WHERE event_id = _ev AND deleted_at IS NULL;
+
   SELECT cena_bez_dph, amount INTO _r FROM public.reservations WHERE id = _rez;
   PERFORM pg_temp.tvrd(_r.cena_bez_dph,
     'po přepnutí na KOMERČNÍ akci je cena vedená bez daně (dostala komerční sazbu)');
