@@ -160,19 +160,47 @@ BEGIN
     '… ale správce haly směnu přeobsadit MŮŽE');
 END $$;
 
--- A dvě RŮZNÉ role jednoho člověka na téže akci musí projít (Jakub, 1. 9.).
+-- -----------------------------------------------------------------------------
+-- 2b) SAMOOBSLUHA: dvě RŮZNÉ role ano, TÁŽ role dvakrát ne
+--
+-- Jde o cestu `open -> pending`, tedy když si směnu bere člověk sám. Admin
+-- přiřazuje přímým zápisem, kde se trigger nespouští — proto se to testuje
+-- právě tímhle přechodem, ne INSERTem.
+-- -----------------------------------------------------------------------------
 DO $$
-DECLARE _ev uuid; _a uuid; _b uuid;
+DECLARE _ev uuid; _bar1 uuid; _bar2 uuid; _instr uuid;
 BEGIN
-  SELECT hodnota::uuid INTO _ev FROM _s WHERE klic='ev';
+  -- VLASTNÍ AKCE: v sekci 2 výš už admin přeobsadil bar téže osobě, takže na
+  -- sdílené akci by první zabrání spadlo na „tuhle roli už máte" a test by
+  -- měřil následek předchozí sekce, ne to, co tvrdí.
+  INSERT INTO public.events (title, event_type, start_time, end_time, created_by)
+  VALUES ('TEST dvě role','commercial','2028-08-08 17:00+02','2028-08-08 19:00+02',
+          '11111111-1111-1111-1111-111111111111') RETURNING id INTO _ev;
+  INSERT INTO public.shifts (event_id, required_role, status) VALUES (_ev,'bar_staff','open')  RETURNING id INTO _bar1;
+  INSERT INTO public.shifts (event_id, required_role, status) VALUES (_ev,'bar_staff','open')  RETURNING id INTO _bar2;
+  INSERT INTO public.shifts (event_id, required_role, status) VALUES (_ev,'instructor','open') RETURNING id INTO _instr;
+
   PERFORM set_config('request.jwt.claims',
-    '{"sub":"11111111-1111-1111-1111-111111111111","role":"authenticated"}', true);
-  INSERT INTO public.shifts (event_id, required_role, status, claimed_by, claimed_at)
-  VALUES (_ev,'bar_staff','claimed','33333333-3333-3333-3333-333333333333', now()) RETURNING id INTO _a;
-  INSERT INTO public.shifts (event_id, required_role, status, claimed_by, claimed_at)
-  VALUES (_ev,'instructor','claimed','33333333-3333-3333-3333-333333333333', now()) RETURNING id INTO _b;
-  PERFORM pg_temp.tvrd(_a IS NOT NULL AND _b IS NOT NULL,
-    'jeden člověk MŮŽE mít na akci dvě různé role (za obě se platí)');
+    '{"sub":"55555555-5555-5555-5555-555555555555","role":"authenticated"}', true);
+
+  UPDATE public.shifts SET status='pending', claimed_by='55555555-5555-5555-5555-555555555555',
+                           claimed_at=now() WHERE id=_bar1;
+  PERFORM pg_temp.tvrd(true, 'samoobsluha: první směna (bar) projde');
+
+  UPDATE public.shifts SET status='pending', claimed_by='55555555-5555-5555-5555-555555555555',
+                           claimed_at=now() WHERE id=_instr;
+  PERFORM pg_temp.tvrd(
+    (SELECT count(*) FROM public.shifts
+      WHERE event_id=_ev AND claimed_by='55555555-5555-5555-5555-555555555555'
+        AND status='pending') = 2,
+    'samoobsluha: DRUHÁ RŮZNÁ role (instruktor) na téže akci PROJDE (Jakub, 1. 9.)');
+
+  PERFORM pg_temp.ocekavej_chybu(
+    format($q$UPDATE public.shifts SET status='pending',
+                     claimed_by='55555555-5555-5555-5555-555555555555', claimed_at=now()
+              WHERE id=%L$q$, _bar2),
+    'už tuhle roli máte',
+    '… ale TÁŽ role (druhý bar) na téže akci NEPROJDE — jedna práce dvakrát placená');
 END $$;
 
 -- -----------------------------------------------------------------------------
