@@ -178,25 +178,122 @@ BEGIN
   SELECT hodnota::uuid INTO _r FROM _s WHERE klic='r_komercni';
   SELECT event_id, cena_bez_dph INTO _ev, _pred FROM public.reservations WHERE id=_r;
   PERFORM public.uprav_sazbu_akce(_ev, 4000);
+  -- `cena_bez_dph = _pred` by NESTAČILO: pod mutací je `_pred` false a rovnost
+  -- platí, takže by scénář prošel i s rozbitou funkcí. Musí se tvrdit i to,
+  -- KTERÁ hodnota to je.
   PERFORM pg_temp.tvrd(
-    (SELECT cena_bez_dph = _pred AND rate_per_hour = 4000 FROM public.reservations WHERE id=_r),
-    'přecenění akce změní sazbu, ale daňový snapshot nechá být');
+    (SELECT _pred AND cena_bez_dph AND rate_per_hour = 4000
+       FROM public.reservations WHERE id=_r),
+    'přecenění akce změní sazbu, ale daňový snapshot (true) nechá být');
 END $$;
 
 -- ---------------------------------------------------------------------------
--- 7) PO MIGRACI UŽ ŽÁDNÁ ŽIVÁ REZERVACE S PRAVIDLEM NEKOLIDUJE
+-- 7) DATOVÁ NÁPRAVA SKUTEČNĚ OPRAVUJE — a nechá razítko úpravy být
+--
+--    Předchozí verze tohohle scénáře počítala živé rezervace odporující
+--    pravidlu a čekala nulu. Jenže seed zakládá rezervace BEZ explicitní
+--    sazby, takže jdou vnitřní větví a jsou konzistentní od začátku, a
+--    zbylé tři si vyrábí sám test a tvrdí je scénáře 1–3. Počítalo to
+--    NULU Z NULY a o DO bloku s nápravou netvrdilo nic — přitom je to
+--    dnes nejsložitější část té migrace (dvě zastávky, `app.preceneni`
+--    na obě strany, DISABLE/ENABLE triggeru) a poprvé se spustila
+--    až na ostré produkci.
 -- ---------------------------------------------------------------------------
 DO $$
-DECLARE _n int;
+DECLARE _r uuid; _kdo uuid; _kdy timestamptz; _castka numeric; _hod numeric;
+        _razitko timestamptz; _notif int; _n int;
 BEGIN
+  SELECT hodnota::uuid INTO _r FROM _s WHERE klic='r_komercni';
+
+  -- Vadný řádek se normální cestou vyrobit nedá — trigger ho po opravě sám
+  -- srovná. Musí se obejít, přesně jako se obchází v samotné migraci.
+  ALTER TABLE public.reservations DISABLE TRIGGER trg_reservations_pricing;
+  UPDATE public.reservations SET cena_bez_dph = false WHERE id = _r;
+  ALTER TABLE public.reservations ENABLE TRIGGER trg_reservations_pricing;
+
+  SELECT updated_by, updated_at, amount, hours, approved_at
+    INTO _kdo, _kdy, _castka, _hod, _razitko
+    FROM public.reservations WHERE id = _r;
+  SELECT count(*) INTO _notif FROM public.notifications;
+
+  PERFORM pg_temp.tvrd((SELECT NOT cena_bez_dph FROM public.reservations WHERE id=_r),
+    'příprava: rezervace má vadný příznak DPH');
+
+  -- ---- TOTÉŽ, CO DĚLÁ MIGRACE ----
+  PERFORM set_config('app.preceneni', 'on', true);
+  ALTER TABLE public.reservations DISABLE TRIGGER trg_reservations_updated;
+  WITH k_naprave AS (
+    SELECT r.id FROM public.reservations r
+      JOIN public.subjects s ON s.id = r.subject_id
+      LEFT JOIN public.events e ON e.id = r.event_id
+     WHERE r.deleted_at IS NULL
+       AND r.cena_bez_dph IS DISTINCT FROM public.cena_je_bez_dph(s.type, e.event_type, s.default_rate))
+  UPDATE public.reservations r SET rate_per_hour = r.rate_per_hour
+    FROM k_naprave k WHERE r.id = k.id;
+  GET DIAGNOSTICS _n = ROW_COUNT;
+  ALTER TABLE public.reservations ENABLE TRIGGER trg_reservations_updated;
+  PERFORM set_config('app.preceneni', 'off', true);
+  -- --------------------------------
+
+  PERFORM pg_temp.tvrd(_n = 1, format('náprava sáhla přesně na 1 rezervaci (sáhla na %s)', _n));
+  PERFORM pg_temp.tvrd((SELECT cena_bez_dph FROM public.reservations WHERE id=_r),
+    'náprava srovnala příznak DPH podle pravidla');
+  PERFORM pg_temp.tvrd(
+    (SELECT amount = _castka AND hours = _hod AND approved_at IS NOT DISTINCT FROM _razitko
+       FROM public.reservations WHERE id=_r),
+    '… a nehnula částkou, hodinami ani razítkem schválení');
+  PERFORM pg_temp.tvrd(
+    (SELECT updated_by IS NOT DISTINCT FROM _kdo AND updated_at = _kdy
+       FROM public.reservations WHERE id=_r),
+    '… a nechala „kdo naposledy zadával" být (DISABLE TRIGGER funguje)');
+  PERFORM pg_temp.tvrd((SELECT count(*) FROM public.notifications) = _notif,
+    '… a nikomu nerozeslala upozornění');
+
   SELECT count(*) INTO _n
     FROM public.reservations r
     JOIN public.subjects s ON s.id = r.subject_id
     LEFT JOIN public.events e ON e.id = r.event_id
    WHERE r.deleted_at IS NULL
      AND r.cena_bez_dph IS DISTINCT FROM public.cena_je_bez_dph(s.type, e.event_type, s.default_rate);
-  PERFORM pg_temp.tvrd(_n = 0,
-    format('žádná živá rezervace neodporuje pravidlu o DPH (nalezeno %s)', _n));
+  PERFORM pg_temp.tvrd(_n = 0, 'po nápravě neodporuje pravidlu žádná živá rezervace');
+END $$;
+
+-- ---------------------------------------------------------------------------
+-- 8) OBĚ ZASTÁVKY MIGRACE OPRAVDU ZASTAVÍ
+--    Bez nich by se rezervace bez sazby místo přeznačení PŘECENILA dnešním
+--    ceníkem a koncová kontrola by to ohlásila jako úspěch.
+-- ---------------------------------------------------------------------------
+DO $$
+DECLARE _bez_sazby int; _na_dokladu int; _v jsonb; _r uuid; _klub uuid; _drah uuid;
+BEGIN
+  SELECT hodnota::uuid INTO _klub FROM _s WHERE klic='klub';
+  SELECT hodnota::uuid INTO _drah FROM _s WHERE klic='drah';
+
+  _v := public.create_booking(ARRAY[_drah], 'training', 'TEST bez sazby',
+        '2028-07-20 09:00+02','2028-07-20 10:00+02', _klub);
+  _r := (_v->'reservation_ids'->>0)::uuid;
+
+  ALTER TABLE public.reservations DISABLE TRIGGER trg_reservations_pricing;
+  UPDATE public.reservations SET rate_per_hour = NULL, cenove_pasma = NULL, cena_bez_dph = true
+   WHERE id = _r;
+  ALTER TABLE public.reservations ENABLE TRIGGER trg_reservations_pricing;
+
+  SELECT count(*) INTO _bez_sazby
+    FROM public.reservations r
+    JOIN public.subjects s ON s.id = r.subject_id
+    LEFT JOIN public.events e ON e.id = r.event_id
+   WHERE r.deleted_at IS NULL AND r.rate_per_hour IS NULL
+     AND r.cena_bez_dph IS DISTINCT FROM public.cena_je_bez_dph(s.type, e.event_type, s.default_rate);
+  PERFORM pg_temp.tvrd(_bez_sazby = 1,
+    'zastávka „rezervace bez sazby" takový řádek najde (a migrace by se zastavila)');
+
+  -- a co by se stalo, kdyby se nezastavila: přecenění dnešním ceníkem
+  PERFORM set_config('app.preceneni', 'on', true);
+  UPDATE public.reservations SET rate_per_hour = rate_per_hour WHERE id = _r;
+  PERFORM set_config('app.preceneni', 'off', true);
+  PERFORM pg_temp.tvrd(
+    (SELECT rate_per_hour IS NOT NULL AND cenove_pasma IS NOT NULL FROM public.reservations WHERE id=_r),
+    '… protože bez ní se rezervace PŘECENÍ z ceníku, ne přeznačí (proto ta zastávka je)');
 END $$;
 
 ROLLBACK;
