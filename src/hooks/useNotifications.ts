@@ -61,15 +61,33 @@ export const useNotifications = () => {
     onSuccess: invalidate,
   });
 
-  // ODKLIZENÍ NENÍ SMAZÁNÍ ani přečtení. Zrušený trénink chci nejdřív vidět
-  // a teprve pak uklidit; v tabulce řádek zůstane (`dismissed_at`), takže
-  // o auditní stopu nepřijdeme.
+  // ODKLIZENÍ NENÍ SMAZÁNÍ. V tabulce řádek zůstane (`dismissed_at`), takže
+  // o auditní stopu nepřijdeme — jen zmizí ze zvonku.
+  //
+  // ODKLIZENÉ SE ZÁROVEŇ ZNAČÍ JAKO PŘEČTENÉ. Křížek funguje i na nepřečtené
+  // položce, takže bez tohohle by odklizením spadl odznak, aniž si to kdo
+  // přečetl — vznikl by řádek „nikdy nepřečteno, a přesto pryč", který mate
+  // každého, kdo by později počítal, kolik upozornění se doopravdy čte.
+  //
+  // Dva dotazy schválně: `read_at` se nastavuje JEN tam, kde je prázdné
+  // (`.is('read_at', null)`), aby se u dávno přečtených nepřepsal původní čas
+  // přečtení časem úklidu. Jedním `update()` to nejde — PostgREST neumí
+  // `COALESCE`, dosadil by novou hodnotu všem.
   const dismiss = useMutation({
     mutationFn: async (ids: string[]) => {
       if (!ids.length) return;
+      const ted = new Date().toISOString();
+
+      const { error: chybaCteni } = await supabase
+        .from('notifications')
+        .update({ read_at: ted })
+        .in('id', ids)
+        .is('read_at', null);
+      if (chybaCteni) throw new Error('Nepodařilo se upozornění odklidit.');
+
       const { error } = await supabase
         .from('notifications')
-        .update({ dismissed_at: new Date().toISOString() })
+        .update({ dismissed_at: ted })
         .in('id', ids);
       if (error) throw new Error('Nepodařilo se upozornění odklidit.');
     },
