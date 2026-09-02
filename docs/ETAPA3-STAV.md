@@ -788,6 +788,26 @@ Kromě pastí z `docs/ETAPA2-STAV.md`, kapitola 5, přibylo tohle:
   `uzivatelskaZprava()` / `proUzivatele()`, nikdy `err.message`.
 - **`fakturovatelne_rezervace` má EXECUTE odebrané i `service_role`** — volá se
   jen z jiné SECURITY DEFINER funkce (`fakturoid_podklady_klub` / `_akce`).
+- **`WARNING: SET LOCAL can only be used in transaction blocks` u migrace
+  NEZNAMENÁ, že soubor běží mimo transakci — a nastavení PLATÍ.** Změřeno
+  2. 9. 2026 přes `supabase migration up --local`: varování přijde, a přesto
+  `current_setting('lock_timeout')` uvnitř téhož souboru vrátí `3s`. Postgres
+  to varování vydává i v IMPLICITNÍ transakci (víc příkazů v jedné simple
+  query), kterou CLI zakládá — jen tam nejde o explicitní `BEGIN` blok.
+  - **Soubor je atomický.** Rozhodující zkouška: migrace, která založí tabulku
+    a pak spadne na `SELECT 1/0`, po sobě **nenechá nic** — tabulka založená
+    před pádem neexistuje. Tvrzení v `20260901160000_smeny_nejdou_zdvojit.sql`
+    („migrace běží v transakci", a proto tam není `CONCURRENTLY`) je tedy
+    **správné** a `CREATE INDEX CONCURRENTLY` v migraci opravdu použít nejde.
+  - Praktický důsledek: `DROP POLICY` → `CREATE POLICY` v jednom souboru
+    **nemá okno**, ve kterém by tabulka byla bez politiky. Klienti nic nepoznají.
+  - **Pozor na to, čím to měříš.** Pustit soubor rourou do `psql` je autocommit
+    a o chování `supabase db push` / `migration up` to nevypovídá nic. Právě
+    tenhle omyl mě 2. 9. 2026 vedl k tomu, že jsem v migracích
+    `20260902260000`–`266000` u `SET lock_timeout` napsal odůvodnění, které
+    NEPLATÍ („`SET LOCAL` by mimo transakční blok jen varoval a neplatil").
+    Samotné `SET` + `RESET` je funkčně v pořádku, mylné je to zdůvodnění;
+    soubory se neopravují, protože jsou už aplikované na produkci.
 - **`amount = hodiny × rate_per_hour` UŽ NEPLATÍ.** U pásmové rezervace je
   sazba odvozený průměr a součin dá o haléř míň. Autoritativní je `amount`
   a `cenove_pasma`.
