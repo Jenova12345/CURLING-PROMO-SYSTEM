@@ -1,9 +1,11 @@
+import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { formatDistanceToNow } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { Bell, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 import { useNotifications, type Notification } from '@/hooks/useNotifications';
 
@@ -12,14 +14,51 @@ import { useNotifications, type Notification } from '@/hooks/useNotifications';
 // E-maily jsou zatím vypnuté.
 export function NotificationBell({ className }: { className?: string }) {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const { notifications, unreadCount, markRead, markAllRead, dismiss, dismissAllRead } =
     useNotifications();
+  const seznamRef = useRef<HTMLDivElement>(null);
+  const [hlaseni, setHlaseni] = useState('');
 
   const readCount = notifications.length - unreadCount;
 
+  // KAŽDÁ AKCE MUSÍ BÝT SLYŠET, KDYŽ SELŽE.
+  //
+  // Původně tu visely holé `markAllRead()` a `dismissAllRead()` — plovoucí
+  // promise bez `catch`. Mutace v hooku navíc nemají `onError`, takže ty
+  // pečlivě napsané hlášky („Nepodařilo se…") nikdo nikdy neuviděl. Kdyby
+  // zápis odmítla RLS nebo síť, tlačítko by se tvářilo, že nic nedělá — což
+  // je PŘESNĚ ten symptom, kvůli kterému tahle oprava vznikla, jen s jinou
+  // příčinou.
+  const provest = async (akce: () => Promise<unknown>, popisChyby: string) => {
+    try {
+      await akce();
+      return true;
+    } catch (e) {
+      toast({
+        title: popisChyby,
+        description: e instanceof Error ? e.message : undefined,
+        variant: 'destructive',
+      });
+      return false;
+    }
+  };
+
   const open = async (n: Notification) => {
-    if (!n.read_at) await markRead([n.id]).catch(() => undefined);
+    if (!n.read_at) await provest(() => markRead([n.id]), 'Nepodařilo se označit jako přečtené');
     if (n.link) navigate(n.link);
+  };
+
+  const odklidit = async (n: Notification) => {
+    if (!(await provest(() => dismiss([n.id]), 'Nepodařilo se upozornění odklidit'))) return;
+    // FOKUS NESMÍ SPADNOUT NA <body>.
+    //
+    // Odklizená položka se odmountuje i s právě fokusovaným křížkem. Kdo jde
+    // panelem z klávesnice, byl by tím vystrčený ven a další Tab by pokračoval
+    // od začátku dokumentu. Vracíme fokus na seznam; čtečce to zároveň
+    // oznámíme, protože zmizení řádku sama o sobě žádná událost není.
+    seznamRef.current?.focus();
+    setHlaseni(`Upozornění odklizeno: ${n.title}`);
   };
 
   return (
@@ -44,12 +83,18 @@ export function NotificationBell({ className }: { className?: string }) {
           </span>
           <div className="flex shrink-0 items-center gap-3">
             {unreadCount > 0 && (
-              <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => markAllRead()}>
+              <Button
+                variant="link" size="sm" className="h-auto p-0 text-xs"
+                onClick={() => void provest(markAllRead, 'Nepodařilo se označit upozornění jako přečtená')}
+              >
                 Označit přečtené
               </Button>
             )}
             {readCount > 0 && (
-              <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => dismissAllRead()}>
+              <Button
+                variant="link" size="sm" className="h-auto p-0 text-xs"
+                onClick={() => void provest(dismissAllRead, 'Nepodařilo se odklidit přečtená upozornění')}
+              >
                 Uklidit přečtené
               </Button>
             )}
@@ -59,22 +104,28 @@ export function NotificationBell({ className }: { className?: string }) {
         {/*
           ROLOVÁNÍ SCHVÁLNĚ BEZ `ScrollArea`.
           Radixový `ScrollArea` má na kořeni `overflow-hidden` a uvnitř viewport
-          s `h-full`. S `max-h-80` na kořeni tedy `h-full` nemá vůči čemu
-          dopočítat výšku, přetečení nevznikne a obsah se jen OŘÍZNE — přesně
-          Jakubův symptom „mám 9 upozornění, vidím 4 a nedá se posunout".
-          Obyčejný `overflow-y-auto` na seznamu roluje a při jednom upozornění
-          nedělá z panelu prázdných 320 px.
+          s `h-full`. Kořen s `max-h-80` má ale `height: auto`, a `height: 100%`
+          se proti takovému rodiči rezolvuje taky na `auto` — viewport naroste
+          na celou výšku obsahu, přetečení uvnitř nikdy nevznikne a `overflow-
+          hidden` obsah jen OŘÍZNE. Přesně Jakubův symptom „mám 9 upozornění,
+          vidím 4 a nedá se posunout". Obyčejný `overflow-y-auto` roluje
+          a při jednom upozornění nedělá z panelu prázdných 320 px.
+          `overscroll-contain` drží scroll uvnitř panelu.
         */}
-        <div className="max-h-80 overflow-y-auto overscroll-contain">
+        <div
+          ref={seznamRef}
+          tabIndex={-1}
+          className="max-h-80 overflow-y-auto overscroll-contain outline-none"
+        >
           {notifications.length === 0 ? (
             <p className="p-4 text-sm text-muted-foreground">Zatím žádná upozornění.</p>
           ) : (
             <ul className="divide-y">
               {notifications.map((n) => (
-                <li key={n.id} className={cn('relative group', !n.read_at && 'bg-primary/5')}>
+                <li key={n.id} className={cn('relative', !n.read_at && 'bg-primary/5')}>
                   <button
                     type="button"
-                    onClick={() => open(n)}
+                    onClick={() => void open(n)}
                     className="w-full py-2 pl-3 pr-9 text-left hover:bg-accent"
                   >
                     <div className="flex items-start gap-2">
@@ -88,13 +139,14 @@ export function NotificationBell({ className }: { className?: string }) {
                       </div>
                     </div>
                   </button>
-                  {/* Odklidit jednotlivé upozornění — typicky to ke zrušené rezervaci,
-                      které jsem si přečetl a dál ho ve schránce nechci. */}
+                  {/* Křížek je SOUROZENEC hlavního tlačítka, ne potomek — tlačítko
+                      v tlačítku je neplatné HTML a klik by probublal do `open`.
+                      Místo mu drží `pr-9` na hlavním tlačítku. */}
                   <button
                     type="button"
                     aria-label={`Odklidit upozornění: ${n.title}`}
                     title="Odklidit"
-                    onClick={() => dismiss([n.id]).catch(() => undefined)}
+                    onClick={() => void odklidit(n)}
                     className="absolute right-1 top-1.5 rounded p-1 text-muted-foreground opacity-60 hover:bg-accent hover:text-foreground hover:opacity-100 focus-visible:opacity-100"
                   >
                     <X className="h-3.5 w-3.5" />
@@ -104,6 +156,7 @@ export function NotificationBell({ className }: { className?: string }) {
             </ul>
           )}
         </div>
+        <span aria-live="polite" className="sr-only">{hlaseni}</span>
       </PopoverContent>
     </Popover>
   );
