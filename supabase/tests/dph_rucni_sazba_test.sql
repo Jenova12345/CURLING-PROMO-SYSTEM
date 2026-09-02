@@ -4,7 +4,12 @@
 -- =============================================================================
 -- MUTAČNÍ ZKOUŠKA: vrať v `set_reservation_pricing()` podmínku
 -- `AND NEW.rate_per_hour IS NULL` zpátky na VNĚJŠÍ `IF` a pusť to znovu.
--- Musí zčervenat na scénáři 1 (a s ním i 4, protože „Kdo dluží" z toho počítá).
+-- Musí zčervenat na scénáři 1, 1b a 4 („Kdo dluží" z toho počítá).
+--
+-- Scénáře 2 a 3 zčervenat NEMUSÍ a taky nezčervenají — tvrdí `false` a rozbitá
+-- funkce dává `false` taky. Změřeno, ne odhadnuto. Jsou to regresní pojistky
+-- proti tomu, aby oprava neotočila klubovou stranu, ne detektory nálezu; kdo
+-- se na sílu téhle sady spoléhá, ať to ví.
 -- =============================================================================
 
 \set ON_ERROR_STOP on
@@ -71,7 +76,38 @@ BEGIN
 END $$;
 
 -- ---------------------------------------------------------------------------
+-- 1b) KOMERČNÍ AKCE NA KLUBOVÉM SUBJEKTU + ruční sazba → taky true
+--
+--     ⚠️ TENHLE SCÉNÁŘ TU JE ZÁMĚRNĚ, A NE JAKO OZDOBA. Scénáře 2 a 3 níž
+--     tvrdí `false` — a rozbitá funkce dává `false` taky (příznak zůstane na
+--     defaultu sloupce), takže by prošly i BEZ opravy. Změřeno: s vrácenou
+--     vadnou funkcí projde scénář 2 i 3, spadne jen 1. Jsou to tedy regresní
+--     pojistky, ne detektory.
+--
+--     Rozliší to jedině případ, kde se pravidlo a default ROZCHÁZEJÍ na
+--     klubové straně: klub, ale komerční akce. Přesně ta kombinace, kterou
+--     zmiňuje komentář v `set_reservation_pricing()` jako důvod, proč se
+--     daňový význam snapshotuje spolu se sazbou — kontrolní součet se na ní
+--     kdysi rozešel o 12 %.
+-- ---------------------------------------------------------------------------
+DO $$
+DECLARE _v jsonb; _r uuid; _klub uuid; _drah uuid;
+BEGIN
+  SELECT hodnota::uuid INTO _klub FROM _s WHERE klic='klub';
+  SELECT hodnota::uuid INTO _drah FROM _s WHERE klic='drah';
+
+  _v := public.create_booking(ARRAY[_drah], 'commercial', 'TEST klub komercni akce',
+        '2028-07-06 09:00+02','2028-07-06 11:00+02', _klub, NULL, '{"instructor":1}'::jsonb, 3000);
+  _r := (_v->'reservation_ids'->>0)::uuid;
+
+  PERFORM pg_temp.tvrd(
+    (SELECT cena_bez_dph FROM public.reservations WHERE id=_r),
+    'KLUBOVÝ subjekt + KOMERČNÍ akce + ruční sazba → true (druhý detektor F3)');
+END $$;
+
+-- ---------------------------------------------------------------------------
 -- 2) KLUB s ruční sazbou — klubová cena je vedená VČETNĚ DPH, tedy false
+--    REGRESNÍ POJISTKA, ne detektor: projde i bez opravy (viz 1b).
 -- ---------------------------------------------------------------------------
 DO $$
 DECLARE _v jsonb; _r uuid; _klub uuid; _drah uuid;
@@ -90,6 +126,7 @@ END $$;
 
 -- ---------------------------------------------------------------------------
 -- 3) PÁSMOVÁ CESTA SE NESMÍ HNOUT — klub bez ruční sazby
+--    REGRESNÍ POJISTKA, ne detektor: projde i bez opravy (viz 1b).
 -- ---------------------------------------------------------------------------
 DO $$
 DECLARE _v jsonb; _r uuid; _klub uuid; _drah uuid;
