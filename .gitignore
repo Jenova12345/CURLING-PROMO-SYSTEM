@@ -53,3 +53,6 @@ demo_update_*.sql
 
 # Ukázkové doklady z scripts/render-vzorky.mjs — vizuální kontrola, ne artefakt.
 vzorky/
+
+# Pomocné jednorázové skripty (suchý běh, kontroly configu) — neverzují se.
+scripts/.tmp/

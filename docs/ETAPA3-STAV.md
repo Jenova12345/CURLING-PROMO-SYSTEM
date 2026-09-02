@@ -113,6 +113,48 @@ změny frontendu (nerozlišuje typy).
 
 ---
 
+## 2d. OTEVŘENÝ NÁLEZ — `cena_bez_dph` u ručně zadané sazby (2. 9. 2026)
+
+**Neopraveno, čeká na rozhodnutí.** Našlo se to při přípravě cutoveru.
+
+Cenová větev v `set_reservation_pricing` běží jen když `NEW.rate_per_hour IS NULL`.
+Admin ale sazbu zadat MŮŽE (`create_booking(p_rate)`, úprava komerční akce) a jeho
+hodnotu žádný guard nenuluje — ne-adminům ji `guard_reservation_rep_changes`
+přepisuje na NULL, admin tou výjimkou projde. Když sazba přijde vyplněná, větev
+se přeskočí a `cena_bez_dph` zůstane na DEFAULTU sloupce, tedy `false`.
+
+Reprodukováno lokálně dvěma jinak identickými komerčními rezervacemi:
+
+```
+A) bez sazby ... cena_bez_dph = t   (sazba 5000, částka 10000)
+B) se sazbou ... cena_bez_dph = f   (sazba 5000, částka 10000)   ← špatně
+funkce cena_je_bez_dph říká pro obě: t
+```
+
+**Proč to jsou peníze.** Pod `vat_mode = platce` znamená `cena_bez_dph = false`,
+že `amount` je částka VČETNĚ daně. U komerční akce je to naopak základ. Dluh
+se tím podhodnotí o celou sazbu: místo 10 000 + 12 % = 11 200 Kč systém tvrdí,
+že zákazník dluží 10 000 Kč.
+
+**Rozsah na produkci k 2. 9. 2026:** 4 rezervace, 22 000 Kč základu,
+**2 640 Kč nezapočítané DPH** (Deloitte, Hybridní vzdělávání, 2× ZŠ Bulharská).
+
+Fakturaci to nepustí dál — daňová brána z vlny B tyhle podklady odmítá
+(„Doklad za akci by míchal ceny s DPH a bez DPH"). To je brána dělající svou
+práci, ne chyba v zadání: subjekty jsou správně typu `commercial` a **v aplikaci
+to nejde opravit**, protože chybná hodnota není nic, co by šlo přepsat formulářem.
+
+**Navržená oprava** (dvě části, obojí měřit mutací):
+1. `cena_bez_dph` počítat i tehdy, když sazba přijde zvenčí — je to odvozená
+   hodnota z `cena_je_bez_dph(typ subjektu, typ akce, sazba subjektu)`
+   a na tom, kdo vyplnil `rate_per_hour`, nezávisí.
+2. Jednorázová náprava těch 4 řádků, aby dluh seděl.
+
+Hlídat by to měl invariant: `cena_bez_dph` se nikdy nesmí rozejít s tím, co
+vrací `cena_je_bez_dph` pro týž subjekt a typ akce.
+
+---
+
 ## 3. Jak to funguje
 
 ```
@@ -804,6 +846,47 @@ Kromě pastí z `docs/ETAPA2-STAV.md`, kapitola 5, přibylo tohle:
 **Integrační testy nikdy nepouštěj s produkčním slugem.** Kromě
 `FAKTUROID_LIVE=true` se musí do `FAKTUROID_TEST_SLUG` opsat jméno účtu, na který
 se smí psát. Doklad v ostré řadě **nejde smazat, jen dobropisovat**.
+
+### Jak se ostrá fakturace SKUTEČNĚ zapne (2. 9. 2026)
+
+Až skončí první komerční akce. Do té doby není co fakturovat — k 2. 9. 2026 jsou
+všechny akce na produkci v budoucnu.
+
+**1. Klíče patří do Supabase secrets, ne do `.env`.** Ostrý doklad vystavuje
+**Edge funkce `fakturoid-invoice`**, protože jediná čte produkční databázi.
+`scripts/fakturoid-akce.ts` čte přes `supabase status` z **lokálního Dockeru** —
+spustit ho s ostrými klíči znamená poslat na účet haly seedová testovací data.
+Lokální `.env` je proto na vývoj, ne na cutover.
+
+```
+supabase secrets set --project-ref fcwubbytqxubgptftnru \
+  FAKTUROID_SLUG=<ostrý účet> \
+  FAKTUROID_POVOLENY_UCET=<týž ostrý účet> \
+  FAKTUROID_CLIENT_ID=… FAKTUROID_CLIENT_SECRET=… \
+  FAKTUROID_USER_AGENT='CurlingPromo (kontakt@email)' \
+  IS_VAT_PAYER=true FAKTUROID_MODE=koncept FAKTUROID_LIVE=true
+```
+
+`FAKTUROID_POVOLENY_UCET` se musí rovnat `FAKTUROID_SLUG` — je to schválně
+opisování podruhé, aby překlep ve slugu doklad neposlal cizímu účtu.
+`IS_VAT_PAYER` musí sedět s `billing_settings.vat_mode` (dnes `platce`), jinak
+se doklad nevystaví. Prázdno je chyba, ne „neplátce".
+
+**2. Doklad je ve Fakturoidu rovnou OSTRÝ.** Fakturoid stav „koncept" nezná
+(kapitola 5) — `POST /invoices.json` založí plnohodnotný doklad s číslem
+v ostré řadě. Náš `FAKTUROID_MODE=koncept` znamená jen „neposílat e-mail".
+**Vystavení je tedy vědomý úkon, ne náhled.** Omyl se neopravuje smazáním, ale
+stornem nebo dobropisem. Kdo si chce jen prohlédnout, jak doklad vypadá, ať to
+udělá na testovacím účtu — mapování, řádky i zaokrouhlení jsou tytéž.
+
+**3. Pořadí.** Jedna skončená komerční akce → zkontrolovat odběratele, řádky
+a součet → teprve pak další. Po prvním dokladu ověřit, že
+`billing_reconcile(…)` má `fakturoid_rozdil = 0` a že se rezervace odečetly
+z `k_fakturaci`. `FAKTUROID_MODE=odeslat` až po týdnu a až budou mít subjekty
+vyplněný e-mail (jinak Fakturoid vrátí 422).
+
+**4. Netlify env s tím nemá nic společného** — to je jen pro frontend
+(`VITE_*`). Fakturoidí tajemství tam nepatří.
 
 ### Co se od vlny B (2. 9. 2026) změnilo na samotném cutoveru
 
