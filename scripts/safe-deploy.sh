@@ -38,8 +38,26 @@ if [ ! -f "$LINK_FILE" ]; then
   echo "   Zastavuji — nasazovat naslepo se nebude." >&2
   exit 1
 fi
-REF=$(python3 -c "import json,sys; print(json.load(open('$LINK_FILE'))['ref'])")
-NAZEV=$(python3 -c "import json,sys; print(json.load(open('$LINK_FILE'))['name'])")
+# Čím ten JSON přečíst. Na Windows je `python3` na PATH zástupce z Microsoft
+# Store, který jen vypíše „Python nebyl nalezen" a skončí s kódem 49 — takže
+# `command -v python3` uspěje, ale spuštění stejně spadne. Proto se každý
+# kandidát musí opravdu spustit, ne jen najít na PATH.
+PY=""
+for KANDIDAT in python3 python py; do
+  if command -v "$KANDIDAT" >/dev/null 2>&1 && "$KANDIDAT" -c 'import json' >/dev/null 2>&1; then
+    PY="$KANDIDAT"; break
+  fi
+done
+if [ -z "$PY" ]; then
+  echo "❌ Není čím přečíst $LINK_FILE: nenašel jsem funkční python3, python ani py." >&2
+  echo "   Zastavuji — cíl nasazení se hádat nebude." >&2
+  exit 1
+fi
+# Cesta jde do Pythonu jako argument, ne vlepená do zdrojáku. Kdyby ji někdo
+# přepsal na windowsovou (`C:\Users\...`), interpolace by z `\U` udělala
+# rozbitý escape a skript by spadl na SyntaxError.
+REF=$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["ref"])' "$LINK_FILE")
+NAZEV=$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["name"])' "$LINK_FILE")
 echo "── CÍL ────────────────────────────────────────────────"
 echo "   projekt: $NAZEV  ($REF)"
 [ "$REF" = "fcwubbytqxubgptftnru" ] && echo "   ⚠ TOHLE JE OSTRÁ PRODUKCE — platí docs/PRODUKCE-PRAVIDLA.md"
