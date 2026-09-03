@@ -215,6 +215,9 @@ export const useReservations = (range: DateRange | null) => {
     queryClient.invalidateQueries({ queryKey: ['reservations-calendar'] });
     queryClient.invalidateQueries({ queryKey: ['calendar-shift-fill'] });
     queryClient.invalidateQueries({ queryKey: ['shifts'] });
+      // Zrušení rezervace je právě ten okamžik, kdy se množina zrušených akcí
+      // mění — bez tohohle by filtr nabídek běžel na starých datech.
+      queryClient.invalidateQueries({ queryKey: ['zrusene-akce-se-smenami'] });
     queryClient.invalidateQueries({ queryKey: ['notifications'] });
     queryClient.invalidateQueries({ queryKey: ['dues'] });
   };

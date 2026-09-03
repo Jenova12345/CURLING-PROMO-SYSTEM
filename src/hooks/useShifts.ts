@@ -1,10 +1,23 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { bezZrusenychAkci } from '@/lib/nabidkySmen';
 
 export const useShifts = () => {
   const { user, isAdmin, isStaff, roles } = useAuth();
   const queryClient = useQueryClient();
+
+  // Akce, které jsou zrušené. Chodí z RPC, protože brigádník na `reservations`
+  // nevidí a sám by si to spočítat nemohl — viz `src/lib/nabidkySmen.ts`.
+  const { data: zruseneAkce = new Set<string>() } = useQuery({
+    queryKey: ['zrusene-akce-se-smenami'],
+    queryFn: async () => {
+      const { data, error } = await (supabase as any).rpc('zrusene_akce_se_smenami');
+      if (error) throw error;
+      return new Set<string>(((data || []) as string[]).filter(Boolean));
+    },
+    enabled: !!user && (isAdmin || isStaff),
+  });
 
   // Fetch all staff (all staff roles) for admin to assign shifts
   const { data: availableStaff = [] } = useQuery({
@@ -129,6 +142,12 @@ export const useShifts = () => {
         if (error.message.includes('již máte jinou směnu')) {
           throw new Error('Na této akci již máte jinou směnu.');
         }
+        // Hláška z databáze se propouští, protože nese důvod, který uživatel
+        // jinak nemá odkud vzít: obecné „nepodařilo se" u zrušené akce vypadá
+        // jako výpadek, ne jako pravidlo.
+        if (error.message.includes('Akce je zrušená')) {
+          throw new Error('Akce je zrušená, směnu na ní vzít nelze.');
+        }
         throw new Error('Nepodařilo se přihlásit na směnu.');
       }
       return data;
@@ -155,6 +174,9 @@ export const useShifts = () => {
         .single();
 
       if (error) {
+        if (error.message.includes('Akce je zrušená')) {
+          throw new Error('Akce je zrušená, směnu na ní schválit nelze.');
+        }
         throw new Error('Nepodařilo se schválit směnu.');
       }
       return data;
@@ -375,7 +397,12 @@ export const useShifts = () => {
   
   // Filter open shifts - exclude events where user already has a shift
   // Staff sees only shifts matching their roles (or shifts without required_role for backward compat)
-  const openShifts = shifts.filter(s => {
+  //
+  // Směny zrušených akcí se nenabízejí (Jakubův nález 3. 9. 2026). Je to druhá
+  // pojistka — po migraci 20260903120000 je taková směna v databázi `cancelled`,
+  // takže sem nedojde. Filtr chrání případ, kdy by se sem starší řádek dostal
+  // dřív, než ho invariant zavře.
+  const openShifts = bezZrusenychAkci(shifts, zruseneAkce).filter(s => {
     if (s.status !== 'open') return false;
     if (myEventIds.has(s.event_id)) return false;
     
@@ -602,6 +629,10 @@ export const useShifts = () => {
 
   return {
     shifts,
+    // Ven kvůli kalendáři: `IceCalendar` si staví vlastní seznam nabídek
+    // z `shifts`, takže potřebuje tentýž filtr. Kdyby ho neměl, pojistka by
+    // kryla jen jednu ze dvou cest, kterými se brigádníkovi směna nabídne.
+    zruseneAkce,
     openShifts,
     openShiftsByEvent,
     availableStaff,

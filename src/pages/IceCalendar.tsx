@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useEvents } from '@/hooks/useEvents';
 import { useShifts } from '@/hooks/useShifts';
+import { bezZrusenychAkci } from '@/lib/nabidkySmen';
 import { useShiftApplications } from '@/hooks/useShiftApplications';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -33,7 +34,7 @@ type Event = Database['public']['Tables']['events']['Row'] & { event_type: Event
 const IceCalendar = () => {
   const { isAdmin, isStaff, user } = useAuth();
   const { events, createEvent, updateEvent, deleteEvent, isCreating, isUpdating, isDeleting } = useEvents();
-  const { shifts } = useShifts();
+  const { shifts, zruseneAkce } = useShifts();
   const {
     myApplications,
     applyToShift,
@@ -208,8 +209,12 @@ const IceCalendar = () => {
     const myShiftsForDay = dayShifts.filter(s => s.claimed_by === user?.id);
     
     // Group open shifts by event
+    //
+    // Směny zrušených akcí se nenabízejí — stejné pravidlo jako v `useShifts`.
+    // Filtruje se AŽ TADY, ne nad `dayShifts`: admin má výš (`if (isAdmin)`)
+    // vidět i zrušené řádky, jsou pro něj audit.
     const openShiftsByEventForDay = Object.values(
-      dayShifts
+      bezZrusenychAkci(dayShifts, zruseneAkce)
         .filter(s => s.status === 'open' && !myEventIds.has(s.event_id))
         .reduce((acc, shift) => {
           const eventId = shift.event_id;
