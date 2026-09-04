@@ -109,7 +109,7 @@ CREATE TRIGGER trg_subject_reps_zavri_zadost
 -- `decided_by` schválně z `subject_reps.created_by`, ne z `auth.uid()`:
 -- migraci pouští `postgres` bez přihlášeného uživatele, takže `auth.uid()`
 -- je NULL. Kdo členství založil, je zaznamenané u něj.
-DO $doběh$
+DO $dobeh$
 DECLARE _n integer;
 BEGIN
   UPDATE public.subject_requests r
@@ -122,7 +122,7 @@ BEGIN
      AND r.status      = 'ceka';
   GET DIAGNOSTICS _n = ROW_COUNT;
   RAISE NOTICE 'Uvízlé žádosti uzavřeny: % řádků.', _n;
-END $doběh$;
+END $dobeh$;
 
 -- ---------------------------------------------------------------------------
 -- 3) Sebekontrola
