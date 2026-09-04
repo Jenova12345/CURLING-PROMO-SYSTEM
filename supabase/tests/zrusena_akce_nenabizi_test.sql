@@ -77,6 +77,8 @@ BEGIN
     PERFORM set_config('role', 'none', true);
     IF SQLERRM LIKE '%Akce je zrušená%'
        OR SQLERRM LIKE '%Směnu nelze přesunout%'
+       OR SQLERRM LIKE '%Zrušenou směnu znovu otevírá%'
+       OR SQLERRM LIKE '%Do zrušené směny už zapisovat nelze%'
        OR SQLERRM LIKE '%Nemůžete zrušit cizí%'
        OR SQLERRM LIKE '%violates row-level security policy%'
        OR SQLERRM LIKE '%porušuje zásadu zabezpečení na úrovni řádků%' THEN
@@ -100,6 +102,36 @@ BEGIN
   GET DIAGNOSTICS _n = ROW_COUNT;
   PERFORM set_config('role', 'none', true);
   RETURN _n;
+END $$;
+
+-- Vrátí true, když zápis NEPROŠEL — ať už výjimkou z naší brány, nebo TIŠE.
+--
+-- RLS má dva různé způsoby, jak odmítnout: porušený `WITH CHECK` vyhodí chybu,
+-- kdežto porušený `USING` jen nedotkne žádný řádek a mlčí. Druhá vrstva téhle
+-- opravy sedí právě v `USING`, takže test, který čeká výjimku, by ji prohlásil
+-- za nefunkční. Proto se tady kontroluje i počet dotčených řádků.
+CREATE OR REPLACE FUNCTION pg_temp.neprojde(_sql text, _uziv uuid) RETURNS boolean
+ LANGUAGE plpgsql AS $$
+DECLARE _n integer;
+BEGIN
+  BEGIN
+    PERFORM set_config('role', 'authenticated', true);
+    PERFORM set_config('request.jwt.claims',
+      json_build_object('sub', _uziv, 'role', 'authenticated')::text, true);
+    EXECUTE _sql;
+    GET DIAGNOSTICS _n = ROW_COUNT;
+    PERFORM set_config('role', 'none', true);
+    RETURN _n = 0;
+  EXCEPTION WHEN OTHERS THEN
+    PERFORM set_config('role', 'none', true);
+    IF SQLERRM LIKE '%Zrušenou směnu znovu otevírá%'
+       OR SQLERRM LIKE '%Do zrušené směny už zapisovat nelze%'
+       OR SQLERRM LIKE '%Roli na směně mění jen správce haly%'
+       OR SQLERRM LIKE '%violates row-level security policy%' THEN
+      RETURN true;
+    END IF;
+    RAISE EXCEPTION 'Zápis selhal z JINÉHO důvodu než kvůli bráně: %', SQLERRM;
+  END;
 END $$;
 
 -- ---------------------------------------------------------------------------
@@ -529,6 +561,180 @@ BEGIN
     '12a) RPC vrací NEADMINOVI zrušenou akci (drží SECURITY DEFINER)');
   PERFORM pg_temp.tvrd(NOT ('00000000-0000-0000-0000-0000000000a1' = ANY(_zrusene)),
     '12b) RPC nevydává živou akci za zrušenou');
+END $$;
+
+-- ---------------------------------------------------------------------------
+-- 13) Zavřená směna je zavřená
+-- ---------------------------------------------------------------------------
+-- N1: zrušenou směnu na ŽIVÉ akci šlo jedním UPDATE oživit na `pending`
+--     s cizí rolí a zděděnou sazbou (starší díra od 20260902240000).
+-- N2: do cizí zavřené směny na zrušené akci šlo zapsat, kdo ji držel a kdo
+--     a kdy ji zrušil (regrese z 20260903120000).
+-- Fixtura pro N1: zrušená trenérská směna za 600 Kč/h na akci, která ŽIJE —
+-- přesně to, co v provozu vyrobí `odeber_trenera` nebo přebytek v `dorovnej_stab`.
+INSERT INTO public.shifts (id, event_id, required_role, status, hourly_rate)
+VALUES ('00000000-0000-0000-0000-0000000000e9', '00000000-0000-0000-0000-0000000000a1',
+        'trainer', 'cancelled', 600);
+
+SELECT pg_temp.tvrd(
+  NOT public.akce_je_zrusena('00000000-0000-0000-0000-0000000000a1')
+  AND (SELECT status::text FROM public.shifts WHERE id = '00000000-0000-0000-0000-0000000000e9') = 'cancelled',
+  'FIXTURA: zrušená směna na ŽIVÉ akci existuje (to, co vyrobí odeber_trenera)');
+
+-- Vrstvy se měří ZVLÁŠŤ, jinak jedna zastíní druhou a mutace na tu zastíněnou
+-- nezčervená. Tady se vypíná RLS, takže odpovídá TRIGGER; níž (13g–13i) se
+-- vypíná trigger, takže odpovídá RLS.
+ALTER TABLE public.shifts DISABLE ROW LEVEL SECURITY;
+
+SELECT pg_temp.tvrd(pg_temp.odmitnuto($sql$
+  UPDATE public.shifts
+     SET status = 'pending', claimed_by = '30e86078-5435-445b-9a87-5f0c691c388f', claimed_at = now()
+   WHERE id = '00000000-0000-0000-0000-0000000000e9'
+$sql$, '30e86078-5435-445b-9a87-5f0c691c388f'),
+  '13a) N1 trigger: oživení zrušené směny na živé akci: ODMÍTNUTO');
+
+SELECT pg_temp.tvrd(pg_temp.odmitnuto($sql$
+  UPDATE public.shifts SET status = 'open', claimed_by = NULL
+   WHERE id = '00000000-0000-0000-0000-0000000000e9'
+$sql$, '30e86078-5435-445b-9a87-5f0c691c388f'),
+  '13b) N1 trigger: totéž přes „vrátit do nabídky": ODMÍTNUTO');
+
+SELECT pg_temp.tvrd(
+  (SELECT hourly_rate FROM public.shifts WHERE id = '00000000-0000-0000-0000-0000000000e9') = 600
+  AND (SELECT status::text FROM public.shifts WHERE id = '00000000-0000-0000-0000-0000000000e9') = 'cancelled',
+  '13c) N1: sazba ani stav zrušené směny se pokusy nezměnily');
+
+-- N2: cizí zavřená směna na ZRUŠENÉ akci (d2 zavřel scénář 2, držel ji Petr)
+SELECT pg_temp.tvrd(pg_temp.odmitnuto($sql$
+  UPDATE public.shifts
+     SET claimed_by   = '30e86078-5435-445b-9a87-5f0c691c388f',
+         cancelled_by = '30e86078-5435-445b-9a87-5f0c691c388f',
+         cancelled_at = '2020-01-01'
+   WHERE id = '00000000-0000-0000-0000-0000000000d2'
+$sql$, '30e86078-5435-445b-9a87-5f0c691c388f'),
+  '13d) N2 trigger: přepsání auditní stopy cizí zavřené směny: ODMÍTNUTO');
+
+ALTER TABLE public.shifts ENABLE ROW LEVEL SECURITY;
+
+-- `claimed_by` je tu NULL schválně: ve scénáři 2 ji držitel legitimně pustil
+-- a trigger ji zavřel. Podstatné je, že útočníkův zápis NEPROŠEL — jinak by
+-- tu bylo jeho id a `cancelled_at` v roce 2020.
+SELECT pg_temp.tvrd(
+  (SELECT claimed_by IS NULL FROM public.shifts WHERE id = '00000000-0000-0000-0000-0000000000d2')
+  AND (SELECT cancelled_at FROM public.shifts WHERE id = '00000000-0000-0000-0000-0000000000d2')
+      > '2025-01-01'::timestamptz,
+  '13e) N2: auditní stopa zůstala nedotčená (útočníkův zápis neprošel)');
+
+-- A protějšek: admin to smí, jinak by se zavřená směna nedala nikdy opravit.
+DO $$
+DECLARE _n integer;
+BEGIN
+  _n := pg_temp.dotceno($sql$
+    UPDATE public.shifts SET status = 'open', claimed_by = NULL
+     WHERE id = '00000000-0000-0000-0000-0000000000e9'
+  $sql$, 'ad69770f-c4e1-401c-bb11-e1ff3ca1c8c5');
+  PERFORM pg_temp.tvrd(_n = 1, '13f) admin zrušenou směnu na živé akci otevřít MŮŽE');
+END $$;
+
+-- Druhá vrstva: RLS musí odmítnout i BEZ triggeru.
+--
+-- Kontrola vlastnictví je schválně na dvou místech — v triggeru i v politice.
+-- Dokud trigger drží, politiku není jak změřit: zastíní ji. Proto se tady
+-- trigger na moment vypne, což je přesně scénář, kvůli kterému druhá vrstva
+-- existuje (někdo trigger vypne kvůli migraci, nebo přibude cesta mimo něj).
+--
+-- Měří se na směně, která si DRŽITELE PAMATUJE. Politika vidí jen výsledný
+-- řádek, ne ten původní, takže u zavřené směny s `claimed_by = NULL` prostě
+-- nemá jak poznat „cizí" od „ničí" — tam drží jen trigger. Zavřená směna
+-- s vyplněným `claimed_by` je přitom běžný stav: `cancel_open_shifts_on_
+-- reservation_cancel` držitele schválně nemaže, je to auditní stopa.
+ALTER TABLE public.shifts DISABLE TRIGGER validate_shift_before_update;
+ALTER TABLE public.shifts DISABLE TRIGGER trg_shifts_a_zrusena_akce;
+
+INSERT INTO public.shifts (id, event_id, required_role, status, claimed_by, cancelled_at)
+VALUES ('00000000-0000-0000-0000-0000000000eb', '00000000-0000-0000-0000-0000000000a2',
+        'instructor', 'cancelled', '494ca54e-b9b5-444b-9d08-2a637c58eda3', now());
+
+-- Útočník si SCHVÁLNĚ nastavuje i `claimed_by` na sebe. První podoba téhle
+-- opravy měla vlastnictví jen ve `WITH CHECK`, které vidí pouze výsledný řádek
+-- — a útočník ho tímhle jedním sloupcem navíc splnil. Test bez `claimed_by`
+-- byl zelený i s obejitelnou ochranou, což je přesně to, co testy nemají dělat.
+SELECT pg_temp.tvrd(pg_temp.neprojde($sql$
+  UPDATE public.shifts
+     SET claimed_by   = '30e86078-5435-445b-9a87-5f0c691c388f',
+         cancelled_by = '30e86078-5435-445b-9a87-5f0c691c388f',
+         cancelled_at = '2020-01-01'
+   WHERE id = '00000000-0000-0000-0000-0000000000eb'
+$sql$, '30e86078-5435-445b-9a87-5f0c691c388f'),
+  '13g) N2 druhá vrstva: i s vypnutým triggerem RLS odmítne zápis do cizí zavřené směny');
+
+SELECT pg_temp.tvrd(
+  (SELECT claimed_by FROM public.shifts WHERE id = '00000000-0000-0000-0000-0000000000eb')
+    = '494ca54e-b9b5-444b-9d08-2a637c58eda3'
+  AND (SELECT extract(year from cancelled_at) FROM public.shifts
+        WHERE id = '00000000-0000-0000-0000-0000000000eb') > 2025,
+  '13h) N2 druhá vrstva: hodnoty na cizí zavřené směně zůstaly původní');
+
+-- N1 přes RLS: oživení zavřené směny musí neprojít i bez triggeru.
+SELECT pg_temp.tvrd(pg_temp.neprojde($sql$
+  UPDATE public.shifts
+     SET status = 'pending', claimed_by = '30e86078-5435-445b-9a87-5f0c691c388f', claimed_at = now()
+   WHERE id = '00000000-0000-0000-0000-0000000000eb'
+$sql$, '30e86078-5435-445b-9a87-5f0c691c388f'),
+  '13i) N1 druhá vrstva: i s vypnutým triggerem RLS oživení zavřené směny NEPUSTÍ');
+
+ALTER TABLE public.shifts ENABLE TRIGGER trg_shifts_a_zrusena_akce;
+ALTER TABLE public.shifts ENABLE TRIGGER validate_shift_before_update;
+
+-- ---------------------------------------------------------------------------
+-- 14) Úklid přihlášek se nedotkne odpracované směny
+-- ---------------------------------------------------------------------------
+-- `20260903160000` tuhle podmínku neměla; opravuje ji 20260903180000.
+INSERT INTO public.shift_applications (id, shift_id, user_id, status)
+VALUES ('00000000-0000-0000-0000-0000000000ea', '00000000-0000-0000-0000-0000000000d3',
+        '30e86078-5435-445b-9a87-5f0c691c388f', 'approved');
+
+UPDATE public.shift_applications a
+   SET status = 'cancelled', updated_at = now()
+  FROM public.shifts s
+ WHERE s.id = a.shift_id
+   AND a.status IN ('pending', 'approved')
+   AND s.status <> 'completed'
+   AND (s.status = 'cancelled' OR public.akce_je_zrusena(s.event_id));
+
+SELECT pg_temp.tvrd(
+  (SELECT status FROM public.shift_applications
+    WHERE id = '00000000-0000-0000-0000-0000000000ea') = 'approved',
+  '14) přihláška u ODPRACOVANÉ směny na zrušené akci zůstala approved');
+
+-- ---------------------------------------------------------------------------
+-- 15) Roli na směně mění jen správce haly (F3)
+-- ---------------------------------------------------------------------------
+-- Starší mezera: `required_role` nehlídala ani politika, ani trigger, a
+-- `trg_shifts_sazba` je BEFORE INSERT only, takže se sazba nepřepočítá.
+-- Změřeno: brigádník si při zabírání volné směny `bar_staff` přepsal roli na
+-- `manager`. Obchází to „jednu roli jednou" i vazbu role na člověka.
+SELECT pg_temp.tvrd(pg_temp.neprojde($sql$
+  UPDATE public.shifts
+     SET status = 'pending', claimed_by = '30e86078-5435-445b-9a87-5f0c691c388f',
+         claimed_at = now(), required_role = 'manager'
+   WHERE id = '00000000-0000-0000-0000-0000000000c2'
+$sql$, '30e86078-5435-445b-9a87-5f0c691c388f'),
+  '15a) přepsání role při zabírání směny: ODMÍTNUTO');
+
+SELECT pg_temp.tvrd(
+  (SELECT required_role::text FROM public.shifts
+    WHERE id = '00000000-0000-0000-0000-0000000000c2') = 'bar_staff',
+  '15b) role na směně zůstala původní');
+
+DO $$
+DECLARE _n integer;
+BEGIN
+  _n := pg_temp.dotceno($sql$
+    UPDATE public.shifts SET required_role = 'manager'
+     WHERE id = '00000000-0000-0000-0000-0000000000c1'
+  $sql$, 'ad69770f-c4e1-401c-bb11-e1ff3ca1c8c5');
+  PERFORM pg_temp.tvrd(_n = 1, '15c) admin roli na směně změnit MŮŽE');
 END $$;
 
 DO $$ BEGIN RAISE NOTICE 'VŠECHNY TESTY PROŠLY'; END $$;
