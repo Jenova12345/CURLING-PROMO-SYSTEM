@@ -190,15 +190,26 @@ BEGIN
   -- směna na zrušené akci), ale jakmile jedna vznikne, slib té migrace
   -- „kdo ji držel, kdy a kdo ji zavřel, je auditní stopa" přestane platit.
   --
+  -- DVĚ VÝJIMKY, protože jedna nestačí:
+  --
   -- `pg_trigger_depth() <= 1` odlišuje PŘÍMÝ zápis od systémového úklidu.
   -- Změřeno: přímý UPDATE na `shifts` = 1, kaskáda z
   -- `cancel_open_shifts_on_reservation_cancel` (AFTER UPDATE na `reservations`)
   -- = 2. Bez toho by rušení rezervace zástupcem klubu spadlo — ten úklid ruší
   -- cizí obsazené směny a `auth.uid()` je v něm pořád volající, ne `postgres`.
+  --
+  -- `app.uklid_trenera` pokrývá to, co hloubka NEODLIŠÍ: `prirad_trenera`
+  -- a `odeber_trenera` jsou RPC, ne triggery, takže hloubka je 1 stejně jako
+  -- u přímého zápisu z API — a obě zavírají směnu, kterou drží TRENÉR, tedy
+  -- někdo jiný než volající zástupce klubu. Změřeno: s první podobou téhle
+  -- brány zástupce klubu trenéra vůbec neodebral. Marker si obě funkce nastaví
+  -- samy, až ZA svými kontrolami práv (jinak by to byl obchvat, ne marker) —
+  -- táž konstrukce, jakou už používá `zmen_typ_akce` s `app.preceneni`.
   IF NEW.status = 'cancelled' AND OLD.status IS DISTINCT FROM 'cancelled'
      AND NOT has_role(auth.uid(), 'admin')
      AND NOT (auth.uid() IS NULL AND session_user IN ('postgres', 'supabase_admin'))
-     AND pg_trigger_depth() <= 1 THEN
+     AND pg_trigger_depth() <= 1
+     AND coalesce(current_setting('app.uklid_trenera', true), 'off') <> 'on' THEN
     IF OLD.claimed_by IS NOT NULL AND OLD.claimed_by <> auth.uid() THEN
       RAISE EXCEPTION 'Nemůžete zrušit cizí směnu.'
         USING HINT = 'Zavřít cizí obsazenou směnu může jen správce haly.';
@@ -464,6 +475,209 @@ $function$
 ;
 
 -- ---------------------------------------------------------------------------
+-- 1b) Trenérské RPC si musí říct, že jde o legitimní úklid
+-- ---------------------------------------------------------------------------
+-- Obě funkce zavírají směnu, kterou drží někdo jiný než volající, a obě to
+-- výslovně povolují i zástupci klubu. Bez markeru by na ně brána výš sáhla
+-- a zástupce klubu by trenéra nemohl odebrat ani vyměnit. Těla jsou ze
+-- živého schématu, oboje čistý přírůstek: 0 odebraných řádků, 12 přidaných.
+CREATE OR REPLACE FUNCTION public.odeber_trenera(_event_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE _subject uuid; _subjektu int; _sh record;
+BEGIN
+  -- Jednoznačný klub, souměrně s `prirad_trenera` — viz komentář tam.
+  SELECT count(DISTINCT r.subject_id), min(r.subject_id::text)::uuid INTO _subjektu, _subject
+    FROM public.reservations r
+   WHERE r.event_id = _event_id AND r.deleted_at IS NULL
+     AND r.subject_id IS NOT NULL;
+
+  IF _subjektu > 1 THEN
+    _subject := NULL;
+  END IF;
+
+  IF NOT (has_role(auth.uid(), 'admin')
+          OR (_subject IS NOT NULL AND public.is_subject_rep(_subject))) THEN
+    RAISE EXCEPTION 'Trenéra odebírá správce haly nebo zástupce klubu.';
+  END IF;
+
+  SELECT id, status INTO _sh
+    FROM public.shifts
+   WHERE event_id = _event_id AND required_role = 'trainer' AND status <> 'cancelled'
+   LIMIT 1;
+
+  IF _sh.id IS NULL THEN
+    RETURN jsonb_build_object('zmena', false);
+  END IF;
+
+  -- Uzavřená směna se neodebírá — je to podklad pro výplatu (zásada 2).
+  IF _sh.status = 'completed' THEN
+    RAISE EXCEPTION 'Trenér má směnu uzavřenou, odebrat ho nejde.'
+      USING HINT = 'Uzavřená směna je podklad pro výplatu.';
+  END IF;
+
+  -- `app.uklid_trenera` říká bráně „tohle je legitimní úklid trenérské směny".
+  -- Nastavuje se AŽ TADY, tedy za kontrolami práv výš — dřív by z něj byl
+  -- obchvat, ne marker. Táž konstrukce, jakou už používá `zmen_typ_akce`
+  -- s `app.preceneni`.
+  --
+  -- Bez něj tahle funkce od migrace 20260903180000 PADÁ zástupci klubu:
+  -- ruší směnu, kterou drží trenér, tedy někdo jiný než volající, a brána
+  -- „Nemůžete zrušit cizí směnu" na to sáhne. `pg_trigger_depth()` to
+  -- neodliší — RPC volání není trigger, hloubka je 1 stejně jako u přímého
+  -- zápisu z API. Změřeno: zástupce klubu trenéra neodebral.
+  PERFORM set_config('app.uklid_trenera', 'on', true);
+  UPDATE public.shifts
+     SET status = 'cancelled', cancelled_at = now(), cancelled_by = auth.uid()
+   WHERE id = _sh.id;
+  PERFORM set_config('app.uklid_trenera', 'off', true);
+
+  RETURN jsonb_build_object('zmena', true, 'shift_id', _sh.id);
+END;
+$function$
+
+;
+
+CREATE OR REPLACE FUNCTION public.prirad_trenera(_event_id uuid, _user_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  _ev        public.events%ROWTYPE;
+  _subject   uuid;
+  _subjektu  int;
+  _stary     uuid;
+  _novy      uuid;
+BEGIN
+  SELECT * INTO _ev FROM public.events WHERE id = _event_id;
+  IF _ev.id IS NULL THEN
+    RAISE EXCEPTION 'Akce nenalezena.';
+  END IF;
+
+  -- TRENÉR PATŘÍ K TRÉNINKU. U komerční akce se štáb řeší přes `role_reqs`
+  -- a dorovnání; míchat obě cesty by znamenalo dvě pravdy o jedné směně.
+  IF _ev.event_type <> 'training' THEN
+    RAISE EXCEPTION 'Trenéra lze přiřadit jen k tréninku (tahle akce je %).', _ev.event_type;
+  END IF;
+
+  -- NA ZRUŠENOU AKCI SE TRENÉR NEPŘIŘAZUJE.
+  --
+  -- Bez téhle věty funkce na zrušené akci LŽE. Od migrace 20260903120000 tam
+  -- `INSERT` do `shifts` tiše přeskočí brána `trg_shifts_a_zrusena_akce`,
+  -- jenže `RETURNING id INTO _novy` bez `STRICT` chybu nevyhodí — funkce
+  -- doběhne a vrátí `{"zmena": true, "shift_id": null}`. Změřeno:
+  -- UI ohlásí „trenér přiřazen" a nevzniklo nic.
+  --
+  -- Horší varianta téhož: kdyby na zrušené akci ještě visela nezrušená
+  -- trenérská směna, funkce ji o pár řádků níž nejdřív zruší a teprve pak
+  -- neúspěšně zakládá novou — původní trenér by o směnu přišel a náhradník
+  -- by žádnou nedostal. Proto se zastavuje TADY, před tím vším.
+  IF public.akce_je_zrusena(_event_id) THEN
+    RAISE EXCEPTION 'Akce je zrušená, trenéra k ní přiřadit nelze.'
+      USING HINT = 'Obnov rezervaci, nebo založ akci novou.';
+  END IF;
+
+  -- Klub, kterému trénink patří — kvůli právům zástupce.
+  --
+  -- `LIMIT 1` bez `ORDER BY` tu dřív znamenalo, že o tom, ČÍ zástupce smí
+  -- k akci pověsit placenou směnu, rozhodoval plánovač: u akce s drahami dvou
+  -- klubů vracel jednou jeden subjekt, jindy druhý. `approve_reservation` se
+  -- proti témuž brání výslovně („kdyby někdo ručně pověsil na akci rezervaci
+  -- jiného klubu, nesmí ji zástupce potvrdit jedním kliknutím s tou svou").
+  --
+  -- Tady se to řeší přísněji: buď má akce JEDEN klub, nebo ji zástupce neřídí
+  -- vůbec a zbývá admin.
+  SELECT count(DISTINCT r.subject_id), min(r.subject_id::text)::uuid INTO _subjektu, _subject
+    FROM public.reservations r
+   WHERE r.event_id = _event_id AND r.deleted_at IS NULL
+     AND r.subject_id IS NOT NULL;
+
+  IF _subjektu > 1 THEN
+    _subject := NULL;   -- víc klubů na jedné akci → jen admin
+  END IF;
+
+  IF NOT (has_role(auth.uid(), 'admin')
+          OR (_subject IS NOT NULL AND public.is_subject_rep(_subject))) THEN
+    -- `USING HINT` tu být NEMŮŽE podmíněně: `RAISE ... USING HINT = NULL`
+    -- skončí chybou „RAISE statement option cannot be null", takže by se
+    -- z běžného odmítnutí stala havárie. Upřesnění jde proto do zprávy.
+    RAISE EXCEPTION 'Trenéra přiřazuje správce haly nebo zástupce klubu.%',
+      CASE WHEN _subjektu > 1
+           THEN ' Tahle akce má navíc dráhy víc klubů, takže ji zástupce neřídí — musí správce haly.'
+           ELSE '' END;
+  END IF;
+
+  -- P2: roli `trainer` uděluje jen admin. Tady se jen ověří, že ji člověk má —
+  -- jinak by zástupce přes přiřazení nepřímo rozdával placené role.
+  IF NOT has_role(_user_id, 'trainer') THEN
+    RAISE EXCEPTION 'Tenhle člověk není vedený jako trenér. Roli přiděluje správce haly.';
+  END IF;
+
+  -- Jeden trenér na trénink. Když už nějaký je, původní směna se ZRUŠÍ SOFT
+  -- (zásada 2) a založí se nová — zrušit natvrdo odpracované hodiny nejde.
+  SELECT id INTO _stary
+    FROM public.shifts
+   WHERE event_id = _event_id
+     AND required_role = 'trainer'
+     AND status <> 'cancelled'
+   LIMIT 1;
+
+  IF _stary IS NOT NULL THEN
+    -- Už odpracovanou směnu neodebíráme ani při výměně — jsou to peníze.
+    IF (SELECT status FROM public.shifts WHERE id = _stary) = 'completed' THEN
+      RAISE EXCEPTION 'Trenér už má tuhle směnu uzavřenou, vyměnit ho nejde.'
+        USING HINT = 'Uzavřená směna je podklad pro výplatu.';
+    END IF;
+    IF (SELECT claimed_by FROM public.shifts WHERE id = _stary) = _user_id THEN
+      RETURN jsonb_build_object('zmena', false, 'shift_id', _stary, 'trener', _user_id);
+    END IF;
+    -- `app.uklid_trenera` říká bráně „tohle je legitimní úklid trenérské směny".
+    -- Nastavuje se AŽ TADY, tedy za kontrolami práv výš — dřív by z něj byl
+    -- obchvat, ne marker. Táž konstrukce, jakou už používá `zmen_typ_akce`
+    -- s `app.preceneni`.
+  --
+    -- Bez něj tahle funkce od migrace 20260903180000 PADÁ zástupci klubu:
+    -- ruší směnu, kterou drží trenér, tedy někdo jiný než volající, a brána
+    -- „Nemůžete zrušit cizí směnu" na to sáhne. `pg_trigger_depth()` to
+    -- neodliší — RPC volání není trigger, hloubka je 1 stejně jako u přímého
+    -- zápisu z API. Změřeno: zástupce klubu trenéra neodebral.
+    PERFORM set_config('app.uklid_trenera', 'on', true);
+    UPDATE public.shifts
+       SET status = 'cancelled', cancelled_at = now(), cancelled_by = auth.uid()
+     WHERE id = _stary;
+    PERFORM set_config('app.uklid_trenera', 'off', true);
+  END IF;
+
+  -- SMĚNA VZNIKÁ ROVNOU OBSAZENÁ — viz hlavička. `hourly_rate` se nevyplňuje,
+  -- doplní ho `trg_shifts_sazba` z ceníku rolí.
+  INSERT INTO public.shifts (event_id, required_role, status, claimed_by, claimed_at)
+  VALUES (_event_id, 'trainer', 'claimed', _user_id, now())
+  RETURNING id INTO _novy;
+
+  RETURN jsonb_build_object(
+    'zmena', true,
+    'shift_id', _novy,
+    'trener', _user_id,
+    'sazba', (SELECT hourly_rate FROM public.shifts WHERE id = _novy),
+    'vymenen_za', _stary
+  );
+
+EXCEPTION
+  WHEN check_violation OR not_null_violation OR foreign_key_violation
+       OR unique_violation OR string_data_right_truncation THEN
+    RAISE EXCEPTION 'Trenéra se nepodařilo přiřadit — zadané údaje neprošly kontrolou databáze.'
+      USING HINT = 'Zkontroluj, jestli je akce trénink a člověk má roli trenéra.';
+END;
+$function$
+
+;
+
+-- ---------------------------------------------------------------------------
 -- 2) Druhá vrstva patří do USING, ne do WITH CHECK
 -- ---------------------------------------------------------------------------
 -- První pokus dal podmínku vlastnictví do `WITH CHECK`. To NENÍ druhá vrstva:
@@ -622,7 +836,11 @@ BEGIN
   -- ne kontrolu samotnou: kdyby někdo celý RAISE smazal a komentáře nechal,
   -- prošla by zeleně. Proto se hledá celý příkaz včetně `RAISE EXCEPTION`
   -- a nulová pozice je chyba, ne „v pořádku".
-  _p_chk := position('RAISE EXCEPTION ''Nemůžete zrušit cizí směnu''' in _src);
+  -- Se STŘEDNÍKEM: hláška „Nemůžete zrušit cizí směnu" je v těle nově dvakrát
+  -- (stará kontrola u `open`, nová u přechodu do `cancelled`) a liší se jen
+  -- tečkou. Bez středníku by stačilo tečku z té druhé odebrat a `position()`
+  -- by skočil na ni — kontrola pořadí by pak byla navždy tiše splněná.
+  _p_chk := position('RAISE EXCEPTION ''Nemůžete zrušit cizí směnu'';' in _src);
   -- Kotví se na PŘIŘAZENÍ STAVU, ne na razítko vedle něj: kdyby se přesunul
   -- jen ten jeden řádek, kotva na `cancelled_by` by to neodhalila.
   _p_set := position('NEW.status       := ''cancelled''' in _src);
@@ -646,6 +864,30 @@ BEGIN
   END IF;
   IF _src NOT LIKE '%RAISE EXCEPTION ''Směnu nelze přesunout na jinou akci.''%' THEN
     RAISE EXCEPTION 'Zmizel zámek na event_id.';
+  END IF;
+
+  -- Brány přidané touhle migrací. Bez nich blok kontroloval jen práci
+  -- předchůdců: mutace, která vyřízla TĚLA N3, N4 i F3 a nechala komentáře,
+  -- prošla zeleně — tvrzení „umí zachytit, že se změny nepropsaly" tedy pro
+  -- polovinu bran neplatilo. Hledá se `RAISE`, ne fráze, ať to nesplní komentář.
+  IF _src NOT LIKE '%RAISE EXCEPTION ''Roli na směně mění jen správce haly.''%' THEN
+    RAISE EXCEPTION 'Chybí brána F3 — roli na směně přepíše kdokoli.';
+  END IF;
+  IF _src NOT LIKE '%RAISE EXCEPTION ''Nemůžete zrušit cizí směnu.''%' THEN
+    RAISE EXCEPTION 'Chybí brána N3 — cizí obsazenou směnu lze zavřít a podepsat cizím jménem.';
+  END IF;
+  IF _src NOT LIKE '%RAISE EXCEPTION ''Identitu ani datum založení směny přepsat nelze.''%' THEN
+    RAISE EXCEPTION 'Chybí brána N4 — id a created_at směny jdou přepsat.';
+  END IF;
+  IF _src NOT LIKE '%app.uklid_trenera%' THEN
+    RAISE EXCEPTION 'Brána N3 nezná výjimku pro trenérské RPC — zástupce klubu neodebere trenéra.';
+  END IF;
+
+  IF (SELECT prosrc FROM pg_proc WHERE oid = 'public.odeber_trenera(uuid)'::regprocedure)
+     NOT LIKE '%app.uklid_trenera%'
+     OR (SELECT prosrc FROM pg_proc WHERE oid = 'public.prirad_trenera(uuid,uuid)'::regprocedure)
+        NOT LIKE '%app.uklid_trenera%' THEN
+    RAISE EXCEPTION 'Trenérské RPC marker nenastavují — zástupci klubu spadnou na bráně N3.';
   END IF;
 
   -- Hledá se text SPECIFICKÝ PRO CANCELLED VĚTEV, ne jen `claimed_by = auth.uid()`.

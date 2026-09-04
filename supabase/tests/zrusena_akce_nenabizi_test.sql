@@ -807,6 +807,84 @@ SELECT pg_temp.tvrd(pg_temp.neprojde($sql$
 $sql$, '30e86078-5435-445b-9a87-5f0c691c388f'),
   '17b) přepis id směny (odpojení od audit logu): ODMÍTNUT');
 
+-- ---------------------------------------------------------------------------
+-- 18) Zástupce klubu musí dál odebrat i vyměnit trenéra
+-- ---------------------------------------------------------------------------
+-- Brána N3 (zavírání cizí obsazené směny) na tuhle cestu původně sáhla:
+-- `odeber_trenera` i `prirad_trenera` zavírají směnu, kterou drží TRENÉR, tedy
+-- někdo jiný než volající zástupce. `pg_trigger_depth()` to neodliší — RPC není
+-- trigger, hloubka je 1 stejně jako u přímého zápisu z API. Změřeno: zástupce
+-- klubu trenéra neodebral vůbec.
+--
+-- Scénář schválně běží pod NEADMINEM. Sada ho dřív neměla — `prirad_trenera`
+-- se volalo jen adminským tokenem, takže tuhle regresi nemohla zachytit.
+DO $$
+DECLARE _sheet uuid; _subj uuid; _kdo uuid; _v jsonb;
+BEGIN
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"ad69770f-c4e1-401c-bb11-e1ff3ca1c8c5","role":"authenticated"}', true);
+  SELECT r.sheet_id, r.subject_id, r.created_by INTO _sheet, _subj, _kdo
+    FROM public.reservations r WHERE r.status = 'confirmed' LIMIT 1;
+
+  INSERT INTO public.subject_reps (subject_id, user_id, level, created_by)
+  VALUES (_subj, '30e86078-5435-445b-9a87-5f0c691c388f', 'rep', _kdo)
+  ON CONFLICT DO NOTHING;
+
+  INSERT INTO public.events (id, title, event_type, start_time, end_time, required_staff, created_by)
+  VALUES ('00000000-0000-0000-0000-0000000000f5', 'TEST zastupce trener', 'training',
+          '2027-12-01 08:00:00+00', '2027-12-01 10:00:00+00', 1, _kdo);
+  INSERT INTO public.reservations (id, event_id, sheet_id, start_at, end_at, status, subject_id, created_by)
+  VALUES ('00000000-0000-0000-0000-0000000000f6', '00000000-0000-0000-0000-0000000000f5',
+          _sheet, '2027-12-01 08:00:00+00', '2027-12-01 10:00:00+00', 'confirmed', _subj, _kdo);
+
+  _v := public.prirad_trenera('00000000-0000-0000-0000-0000000000f5',
+                              '494ca54e-b9b5-444b-9d08-2a637c58eda3');
+  PERFORM pg_temp.tvrd((_v->>'shift_id') IS NOT NULL,
+    'FIXTURA: trenér přiřazen a zástupce klubu je vedený jako rep');
+END $$;
+
+DO $$
+DECLARE _msg text;
+BEGIN
+  PERFORM set_config('role', 'authenticated', true);
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"30e86078-5435-445b-9a87-5f0c691c388f","role":"authenticated"}', true);
+  _msg := pg_temp.chyba_z($sql$
+    SELECT public.odeber_trenera('00000000-0000-0000-0000-0000000000f5')
+  $sql$);
+  PERFORM set_config('role', 'none', true);
+  PERFORM pg_temp.tvrd(_msg IS NULL,
+    '18a) ZÁSTUPCE KLUBU odebere trenéra (dostal jsem: '
+    || coalesce(_msg, 'bez chyby') || ')');
+END $$;
+
+SELECT pg_temp.tvrd(
+  (SELECT count(*) FROM public.shifts
+    WHERE event_id = '00000000-0000-0000-0000-0000000000f5'
+      AND required_role = 'trainer' AND status <> 'cancelled') = 0,
+  '18b) trenérská směna je po odebrání opravdu zavřená');
+
+DO $$
+DECLARE _msg text;
+BEGIN
+  PERFORM set_config('role', 'authenticated', true);
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"30e86078-5435-445b-9a87-5f0c691c388f","role":"authenticated"}', true);
+  _msg := pg_temp.chyba_z($sql$
+    SELECT public.prirad_trenera('00000000-0000-0000-0000-0000000000f5',
+                                 'e87fdf16-289e-4e24-9e53-4b05fb97e330')
+  $sql$);
+  PERFORM set_config('role', 'none', true);
+  PERFORM pg_temp.tvrd(_msg IS NULL,
+    '18c) ZÁSTUPCE KLUBU přiřadí nového trenéra (dostal jsem: '
+    || coalesce(_msg, 'bez chyby') || ')');
+END $$;
+
+-- A marker po sobě nesmí zůstat zapnutý, jinak by byl obchvat pro další zápisy.
+SELECT pg_temp.tvrd(
+  coalesce(current_setting('app.uklid_trenera', true), 'off') <> 'on',
+  '18d) marker app.uklid_trenera je po doběhnutí RPC zase vypnutý');
+
 DO $$ BEGIN RAISE NOTICE 'VŠECHNY TESTY PROŠLY'; END $$;
 
 ROLLBACK;
