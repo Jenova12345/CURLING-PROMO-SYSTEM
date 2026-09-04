@@ -885,6 +885,64 @@ SELECT pg_temp.tvrd(
   coalesce(current_setting('app.uklid_trenera', true), 'off') <> 'on',
   '18d) marker app.uklid_trenera je po doběhnutí RPC zase vypnutý');
 
+-- 18e–18h) A TEPRVE TEĎ MARKER V `prirad_trenera`.
+--
+-- POZOR, 18c výš ho NEMĚŘÍ. Po 18a je trenérská směna zavřená, takže
+-- `prirad_trenera` hledá `status <> 'cancelled'`, najde `_stary IS NULL`, blok
+-- s markerem PŘESKOČÍ a do `UPDATE public.shifts` se vůbec nedostane. Do téhle
+-- chvíle byl tedy měřený jen marker v `odeber_trenera` — kdyby někdo rozbil
+-- ten druhý, sada zůstane zelená. (Nález bezpečnostní brány, 4. 9. 2026.)
+--
+-- Tady už jedna ŽIVÁ trenérská směna je (založilo ji 18c) a drží ji NĚKDO JINÝ
+-- než volající zástupce klubu — přesně ta cesta, na kterou bez markeru sáhne
+-- brána N3 „Nemůžete zrušit cizí směnu.".
+--
+-- ⚠ NESPUŠTĚNO. Na téhle mašině není Docker ani lokální Postgres SERVER
+-- (homebrew `libpq` je jen klient — `psql`/`pg_dump` ano, `postgres` ne),
+-- takže scénáře 18e–18h zatím neběžely a nebyly ZMUTOVÁNY. Test, u kterého
+-- se neověřilo, že bez opravy zčervená, nehlídá nic (CLAUDE.md, bod 4) —
+-- ber je proto zatím jako NEOVĚŘENÉ.
+--
+-- Co ověřené JE: ekvivalent téhle cesty byl 4. 9. 2026 změřen přímo na ostré
+-- produkci v transakci s rollbackem, hned po nasazení `20260903180000` —
+-- neadminský zástupce klubu trenéra vyměnil (původní směna zavřená, novou
+-- drží nový trenér) i odebral. Chybí tedy důkaz mutací, ne důkaz funkce.
+-- Až bude replika, pusť sadu a mutaci dodělej.
+DO $$
+DECLARE _msg text;
+BEGIN
+  PERFORM set_config('role', 'authenticated', true);
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"30e86078-5435-445b-9a87-5f0c691c388f","role":"authenticated"}', true);
+  _msg := pg_temp.chyba_z($sql$
+    SELECT public.prirad_trenera('00000000-0000-0000-0000-0000000000f5',
+                                 '494ca54e-b9b5-444b-9d08-2a637c58eda3')
+  $sql$);
+  PERFORM set_config('role', 'none', true);
+  PERFORM pg_temp.tvrd(_msg IS NULL,
+    '18e) ZÁSTUPCE KLUBU VYMĚNÍ trenéra, když živou směnu drží někdo jiný (dostal jsem: '
+    || coalesce(_msg, 'bez chyby') || ')');
+END $$;
+
+SELECT pg_temp.tvrd(
+  (SELECT count(*) FROM public.shifts
+    WHERE event_id = '00000000-0000-0000-0000-0000000000f5'
+      AND required_role = 'trainer' AND status <> 'cancelled'
+      AND claimed_by = '494ca54e-b9b5-444b-9d08-2a637c58eda3') = 1,
+  '18f) živou trenérskou směnu drží po výměně nový trenér');
+
+-- Držitel se u zavřené směny NEMAŽE — je to auditní stopa (tatáž věta jako N3).
+SELECT pg_temp.tvrd(
+  (SELECT count(*) FROM public.shifts
+    WHERE event_id = '00000000-0000-0000-0000-0000000000f5'
+      AND required_role = 'trainer' AND status = 'cancelled'
+      AND claimed_by = 'e87fdf16-289e-4e24-9e53-4b05fb97e330') = 1,
+  '18g) u zavřené směny je pořád vidět, že ji držel původní trenér');
+
+SELECT pg_temp.tvrd(
+  coalesce(current_setting('app.uklid_trenera', true), 'off') <> 'on',
+  '18h) marker je vypnutý i po výměně trenéra');
+
 DO $$ BEGIN RAISE NOTICE 'VŠECHNY TESTY PROŠLY'; END $$;
 
 ROLLBACK;
