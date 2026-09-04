@@ -56,3 +56,6 @@ vzorky/
 
 # Pomocné jednorázové skripty (suchý běh, kontroly configu) — neverzují se.
 scripts/.tmp/
+
+# Screenshoty z lokálního ověřování (nepatří do repa)
+overeni-screenshoty/
