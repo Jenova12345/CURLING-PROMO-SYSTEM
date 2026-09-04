@@ -13,7 +13,11 @@
 -- dopředné) — proto ta oprava stojí tady.
 --
 -- V TÉHLE migraci je `validate_shift_claim` opravdu čistý přírůstek:
--- 0 odebraných řádků, 49 přidaných, ověřeno syrovým diffem bez filtrování.
+-- 0 odebraných řádků (to je ta nosná půlka), ověřeno syrovým diffem bez
+-- filtrování. Počet PŘIDANÝCH řádků se během review několikrát změnil, jak
+-- přibývaly brány — proto se tu žádné číslo neuvádí; ověřitelné je „nic
+-- neubylo", ne konkrétní přírůstek. Dřívější znění tvrdilo 49 a to už dávno
+-- neplatilo.
 --
 -- =============================================================================
 -- CO SE OPRAVUJE
@@ -165,6 +169,62 @@ BEGIN
       RAISE EXCEPTION 'Do zrušené směny už zapisovat nelze.'
         USING HINT = 'Kdo ji držel, kdy a kdo ji zavřel, je auditní stopa.';
     END IF;
+  END IF;
+
+  -- ZAVÍRÁNÍ SE PODEPISUJE TOMU, KDO ZAVÍRÁ — A CIZÍ OBSAZENOU NE (nález N3).
+  --
+  -- Zmrazení výš platí až OD chvíle, kdy je řádek `cancelled`. PŘECHOD DO
+  -- `cancelled` nehlídalo nic: kontrola „Nemůžete zrušit cizí směnu" se ptá jen
+  -- na `NEW.status = 'open'`, a guard „už ji má někdo jiný" vyžaduje
+  -- `NEW.claimed_by IS NOT NULL`. Stačilo tedy psát `cancelled` přímo a
+  -- `claimed_by` nastavit na NULL. Změřeno, `instructor` bez admina, jeden
+  -- příkaz na KOLEGOVĚ `claimed` směně:
+  --
+  --   UPDATE shifts SET status='cancelled', claimed_by=NULL,
+  --          cancelled_by='<kolega>', cancelled_at='2020-01-01' WHERE id='<cizí>';
+  --   → prošlo: kolegovi zmizela směna I ZÁZNAM, že ji držel, a zavření je
+  --     podepsané někým třetím a antedatované do roku 2020
+  --
+  -- Je to zrcadlo nálezu z 20260903160000: tam se obcházelo přes `open`,
+  -- tady přes `cancelled`. Dosažitelnost dnes nulová (na produkci není živá
+  -- směna na zrušené akci), ale jakmile jedna vznikne, slib té migrace
+  -- „kdo ji držel, kdy a kdo ji zavřel, je auditní stopa" přestane platit.
+  --
+  -- `pg_trigger_depth() <= 1` odlišuje PŘÍMÝ zápis od systémového úklidu.
+  -- Změřeno: přímý UPDATE na `shifts` = 1, kaskáda z
+  -- `cancel_open_shifts_on_reservation_cancel` (AFTER UPDATE na `reservations`)
+  -- = 2. Bez toho by rušení rezervace zástupcem klubu spadlo — ten úklid ruší
+  -- cizí obsazené směny a `auth.uid()` je v něm pořád volající, ne `postgres`.
+  IF NEW.status = 'cancelled' AND OLD.status IS DISTINCT FROM 'cancelled'
+     AND NOT has_role(auth.uid(), 'admin')
+     AND NOT (auth.uid() IS NULL AND session_user IN ('postgres', 'supabase_admin'))
+     AND pg_trigger_depth() <= 1 THEN
+    IF OLD.claimed_by IS NOT NULL AND OLD.claimed_by <> auth.uid() THEN
+      RAISE EXCEPTION 'Nemůžete zrušit cizí směnu.'
+        USING HINT = 'Zavřít cizí obsazenou směnu může jen správce haly.';
+    END IF;
+    -- Držitel se NEMAŽE (je to auditní stopa) a podpis nese ten, kdo zavírá.
+    -- Pozn.: cesta „uvolnění" (`open` -> přepis na konci funkce) `claimed_by`
+    -- naopak nechává na NULL — tam se ho držitel vzdal sám, což je jiná věta
+    -- než „někdo zavřel směnu, kterou držel kolega".
+    NEW.claimed_by   := OLD.claimed_by;
+    NEW.cancelled_by := auth.uid();
+    NEW.cancelled_at := now();
+  END IF;
+
+  -- IDENTITA A DATUM ZALOŽENÍ SE NEPŘEPISUJÍ (nález N4).
+  --
+  -- `id` ani `created_at` nehlídal nikdo. Přepis `id` odpojí řádek od jeho
+  -- historie v `audit_log` (ta se váže přes `record_id`), přepis `created_at`
+  -- navíc mění pořadí, podle kterého `dorovnej_stab` ruší přebytek
+  -- (`ORDER BY created_at DESC, id DESC`). Obojí změřeno jako průchozí na volné
+  -- směně, bez vypínání čehokoli. Není to regrese těchhle migrací, ale je to
+  -- táž věta „musí být vidět, kdo co zadával" a jsou to dva řádky.
+  IF (NEW.id IS DISTINCT FROM OLD.id OR NEW.created_at IS DISTINCT FROM OLD.created_at)
+     AND NOT has_role(auth.uid(), 'admin')
+     AND NOT (auth.uid() IS NULL AND session_user IN ('postgres', 'supabase_admin')) THEN
+    RAISE EXCEPTION 'Identitu ani datum založení směny přepsat nelze.'
+      USING HINT = 'Váže se na ně auditní historie.';
   END IF;
 
   -- ROLI NA SMĚNĚ MĚNÍ JEN SPRÁVCE HALY.

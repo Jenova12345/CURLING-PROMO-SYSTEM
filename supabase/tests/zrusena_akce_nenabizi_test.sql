@@ -127,6 +127,8 @@ BEGIN
     IF SQLERRM LIKE '%Zrušenou směnu znovu otevírá%'
        OR SQLERRM LIKE '%Do zrušené směny už zapisovat nelze%'
        OR SQLERRM LIKE '%Roli na směně mění jen správce haly%'
+       OR SQLERRM LIKE '%Nemůžete zrušit cizí směnu%'
+       OR SQLERRM LIKE '%Identitu ani datum založení směny přepsat nelze%'
        OR SQLERRM LIKE '%violates row-level security policy%' THEN
       RETURN true;
     END IF;
@@ -736,6 +738,74 @@ BEGIN
   $sql$, 'ad69770f-c4e1-401c-bb11-e1ff3ca1c8c5');
   PERFORM pg_temp.tvrd(_n = 1, '15c) admin roli na směně změnit MŮŽE');
 END $$;
+
+-- ---------------------------------------------------------------------------
+-- 16) Zavírání se podepisuje tomu, kdo zavírá (N3)
+-- ---------------------------------------------------------------------------
+-- Zmrazení platí až OD `cancelled`. Přechod DO `cancelled` nehlídalo nic:
+-- „Nemůžete zrušit cizí směnu" se ptá jen na `NEW.status='open'` a guard
+-- „už ji má někdo jiný" vyžaduje `NEW.claimed_by IS NOT NULL` — stačilo psát
+-- `cancelled` přímo a `claimed_by` dát na NULL. Kolegovi pak zmizela směna
+-- i záznam, že ji držel, a zavření šlo podepsat někým jiným a antedatovat.
+ALTER TABLE public.shifts DISABLE TRIGGER trg_shifts_a_zrusena_akce;
+INSERT INTO public.shifts (id, event_id, required_role, status, claimed_by, claimed_at)
+VALUES ('00000000-0000-0000-0000-0000000000ec', '00000000-0000-0000-0000-0000000000a2',
+        'instructor', 'claimed', '494ca54e-b9b5-444b-9d08-2a637c58eda3', now());
+ALTER TABLE public.shifts ENABLE TRIGGER trg_shifts_a_zrusena_akce;
+
+SELECT pg_temp.tvrd(pg_temp.neprojde($sql$
+  UPDATE public.shifts
+     SET status = 'cancelled', claimed_by = NULL,
+         cancelled_by = 'e87fdf16-289e-4e24-9e53-4b05fb97e330',
+         cancelled_at = '2020-01-01'
+   WHERE id = '00000000-0000-0000-0000-0000000000ec'
+$sql$, '30e86078-5435-445b-9a87-5f0c691c388f'),
+  '16a) zavření CIZÍ obsazené směny s cizím podpisem: ODMÍTNUTO');
+
+SELECT pg_temp.tvrd(
+  (SELECT status::text FROM public.shifts WHERE id = '00000000-0000-0000-0000-0000000000ec') = 'claimed'
+  AND (SELECT claimed_by FROM public.shifts WHERE id = '00000000-0000-0000-0000-0000000000ec')
+      = '494ca54e-b9b5-444b-9d08-2a637c58eda3',
+  '16b) kolegova směna i její držitel zůstali beze změny');
+
+-- Držitel svou vlastní zavřít smí — a podpis dostane on, ne kdo si vymyslí.
+DO $$
+DECLARE _n integer;
+BEGIN
+  _n := pg_temp.dotceno($sql$
+    UPDATE public.shifts SET status = 'cancelled',
+           cancelled_by = 'e87fdf16-289e-4e24-9e53-4b05fb97e330',
+           cancelled_at = '2020-01-01'
+     WHERE id = '00000000-0000-0000-0000-0000000000ec'
+  $sql$, '494ca54e-b9b5-444b-9d08-2a637c58eda3');
+  PERFORM pg_temp.tvrd(_n = 1, '16c) držitel svou vlastní směnu zavřít MŮŽE');
+END $$;
+
+SELECT pg_temp.tvrd(
+  (SELECT cancelled_by FROM public.shifts WHERE id = '00000000-0000-0000-0000-0000000000ec')
+    = '494ca54e-b9b5-444b-9d08-2a637c58eda3'
+  AND (SELECT extract(year from cancelled_at) FROM public.shifts
+        WHERE id = '00000000-0000-0000-0000-0000000000ec') > 2025
+  AND (SELECT claimed_by FROM public.shifts WHERE id = '00000000-0000-0000-0000-0000000000ec')
+      = '494ca54e-b9b5-444b-9d08-2a637c58eda3',
+  '16d) podpis přepsán na skutečného zavírajícího, datum na teď, držitel zachován');
+
+-- ---------------------------------------------------------------------------
+-- 17) Identita a datum založení směny se nepřepisují (N4)
+-- ---------------------------------------------------------------------------
+-- Míří se na ŽIVOU směnu (`c2`, pending). Na zavřené by to nic neměřilo —
+-- tam odmítne dřív `USING` a test by byl zelený i s vypnutou branou.
+SELECT pg_temp.tvrd(pg_temp.neprojde($sql$
+  UPDATE public.shifts SET created_at = '2000-01-01'
+   WHERE id = '00000000-0000-0000-0000-0000000000c2'
+$sql$, '30e86078-5435-445b-9a87-5f0c691c388f'),
+  '17a) přepis created_at na směně: ODMÍTNUT');
+
+SELECT pg_temp.tvrd(pg_temp.neprojde($sql$
+  UPDATE public.shifts SET id = '00000000-0000-0000-0000-0000000000ff'
+   WHERE id = '00000000-0000-0000-0000-0000000000c2'
+$sql$, '30e86078-5435-445b-9a87-5f0c691c388f'),
+  '17b) přepis id směny (odpojení od audit logu): ODMÍTNUT');
 
 DO $$ BEGIN RAISE NOTICE 'VŠECHNY TESTY PROŠLY'; END $$;
 
