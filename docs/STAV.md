@@ -132,7 +132,7 @@ Původ: **Lovable** (generátor). Zbytky jsou pořád v repu — viz Rizika.
 | Routa | Soubor | Co dělá | Kdo to vidí v menu |
 |---|---|---|---|
 | `/` | `Dashboard.tsx` | Přehled — nejbližší akce, moje směny, upozornění na nové směny | všichni |
-| `/calendar` | `IceCalendar.tsx` (1299 ř.) | Kalendář ledu: měsíční/týdenní/denní pohled, admin zakládá a edituje události, nastavuje kolik potřebuje lidí | všichni |
+| `/calendar` | `Calendar.tsx` + `components/reservations/ReservationDialog.tsx` | Kalendář ledu: měsíční/týdenní/denní pohled, admin zakládá a edituje události, nastavuje kolik potřebuje lidí | všichni |
 | `/shifts` | `Shifts.tsx` (1535 ř.) | Směny: brigádník se hlásí, admin schvaluje/přiřazuje/dokončuje, zadává hodiny | admin + „staff" role |
 | `/payouts` | `Payouts.tsx` (688 ř.) | Výplaty: admin spočítá neproplacené hodiny a založí výplatu | jen admin |
 | `/members` | `Members.tsx` (366 ř.) | Členové: admin přidává/odebírá role uživatelům | jen admin |
@@ -425,14 +425,18 @@ zůstává v historii — je veřejný, rotace není nutná. Detaily v sekci „
 ### 2. Databáze v cloudu ≠ migrace v repu (porušená zásada č. 1 z CLAUDE.md)
 Vygenerovaný `src/integrations/supabase/types.ts` (odráží **skutečnou** cloud DB) obsahuje věci, které **v žádné migraci nejsou**:
 - role `instructor`, `bar_staff`, `manager` v enumu `app_role`,
-- (a naopak) kód zapisuje do `events` sloupec **`role_reqs`** (JSONB, per-role počty lidí), který není ani v migracích, ani v `types.ts` — proto je v `IceCalendar.tsx` a `useEvents.ts` obcházený přes `as any`.
+- (a naopak) kód zapisuje do `events` sloupec **`role_reqs`** (JSONB, per-role počty lidí), který tehdy nebyl ani v migracích, ani v `types.ts`.
+  **Od té doby vyřešeno** (ověřeno 4. 9. 2026): `role_reqs` je v `types.ts` (ř. 464) i v migracích; rozpis staví
+  `components/reservations/ReservationDialog.tsx` (ř. 466). Soubor `IceCalendar.tsx`, který se tu uváděl, byl smazán jako mrtvý kód.
 
 Znamená to, že se v Supabase editovalo ručně mimo migrace. **Dokud tohle nesrovnáme, nejde databázi spolehlivě obnovit ze zálohy ani postavit dev prostředí.** Toto je podle mě první věc k opravě.
 
 ### 3. Typ události „Náborová akce" (`recruitment`) pravděpodobně nefunguje
 UI ho v `/calendar` nabízí v selectu, `validation.ts` ho zná — ale **enum `event_type` v DB ho nemá**.
-V kódu je to i přiznané: `IceCalendar.tsx:24` → `// Extended EventType to include 'recruitment' (pending database migration)`.
-Založení náborové akce tedy nejspíš skončí chybou z Postgresu. **Potřeba ověřit proti živé DB.**
+~~V kódu je to i přiznané: `IceCalendar.tsx:24` → `// Extended EventType to include 'recruitment' (pending database migration)`.~~
+**NEPLATÍ od 4. 9. 2026** (ověřeno dotazem do schématu): enum `event_type` má dnes
+`commercial, training, maintenance, recruitment, tournament`, takže `recruitment` v DB je.
+Zmíněný `IceCalendar.tsx` navíc už neexistuje — byl smazán jako mrtvý kód.
 Navíc trigger `handle_new_commercial_event` reaguje jen na `commercial`, takže by se pro náborovku ani negenerovaly sloty.
 
 ### 4. RLS politiky neznají nové role

@@ -3,7 +3,13 @@
 Čistě popisný přehled STÁVAJÍCÍHO stavu (read-only průzkum ke dni 2026-07-17).
 Nic se nenavrhuje ani nemění. Odkazy na kód: baseline migrace
 `supabase/migrations/20260715000000_baseline_production.sql`, frontend
-`src/pages/IceCalendar.tsx` a hook `src/hooks/useEvents.ts`.
+`src/pages/Calendar.tsx` + `src/components/reservations/ReservationDialog.tsx`
+a hook `src/hooks/useEvents.ts`.
+
+> **Pozor na stáří.** Průzkum vznikl nad `src/pages/IceCalendar.tsx`, který
+> byl v září 2026 smazán jako mrtvý kód (nevedl na něj import ani routa).
+> Odkazy níž jsou přepsané na dnešní soubory; čísla řádků u nich platí ke
+> 4. 9. 2026.
 
 ---
 
@@ -60,14 +66,15 @@ tabulkou `shift_applications`. To je mimo rozsah tohoto přehledu (týká se obs
 ### Celý enum `app_role` (8 hodnot)
 `admin`, `trainer`, `part_time_staff`, `pro_player`, `hobby_player`, `instructor`, `bar_staff`, `manager`.
 
-České popisky (`src/config/navigation.ts` → `ROLE_LABELS`, resp. `IceCalendar` `staffRoleLabels`):
+České popisky (`src/config/navigation.ts` → `ROLE_LABELS`, resp. `src/pages/Shifts.tsx`
+→ `staffRoleLabels`, ř. 33):
 `admin` = Správce, `trainer` = Trenér, `instructor` = Instruktor, `bar_staff` = Obsluha baru,
 `manager` = Provozní hospoda, `pro_player` = Profi hráč, `hobby_player` = Hobby hráč.
 (`part_time_staff` = „brigádník" — v `ROLE_LABELS` nemá vlastní popisek.)
 
 ### Které se reálně používají u komerčních akcí
-Formulář komerční/náborové akce nabízí k rozpisu **jen 3 role** (`IceCalendar.tsx`
-`staffRoleLabels`, řádky ~144–146):
+Formulář komerční/náborové akce nabízí k rozpisu **jen 3 role**
+(`src/components/reservations/ReservationDialog.tsx` → `STAFF_ROLES`, ř. 30–34):
 - **`instructor`** (Instruktor)
 - **`bar_staff`** (Obsluha baru)
 - **`manager`** (Provozní hospoda)
@@ -85,8 +92,9 @@ vzniklých starým režimem nebo dorovnáním při editaci. Ostatní role enumu 
 ## 3. Kde a jak se zadává počet směn a jejich rolí
 
 ### Kde
-Stránka **Kalendář** (`/calendar`, `src/pages/IceCalendar.tsx`), dialog **Nová událost** /
-**Úprava události**. Sekce „Konfigurace týmu" se zobrazí jen pro `event_type` `commercial` nebo
+Stránka **Kalendář** (`/calendar`, `src/pages/Calendar.tsx`), dialog rezervace
+(`src/components/reservations/ReservationDialog.tsx`). Sekce **„Obsazení (směny)"** (ř. 898;
+dřív se jmenovala „Konfigurace týmu") se zobrazí jen pro `event_type` `commercial` nebo
 `recruitment`.
 
 ### Jak (UI)
@@ -124,8 +132,10 @@ shifts × N  (status='open', required_role = klíč z role_reqs)
 ## Odkazy do kódu
 - Enum, tabulky, trigger/funkce: `supabase/migrations/20260715000000_baseline_production.sql`
   (`app_role` ř. 44, funkce `handle_new_commercial_event` ř. 128, trigger ř. 427, `events` ř. 297+, `shifts` ř. 332).
-- Formulář a stav rolí: `src/pages/IceCalendar.tsx` (`roleCounts` ř. 61, `staffRoleLabels` ř. 144,
-  `adjustRoleCount` ř. 150, build `role_reqs` ř. 271–283 a 436–449, UI stepper ř. 567–596).
+- Formulář a stav rolí: `src/components/reservations/ReservationDialog.tsx`
+  (`STAFF_ROLES` ř. 30, `roleCounts` ř. 127, `adjust` ř. 260 — dřív `adjustRoleCount`,
+  build `role_reqs` ř. 466, UI stepper ř. 907–910).
+- Popisky rolí ve výpisu směn: `src/pages/Shifts.tsx` (`staffRoleLabels` ř. 33).
 - Dorovnání směn při editaci: `src/hooks/useEvents.ts` (`updateEvent`, ř. 67–101).
 
 *(Nesoulad enumu vs. migrace/kód a další drift je popsaný v `docs/SCHEMA_DRIFT.md`.)*
