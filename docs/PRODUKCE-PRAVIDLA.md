@@ -140,6 +140,25 @@ grep -c "^COPY " $D           # ~48  ← DATA, ne jen schéma
 
 Když `COPY` bloky chybí, máš dump schématu bez dat.
 
+### Dump z `pg_dump` 18+ potřebuje k obnově `psql` 18+
+
+Od verze 18 obaluje `pg_dump` výstup dvojicí `\restrict` / `\unrestrict`
+(první řádky souboru a úplný konec). Jsou to **meta-příkazy `psql`, ne SQL** —
+starší `psql` (17.x) je nezná a obnova na nich skončí chybou.
+
+Změřeno 4. 9. 2026 na tomhle Macu: `pg_dump` i `psql` jsou **18.6**, server
+produkce je **17.6**. Dumpovat novějším klientem starší server je v pořádku
+(odmítá se jen opačná kombinace), takže zálohy odsud jsou platné — ale:
+
+> **Obnovovat je musíš `psql` 18+.** Na stroji, kde je `psql` 17.x, ten dump
+> neprojde. Buď tam doinstaluj klienta 18+, nebo z něj ty dva řádky smaž:
+> ```bash
+> grep -vE '^\\(un)?restrict ' zaloha.sql > zaloha-bez-restrict.sql
+> ```
+
+Záloha, kterou nejde obnovit, není záloha — proto to stojí tady, a ne
+v poznámkách.
+
 Složka `backups/` je v `.gitignore` — zálohy do gitu nepatří.
 
 ---
