@@ -44,8 +44,15 @@
 --
 -- SCHÉMA — vratné, v tomhle pořadí:
 --   1. `ALTER POLICY "Staff update own shifts, admins anything" ON public.shifts`
---      zpět na znění z `20260903120000` (USING i WITH CHECK; pozor, USING je
---      od téhle migrace užší — vrací se na „jen kontrola rolí").
+--      zpět. POZOR, každá půlka pochází odjinud:
+--        * `USING`      → `20260902240000_shifts_jedna_politika.sql`, ř. 55–61
+--          (`20260903120000` žádné `USING` nenastavuje — to, co v něm vypadá
+--           jako `USING`, jsou `USING HINT` u `RAISE EXCEPTION`, což je něco
+--           úplně jiného. Kdo by ho tam hledal, skončí u rekonstrukce z paměti,
+--           tedy přesně u toho, co zakazuje pravidlo 7.)
+--        * `WITH CHECK` → `20260903120000`, sekce 4
+--      `USING` je od téhle migrace užší (štáb nesmí na `cancelled`); revert ho
+--      vrací na „jen kontrola rolí".
 --   2. `validate_shift_claim()` znovu z `20260903160000` (celé tělo, ne ručně).
 --   Helpery (`akce_je_zrusena` a spol.) se rušit nesmějí dřív než politika —
 --   dokud na ně `WITH CHECK` ukazuje, `DROP FUNCTION` neprojde.
@@ -136,6 +143,12 @@ BEGIN
   -- Legitimní cesty tím nepadnou: ověřeno, že `dorovnej_stab`, `prirad_trenera`,
   -- `odeber_trenera`, `zmen_typ_akce` ani `cancel_open_shifts_on_reservation_cancel`
   -- zrušenou směnu NIKDY neoživují — všechny jen zavírají.
+  --
+  -- CO TO ZAVAZUJE DO BUDOUCNA: jakýkoli hromadný UPDATE směn přes `event_id`
+  -- musí od teď vyloučit `cancelled`, jinak neadminovi spadne na téhle bráně.
+  -- Změřeno: úklid směn neadminem na akci, kde už jedna `cancelled` směna leží,
+  -- projde jen s tím filtrem; bez něj skončí na „Do zrušené směny už zapisovat
+  -- nelze." Všechny dnešní cesty ten filtr mají.
   IF OLD.status = 'cancelled'
      AND NOT has_role(auth.uid(), 'admin')
      AND NOT (auth.uid() IS NULL AND session_user IN ('postgres', 'supabase_admin')) THEN
@@ -455,9 +468,25 @@ ALTER POLICY "Staff update own shifts, admins anything" ON public.shifts
 -- ---------------------------------------------------------------------------
 -- `20260903160000` tuhle podmínku neměla, takže `approved` přihláška
 -- u ODPRACOVANÉ směny na zrušené akci by se přepsala na `cancelled` — v rozporu
--- s tím, co ta migrace o sobě tvrdí. Na produkci byla množina prázdná (jinak by
--- spadla už kontrola v 20260903120000), takže se nic nestalo; na čisté DB nebo
--- na demu se to stát může, proto je správné znění tady.
+-- s tím, co ta migrace o sobě tvrdí.
+--
+-- KDY TENHLE PŘÍSNĚJŠÍ FILTR REÁLNĚ NĚCO ZACHRÁNÍ — ať se nepřeceňuje.
+-- Změřeno na fixtuře (`approved` přihláška u `completed` směny na zrušené akci):
+--
+--   * Tam, kde `20260903160000` UŽ PROBĚHLA (produkce i každý sekvenční běh),
+--     ji zavře ona — bez filtru na `completed`. Do téhle migrace se řádek
+--     dostane už jako `cancelled` a tady vyjde „0 řádků".
+--   * Na ČISTÉ DB nebo na demu se řetěz sem vůbec nedostane: padne dřív
+--     `20260903120000` hláškou „Na zrušených akcích pořád visí 1 živých
+--     přihlášek." Jeho závěrečná kontrola totiž počítá přihlášky bez ohledu na
+--     stav směny, kdežto jeho úklid se na `completed` z principu nedostane.
+--     To je vada v už nasazené migraci, opravit ji tady nejde → samostatný
+--     ticket; demo by se muselo dorovnat ručně.
+--
+-- Zbývá tedy jediné okno, které tenhle filtr opravdu kryje: řádky vzniklé mezi
+-- nasazením `20260903160000` a `20260903180000`. To je málo, ale ne nic — a je
+-- to jiné tvrzení, než tu stálo předtím („na demu se to stát může"), které
+-- měřením neobstálo.
 -- Zasažené řádky se schválně SBÍRAJÍ, ne dohledávají zpětně podle času.
 -- První verze kontroly níž se ptala na `updated_at >= now() - interval '1 minute'`,
 -- což je dotaz na hodiny, ne na vlastní práci: stačí, aby v databázi ležela
@@ -510,6 +539,13 @@ END $naprava$;
 -- kde m9 (brány pryč) i m10 (politika bez vlastnictví) opravdu červenají.
 -- Předchozí migrace `20260903160000` tuhle hranici popletla a spoléhala se na
 -- kontrolu, která navíc měřila komentář místo kódu.
+--
+-- KŘEHKOST KOTEV: `_p_set` hledá `NEW.status       := 'cancelled'` včetně těch
+-- sedmi mezer. Pouhé přeformátování těla (reindent) tuhle kontrolu shodí
+-- hláškou „Zmizel přepis uvolněné směny na cancelled." — je to falešná
+-- červená, ne díra, ale kdo bude tělo formátovat, ať ví proč to spadlo.
+-- A hledá se v `prosrc`, tedy i v komentářích: kotva na celý `RAISE EXCEPTION`
+-- to ztěžuje, neuzavírá. Komentář, který cituje celý ten řádek, by ji uspokojil.
 DO $kontrola$
 DECLARE
   _src   text;
