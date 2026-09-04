@@ -2808,6 +2808,16 @@ export type Database = {
         Args: { _co: string; _event_id: string }
         Returns: undefined
       }
+      nahled_ceny_ledu: {
+        Args: {
+          _subject_id: string
+          _event_type: Database["public"]["Enums"]["event_type"]
+          _start: string
+          _end: string
+          _drah?: number
+        }
+        Returns: Json
+      }
       trener_akce: {
         Args: { _event_id: string }
         Returns: {

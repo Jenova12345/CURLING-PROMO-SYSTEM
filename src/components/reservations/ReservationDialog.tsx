@@ -23,7 +23,7 @@ import { nadpisSerie, souhrnSerie } from '@/lib/serie';
 import { hoursForDay } from '@/lib/openingHours';
 import { parseSazba } from '@/lib/money';
 import type {
-  Sheet, Subject, NovaFirma, Settings, CalendarReservation, BookingKind, Conflict,
+  Sheet, Subject, NovaFirma, Settings, CalendarReservation, BookingKind, Conflict, NahledCeny,
   BookingInput, SeriesInput, SeriesResult, Membership,
 } from '@/hooks/useReservations';
 
@@ -59,6 +59,7 @@ export interface ReservationApi {
   zmenTypAkce: (args: { event_id: string; typ: BookingKind }) => Promise<unknown>;
   moveBooking: (args: { id: string; start_at: string; end_at: string; sheet_id?: string }) => Promise<unknown>;
   checkConflicts: (args: { sheet_ids: string[]; start_at: string; end_at: string; kind: BookingKind; ignore_event?: string }) => Promise<Conflict[]>;
+  nahledCeny: (args: { subject_id: string | null; kind: BookingKind; start_at: string; end_at: string; drah: number }) => Promise<NahledCeny | null>;
   aresLookup: (ico: string) => Promise<{ name: string; address: string; dic: string }>;
   findSubjectByIco: (ico: string) => Promise<Subject | null>;
   createSubject: (s: { name: string; ico?: string; dic?: string; address?: string }) => Promise<NovaFirma>;
@@ -351,6 +352,44 @@ export function ReservationDialog({
   const subjectOptions = kind === 'commercial' ? commercials : myClubs;
 
   const toIso = (h: number) => new Date(`${date}T${hh(h)}`).toISOString();
+
+  // ---- NÁHLED CENY: kolik to bude stát, NEŽ to člověk potvrdí ----------------
+  //
+  // Klubový led (trénink, turnaj) se oceňuje pásmovým ceníkem až v databázi,
+  // takže pole „Sazba" zůstává schválně prázdné („z ceníku") — a do téhle chvíle
+  // cenu před potvrzením NEVIDĚL NIKDO, ani admin. Ptáme se proto databáze,
+  // která ji spočítá TOUŽ funkcí, jakou pak použije při zápisu.
+  //
+  // Ptá se to jen tehdy, když je sazba prázdná: vyplněnou sazbu si člověk
+  // dopočítá sám v poli „Celková cena" a druhý (a možná jiný) údaj vedle by jen
+  // mátl.
+  const [cena, setCena] = useState<NahledCeny | null>(null);
+  const [cenaChyba, setCenaChyba] = useState<string | null>(null);
+  const cenaZCeniku = needsSubject && !rate.trim();
+
+  useEffect(() => {
+    if (!open || !cenaZCeniku || !subjectId || hodinAkce <= 0) {
+      setCena(null); setCenaChyba(null); return;
+    }
+    let zivy = true;
+    // Krátká prodleva: hodiny se přepínají klikáním a bez ní by každý klik
+    // poslal dotaz, který stejně přepíše ten další.
+    const t = setTimeout(() => {
+      api.nahledCeny({
+        subject_id: subjectId, kind,
+        start_at: toIso(startHour), end_at: toIso(endHour), drah: drahAkce,
+      })
+        .then((v) => { if (zivy) { setCena(v); setCenaChyba(null); } })
+        // Hláška z databáze je česká a konkrétní („Led na víkend v 5 h nemá
+        // v ceníku cenu…"), tak se ukazuje tak, jak přišla — je to pro člověka
+        // důležitější než ticho.
+        .catch((e: Error) => { if (zivy) { setCena(null); setCenaChyba(e.message); } });
+    }, 250);
+    return () => { zivy = false; clearTimeout(t); };
+    // `api` se schválně nesleduje — je to nová reference při každém renderu
+    // rodiče a efekt by se pouštěl pořád dokola.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, cenaZCeniku, subjectId, kind, date, startHour, endHour, drahAkce, hodinAkce]);
 
   // ---- ARES ------------------------------------------------------------------
   const handleAres = async () => {
@@ -791,6 +830,38 @@ export function ReservationDialog({
                     {' '}Nejbližší možné: <strong>{nejblizsiCelkem[0]} Kč</strong>
                     {' '}nebo <strong>{nejblizsiCelkem[1]} Kč</strong>.
                   </p>
+                )}
+
+                {/* CENA PŘED POTVRZENÍM.
+                    Klubový led se oceňuje pásmy až v databázi, takže tohle je
+                    jediné místo, kde se člověk cenu dozví dřív, než rezervaci
+                    potvrdí. Číslo počítá `nahled_ceny_ledu` toutéž funkcí,
+                    jakou pak použije zápis — proto se smí ukázat jako cena,
+                    ne jako odhad. */}
+                {cena?.celkem != null && (
+                  <div className="rounded-md border bg-muted/40 p-3 text-sm">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span>Cena za {hodinAkce} h{drahAkce > 1 ? ` × ${drahAkce} dráhy` : ''}</span>
+                      <strong className="text-base">
+                        {cena.celkem.toLocaleString('cs-CZ')} Kč
+                      </strong>
+                    </div>
+                    <p className="text-muted-foreground text-xs mt-1">
+                      {cena.bez_dph ? 'Bez DPH.' : 'Včetně DPH.'}
+                      {cena.zdroj === 'pasma' && cena.rozpis?.length
+                        ? ` Podle ceníku ledu: ${cena.rozpis
+                            .map((r) => `${r.hodin} h × ${r.sazba} Kč`)
+                            .join(' + ')}.`
+                        : cena.sazba != null ? ` Sazba ${cena.sazba.toLocaleString('cs-CZ')} Kč/h.` : ''}
+                      {drahAkce > 1 ? ' Cena platí za všechny dráhy dohromady.' : ''}
+                    </p>
+                  </div>
+                )}
+
+                {/* Když ceník nepokrývá zvolenou hodinu, databáze to řekne
+                    konkrétně — a je lepší to vědět teď než při potvrzení. */}
+                {cenaChyba && (
+                  <p className="text-xs text-amber-700">{cenaChyba}</p>
                 )}
 
                 {!isAdmin && <p className="text-xs text-muted-foreground">Sazbu určuje správce podle ceníku.</p>}

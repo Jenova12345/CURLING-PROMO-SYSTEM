@@ -70,6 +70,20 @@ export interface SeriesInput extends BookingInput {
   until: string;
 }
 
+/** Co vrátí `nahled_ceny_ledu` — kolik bude rezervace stát, než se potvrdí.
+ *  `bez_dph` říká, jestli je `celkem` základ daně (komerční sazba), nebo už
+ *  konečná částka (klubový pásmový ceník). Splést to znamená chybu o 21 %. */
+export type NahledCeny = {
+  zdroj: 'pasma' | 'cenik' | 'sazba_subjektu' | 'zadna';
+  hodin?: number;
+  drah?: number;
+  za_drahu?: number | null;
+  celkem: number | null;
+  sazba?: number;
+  rozpis?: { sazba: number; hodin: number }[] | null;
+  bez_dph: boolean;
+};
+
 export type Conflict = {
   reservation_id: string;
   sheet_id: string;
@@ -334,6 +348,32 @@ export const useReservations = (range: DateRange | null) => {
     return (data ?? []) as Conflict[];
   };
 
+  // NÁHLED CENY — kolik to bude stát, když to člověk teď potvrdí.
+  //
+  // Klubový led se oceňuje pásmovým ceníkem až v databázi (`set_reservation_pricing`
+  // při INSERTu), takže formulář nechává sazbu prázdnou („z ceníku") a cenu do
+  // téhle chvíle NEVIDĚL NIKDO, ani admin. RPC `nahled_ceny_ledu` počítá TOUŽ
+  // funkcí `cena_ledu` a ve stejném pořadí jako ten trigger — schválně se to
+  // nepočítá tady v JS, aby o penězích nevznikly dvě pravdy.
+  //
+  // Cena se vrací až po bráně na členství, takže cizí klub si přes tohle nikdo
+  // neocení.
+  const nahledCeny = async (args: {
+    subject_id: string | null; kind: BookingKind;
+    start_at: string; end_at: string; drah: number;
+  }): Promise<NahledCeny | null> => {
+    if (!args.subject_id) return null;
+    const { data, error } = await supabase.rpc('nahled_ceny_ledu', {
+      _subject_id: args.subject_id,
+      _event_type: args.kind,
+      _start: args.start_at,
+      _end: args.end_at,
+      _drah: args.drah,
+    });
+    if (error) throw rpcError(error, 'Cenu se nepodařilo spočítat.');
+    return data as unknown as NahledCeny;
+  };
+
   // ARES: serverová edge funkce načte firmu podle IČO (obchodniJmeno/adresa/dic).
   const aresLookup = async (ico: string): Promise<{ name: string; address: string; dic: string }> => {
     const { data, error } = await supabase.functions.invoke('ares-lookup', { body: { ico } });
@@ -540,6 +580,7 @@ export const useReservations = (range: DateRange | null) => {
     cancelBooking: cancelBooking.mutateAsync,
     approveReservation: approveReservation.mutateAsync,
     checkConflicts,
+    nahledCeny,
     aresLookup,
     findSubjectByIco,
     createSubject: createSubject.mutateAsync,

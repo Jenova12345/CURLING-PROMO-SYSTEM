@@ -403,6 +403,7 @@ const Calendar = () => {
           zmenTypAkce: api.zmenTypAkce,
           moveBooking: api.moveBooking,
           checkConflicts: api.checkConflicts,
+          nahledCeny: api.nahledCeny,
           aresLookup: api.aresLookup,
           findSubjectByIco: api.findSubjectByIco,
           createSubject: api.createSubject,
