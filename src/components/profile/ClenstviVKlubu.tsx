@@ -11,6 +11,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/ui/use-toast';
 import { useSubjectRequests } from '@/hooks/useSubjectRequests';
+import { cekajiciVlastni, posledniVyrizenaVlastni } from '@/lib/vlastniZadosti';
 
 /**
  * Členství v klubu na profilu — a hlavně cesta, jak o něj požádat dodatečně.
@@ -61,11 +62,17 @@ const ClenstviVKlubu = () => {
     return () => { zivy = false; };
   }, [user, requests]);
 
-  const cekajici = requests.find((r) => r.status === 'ceka');
+  // JEN VLASTNÍ ŽÁDOSTI. `useSubjectRequests` schválně nefiltruje — stránka
+  // „Žádosti" potřebuje celou frontu — a RLS na `subject_requests` pouští vedle
+  // vlastních řádků i cizí, když je člověk admin nebo zástupce klubu
+  // (`is_subject_rep(subject_id)`). Bez tohohle filtru vzala karta první cizí
+  // čekající žádost a tvrdila potvrzenému členovi, že mu „žádost čeká na
+  // vyřízení" — a hlavně mu tím schovala formulář, takže si o další klub
+  // nemohl požádat vůbec. Změřeno na produkci 4. 9. 2026: týkalo se 6 účtů
+  // (2 správci haly a 4 zástupci klubu).
+  const cekajici = cekajiciVlastni(requests, user?.id);
   // Jen poslední vyřízená: historie rozhodnutí patří adminovi, ne žadateli.
-  const posledniVyrizena = requests
-    .filter((r) => r.status !== 'ceka')
-    .sort((a, b) => (b.decided_at ?? '').localeCompare(a.decided_at ?? ''))[0];
+  const posledniVyrizena = posledniVyrizenaVlastni(requests, user?.id);
 
   const posli = async () => {
     if (!klub) return;
