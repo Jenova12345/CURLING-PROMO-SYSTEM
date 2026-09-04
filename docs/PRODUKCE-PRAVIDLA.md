@@ -140,6 +140,27 @@ grep -c "^COPY " $D           # ~48  ← DATA, ne jen schéma
 
 Když `COPY` bloky chybí, máš dump schématu bez dat.
 
+### ⚠ Read-only spojení přes pooler NEJDE vynutit přes `PGOPTIONS`
+
+`PGOPTIONS="-c default_transaction_read_only=on"` se přes Supabase pooler
+**nepropíše** — spojení se tváří jako read-only, ale zápis projde. Změřeno
+4. 9. 2026 na ostré produkci: `COMMENT ON TABLE public.shifts` takhle prošel
+a musel se vracet ze zálohy. (Vráceno, produkce v pořádku — ale je to
+pravidlo 1 v praxi: kdyby nebyla čerstvá záloha, nebylo by proti čemu ověřit,
+že tabulka komentář předtím neměla.)
+
+**Co funguje:** explicitní `BEGIN READ ONLY;` v těle transakce. To se vynutí
+spolehlivě — zápis skončí na `cannot execute UPDATE in a read-only transaction`.
+Když potřebuješ do produkce jen číst (a to je skoro vždycky), obal dotaz takhle:
+
+```bash
+printf 'BEGIN READ ONLY;\n%s\n;COMMIT;\n' "$DOTAZ" | psql ... -f -
+```
+
+Pozor, i v READ ONLY transakci projde `CREATE TEMP TABLE` — to je normální
+chování Postgresu, ne děravé nastavení. Na ověření, že read-only opravdu drží,
+proto použij zápis do REÁLNÉ tabulky, ne temp tabulku.
+
 ### Dump z `pg_dump` 18+ potřebuje k obnově `psql` 18+
 
 Od verze 18 obaluje `pg_dump` výstup dvojicí `\restrict` / `\unrestrict`

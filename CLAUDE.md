@@ -130,7 +130,20 @@ jdou jako další migrace nad baseline, ne přepisem historie.
    vyžaduje celé tělo, takže je vygeneruj z `pg_get_functiondef` živého schématu
    a vlož do nich jen ten zásah, který děláš — pak ověř diffem, že nic nezmizelo.
    Přepis z paměti už jednou utnul půlku bezpečnostního guardu (commit `87b1f78`).
-8. **Testy práv piš pod `SET LOCAL ROLE authenticated`.** Jako `postgres` projde
+8. **Žádné RPC nesmí přijmout název GUC ani stavět SQL z uživatelského vstupu.**
+   Bezpečnostní brány u směn se opírají o transakční markery (`app.uklid_trenera`
+   v `prirad_trenera`/`odeber_trenera`, `app.preceneni` v `zmen_typ_akce`).
+   `authenticated` **i `anon` mají EXECUTE na `pg_catalog.set_config`** a `app.*`
+   je volný namespace — takže marker drží jedině tím, že se ke `set_config`
+   z API nedá dostat. Dnes se nedá: v `public` není ani jedna funkce
+   s dynamickým SQL grantovaná `authenticated` a jediný `set_config`
+   s proměnným názvem (`notify_reservation_changed`) si klíč skládá jako
+   `'app.zmena_' || <uuid bez pomlček>`, kam se cizí jméno nevejde.
+   První RPC, které vezme jméno GUC parametrem nebo poskládá SQL z uživatelského
+   vstupu, tuhle podmínku zruší a otevře obchvat brány N3 (zavření cizí obsazené
+   směny). Ověřeno bezpečnostní bránou 4. 9. 2026.
+
+9. **Testy práv piš pod `SET LOCAL ROLE authenticated`.** Jako `postgres` projde
    všechno (obchází granty i RLS), takže test tvrdí zavřeno o dveřích, vedle
    kterých je otevřené okno. Dvakrát to takhle propustilo blokér.
 
