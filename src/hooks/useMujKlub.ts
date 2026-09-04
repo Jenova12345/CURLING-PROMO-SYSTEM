@@ -123,11 +123,32 @@ export const useMujKlub = () => {
     },
   });
 
+  // JMENOVÁNÍ DALŠÍHO SPRÁVCE KLUBU.
+  //
+  // Od migrace 20260904160000 to smí správce klubu, ne jen správce haly —
+  // vědomé rozvolnění pravidla (zadání 4. 9. 2026). Hranice drží databáze:
+  // `jmenuj_spravce_klubu` pustí dál jen správce TOHO klubu, povyšuje jen ze
+  // `member` (degradovat tím tedy nejde) a uzavřený účet odmítne.
+  const jmenujSpravce = useMutation({
+    mutationFn: async (p: { subject_id: string; user_id: string }) => {
+      const { error: e } = await supabase.rpc('jmenuj_spravce_klubu', {
+        _subject: p.subject_id, _user: p.user_id,
+      });
+      // Hláška z databáze je česká a konkrétní, tak ji nepřebalujeme.
+      if (e) throw new Error(e.message?.trim() || 'Jmenování se nepodařilo.');
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['muj-klub'] });
+      qc.invalidateQueries({ queryKey: ['my-memberships'] });
+    },
+  });
+
   return {
     kluby,
     isLoading,
     error,
+    jmenujSpravce: jmenujSpravce.mutateAsync,
     nastavPravoNavic: nastavPravoNavic.mutateAsync,
-    isBusy: nastavPravoNavic.isPending,
+    isBusy: nastavPravoNavic.isPending || jmenujSpravce.isPending,
   };
 };

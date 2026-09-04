@@ -2808,6 +2808,10 @@ export type Database = {
         Args: { _co: string; _event_id: string }
         Returns: undefined
       }
+      jmenuj_spravce_klubu: {
+        Args: { _subject: string; _user: string }
+        Returns: undefined
+      }
       nahled_ceny_ledu: {
         Args: {
           _subject_id: string

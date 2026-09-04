@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
+import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -22,10 +23,17 @@ import { useMujKlub, type ClenKlubu } from '@/hooks/useMujKlub';
 const MujKlub = () => {
   const { toast } = useToast();
   const { isRep, isAdmin } = useAuth();
-  const { kluby, isLoading, error, nastavPravoNavic, isBusy } = useMujKlub();
+  const { kluby, isLoading, error, nastavPravoNavic, jmenujSpravce, isBusy } = useMujKlub();
 
   // Potvrzovací krok „opravdu?" při UDĚLENÍ práva (R12).
   const [potvrzeni, setPotvrzeni] = useState<
+    { subject_id: string; nazev: string; clen: ClenKlubu } | null
+  >(null);
+
+  // Jmenování správce se potvrzuje VŽDY: přes tuhle stránku ho nejde vzít zpět
+  // (`jmenuj_spravce_klubu` povyšuje jen ze `member`, degradovat neumí) a nový
+  // správce může jmenovat další. Odebrat ho umí jen správce haly.
+  const [jmenovani, setJmenovani] = useState<
     { subject_id: string; nazev: string; clen: ClenKlubu } | null
   >(null);
 
@@ -104,6 +112,7 @@ const MujKlub = () => {
                   <TableHead>Jméno</TableHead>
                   <TableHead>Role v klubu</TableHead>
                   <TableHead>Smí si potvrdit rezervaci</TableHead>
+                  <TableHead>Správa klubu</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -125,11 +134,23 @@ const MujKlub = () => {
                         />
                       )}
                     </TableCell>
+                    <TableCell>
+                      {c.level === 'rep' ? (
+                        <span className="text-muted-foreground text-sm">už je správce</span>
+                      ) : (
+                        <Button
+                          variant="outline" size="sm" disabled={isBusy}
+                          onClick={() => setJmenovani({ subject_id: klub.subject_id, nazev: klub.nazev, clen: c })}
+                        >
+                          Jmenovat správcem
+                        </Button>
+                      )}
+                    </TableCell>
                   </TableRow>
                 ))}
                 {klub.clenove.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={3} className="text-muted-foreground">
+                    <TableCell colSpan={4} className="text-muted-foreground">
                       Klub zatím nemá členy.
                     </TableCell>
                   </TableRow>
@@ -166,6 +187,51 @@ const MujKlub = () => {
               }}
             >
               Udělit právo
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!jmenovani} onOpenChange={(o) => !o && setJmenovani(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Jmenovat správcem klubu?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {jmenovani && (
+                <>
+                  <strong>{jmenovani.clen.jmeno}</strong> bude správce klubu{' '}
+                  <strong>{jmenovani.nazev}</strong> — bude schvalovat žádosti o členství,
+                  potvrzovat rezervace klubu a <strong>jmenovat další správce</strong>.
+                  <br /><br />
+                  Na ceny, faktury ani na jiné kluby to nesahá. Odebrat správce klubu
+                  ale přes tuhle stránku nejde — musel by o to požádat správce haly.
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Zrušit</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={async () => {
+                if (!jmenovani) return;
+                const { subject_id, clen } = jmenovani;
+                setJmenovani(null);
+                try {
+                  await jmenujSpravce({ subject_id, user_id: clen.user_id });
+                  toast({
+                    title: 'Správce jmenován',
+                    description: `${clen.jmeno} je teď správce klubu.`,
+                  });
+                } catch (e) {
+                  toast({
+                    title: 'Nepovedlo se',
+                    description: e instanceof Error ? e.message : 'Zkuste to prosím znovu.',
+                    variant: 'destructive',
+                  });
+                }
+              }}
+            >
+              Jmenovat správcem
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
