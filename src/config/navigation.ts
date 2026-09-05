@@ -29,6 +29,16 @@ export interface NavItem {
    * nepozná a musí se předat zvlášť.
    */
   vyzadujeZastupce?: boolean;
+  /**
+   * Položka navíc PRO ZÁSTUPCE KLUBU — vidí ji, kdo splní `roles`, a k tomu
+   * každý zástupce klubu bez ohledu na roli.
+   *
+   * Opak `vyzadujeZastupce`, který naopak přístup zužuje. Vzniklo kvůli
+   * „Žádostem": schvalovat členy svého klubu smí zástupce už v databázi
+   * (`approve_subject_request`, brána R5), ale do menu se nedostal, protože
+   * filtr uměl jen `app_role` — a „zástupce" žádná role není.
+   */
+  iProZastupce?: boolean;
 }
 
 export const NAV_ITEMS: NavItem[] = [
@@ -75,7 +85,10 @@ export const NAV_ITEMS: NavItem[] = [
     path: '/requests',
     label: 'Žádosti',
     icon: UserPlus,
-    roles: ['admin']
+    roles: ['admin'],
+    // Zástupce klubu schvaluje žádosti do SVÉHO klubu (databáze mu to dovolí
+    // už dnes). Zúžení na vlastní kluby řeší stránka, ne tenhle filtr.
+    iProZastupce: true,
   },
   {
     path: '/subjects',
@@ -156,6 +169,10 @@ export const filterNavItemsByRoles = (
   return items.filter(item => {
     // Položky pro zástupce klubu se řídí vztahem ke klubu, ne rolí.
     if (item.vyzadujeZastupce && !jeZastupce) return false;
+    // …a naopak: zástupce se k položce dostane i bez odpovídající role.
+    // Schválně PŘED kontrolou prázdných rolí — účet bez role, který je
+    // zástupcem klubu, by jinak vypadl na `DEFAULT_PATHS`.
+    if (item.iProZastupce && jeZastupce) return true;
     if (roles.length === 0) {
       return DEFAULT_PATHS.includes(item.path);
     }

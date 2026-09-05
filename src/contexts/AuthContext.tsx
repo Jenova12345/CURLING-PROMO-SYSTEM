@@ -53,6 +53,8 @@ interface AuthContextType {
   profilNedostupny: boolean;
   /** Je zástupcem aspoň jednoho klubu → smí vyřizovat žádosti do svých klubů. */
   isRep: boolean;
+  /** Id klubů, kde je přihlášený `subject_reps.level = 'rep'`. */
+  repSubjects: string[];
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -67,6 +69,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [role, setRole] = useState<AppRole | null>(null);
   const [roles, setRoles] = useState<AppRole[]>([]);
   const [isRep, setIsRep] = useState(false);
+  const [repSubjects, setRepSubjects] = useState<string[]>([]);
   // `null` = ještě nevíme (běží načítání). Rozlišuje se od `true`/`false`,
   // aby se při pomalém načtení neprobliklo hlášení o nedostupném profilu.
   const [profilOk, setProfilOk] = useState<boolean | null>(null);
@@ -136,18 +139,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       // Zástupcovství klubu (kvůli schvalovací frontě). Selhání dotazu nesmí
       // shodit přihlášení — v nejhorším se jen neukáže položka v menu.
+      // `subject_id`, ne jen počet: stránka „Žádosti" musí rozhodovat po
+      // řádcích (o cizí klub nesmí rozhodovat ani zástupce), a bez seznamu
+      // klubů by na to neměla z čeho. `limit(1)` proto padá — potřebujeme
+      // všechny, ne důkaz existence.
       const { data: repData } = await supabase
         .from('subject_reps')
-        .select('level')
+        .select('subject_id')
         .eq('user_id', userId)
-        .eq('level', 'rep')
-        .limit(1);
-      setIsRep((repData ?? []).length > 0);
+        .eq('level', 'rep');
+      const kluby = (repData ?? [])
+        .map((r) => (r as { subject_id: string | null }).subject_id)
+        .filter((id): id is string => !!id);
+      setRepSubjects(kluby);
+      setIsRep(kluby.length > 0);
     } catch (error) {
       console.error('[AuthContext] Error fetching user data:', error);
       setRoles([]);
       setRole(null);
       setIsRep(false);
+      setRepSubjects([]);
       // Táž úvaha jako výš: když nevíme, v jakém stavu účet je, nepustíme ho.
       setProfilOk(false);
     }
@@ -178,6 +189,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setProfilOk(null);
           setRole(null);
           setRoles([]);
+          // Zástupcovství se tu dřív nečistilo — po odhlášení tak `isRep`
+          // zůstávalo `true`. Se seznamem klubů by v paměti přežila i cizí
+          // id, tak se maže obojí.
+          setIsRep(false);
+          setRepSubjects([]);
           if (mounted) {
             setLoading(false);
           }
@@ -254,6 +270,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setProfilOk(null);
     setRole(null);
     setRoles([]);
+    setIsRep(false);
+    setRepSubjects([]);
     try {
       // Vyprázdnit i cache dotazů: `billing-settings` s IBANem a IČEM by jinak
       // zůstalo v paměti ještě několik minut po odhlášení. Dalšímu uživateli se
@@ -313,6 +331,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         cekaNaSchvaleni,
         profilNedostupny,
         isRep,
+        repSubjects,
       }}
     >
       {children}
