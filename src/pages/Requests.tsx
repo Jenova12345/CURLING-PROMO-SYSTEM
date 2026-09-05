@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/ui/use-toast';
+import { smiRozhodnout } from '@/lib/zadostiOpravneni';
 import { useSubjectRequests, type RepLevel, type SubjectRequest } from '@/hooks/useSubjectRequests';
 
 const STAV: Record<string, { text: string; trida?: string }> = {
@@ -19,16 +20,23 @@ const STAV: Record<string, { text: string; trida?: string }> = {
 const kdy = (d: string | null) => (d ? format(new Date(d), 'd. M. yyyy HH:mm', { locale: cs }) : '—');
 
 const Requests = () => {
-  const { isAdmin, isRep } = useAuth();
+  const { isAdmin, isRep, repSubjects } = useAuth();
   const { toast } = useToast();
   const { requests, cekajici, isLoading, error, approve, reject, isBusy } = useSubjectRequests();
   // Úroveň se volí PRO KAŽDOU ŽÁDOST ZVLÁŠŤ, ne globálně: zástupce je výjimka,
   // a jedno společné rozbalovátko by svádělo k tomu udělat zástupce ze všech.
   const [uroven, setUroven] = useState<Record<string, RepLevel>>({});
 
-  // Frontu vyřizuje i ZÁSTUPCE KLUBU (blok C, R5) — vidí v ní jen žádosti do
-  // svých klubů, o což se stará politika na `subject_requests`, ne tahle
-  // podmínka. Tady jde jen o to, komu se stránka vůbec ukáže.
+  // Frontu vyřizuje i ZÁSTUPCE KLUBU (blok C, R5). Tahle podmínka řeší jen to,
+  // komu se stránka vůbec ukáže.
+  //
+  // CO SE SEM DOSTANE ZA ŘÁDKY: politika `subject_requests_select` pouští
+  // `user_id = auth.uid() OR has_role(admin) OR is_subject_rep(subject_id)`.
+  // Zástupci tedy chodí žádosti do jeho klubů — A K TOMU JEHO VLASTNÍ žádost,
+  // i když míří do klubu, kde zástupcem není. Dřívější znění téhle poznámky
+  // tvrdilo, že politika sama vrací „jen žádosti do svých klubů"; to neplatí
+  // a stálo to za tlačítkem, které vždycky skončilo chybou z databáze.
+  // Rozhodovat se proto smí jen tam, kde to projde i v DB — `smiRozhodnout`.
   if (!isAdmin && !isRep) {
     return <div className="p-6 text-muted-foreground">Žádosti o přiřazení vyřizuje správce haly nebo správce klubu.</div>;
   }
@@ -112,6 +120,9 @@ const Requests = () => {
                     <TableCell className="whitespace-nowrap">{kdy(z.created_at)}</TableCell>
                     <TableCell className="max-w-xs text-sm text-muted-foreground">{z.poznamka ?? '—'}</TableCell>
                     <TableCell>
+                      {!smiRozhodnout(z, isAdmin, repSubjects) ? (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      ) : (
                       <select
                         aria-label={`Úroveň pro ${z.zadatel}`}
                         className="h-9 rounded-md border border-input bg-background px-2 text-sm"
@@ -119,22 +130,35 @@ const Requests = () => {
                         onChange={(e) => setUroven((u) => ({ ...u, [z.id!]: e.target.value as RepLevel }))}
                       >
                         <option value="member">člen</option>
-                        {/* Zástupce smí jmenovat JEN admin (blok C) — zástupci se
-                            ta volba ani nenabízí, aby nenarazil na chybu z databáze. */}
+                        {/* Jmenování dalšího správce klubu patří na stránku „Můj klub"
+                            (`jmenuj_spravce_klubu`), tady se schválně nenabízí.
+                            POZOR: NENÍ to proto, že by to databáze odmítla — od
+                            4. 9. 2026 `approve_subject_request` pustí `_level='rep'`
+                            i správci klubu (vědomá změna pravidla). UI je tu tedy
+                            PŘÍSNĚJŠÍ než DB, což je záměr, ne technická nutnost. */}
                         {isAdmin && <option value="rep">správce klubu</option>}
                       </select>
+                      )}
                     </TableCell>
                     <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <Button size="sm" disabled={isBusy} onClick={() => schval(z)}>
-                          <Check className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Schválit
-                        </Button>
-                        <Button size="sm" variant="outline" disabled={isBusy}
-                                aria-label={`Zamítnout žádost ${z.zadatel}`}
-                                onClick={() => zamitni(z)}>
-                          <X className="h-3.5 w-3.5" aria-hidden="true" />
-                        </Button>
-                      </div>
+                      {smiRozhodnout(z, isAdmin, repSubjects) ? (
+                        <div className="flex justify-end gap-1">
+                          <Button size="sm" disabled={isBusy} onClick={() => schval(z)}>
+                            <Check className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Schválit
+                          </Button>
+                          <Button size="sm" variant="outline" disabled={isBusy}
+                                  aria-label={`Zamítnout žádost ${z.zadatel}`}
+                                  onClick={() => zamitni(z)}>
+                            <X className="h-3.5 w-3.5" aria-hidden="true" />
+                          </Button>
+                        </div>
+                      ) : (
+                        /* Vlastní žádost do cizího klubu: vidět ji smí (RLS ji pouští),
+                           rozhodnout o ní ne. Tlačítko by skončilo chybou z databáze. */
+                        <span className="text-xs text-muted-foreground">
+                          vyřídí správce klubu {z.klub}
+                        </span>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}

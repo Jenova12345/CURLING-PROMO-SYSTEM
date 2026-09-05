@@ -15,10 +15,17 @@ import { useMujKlub, type ClenKlubu } from '@/hooks/useMujKlub';
 /**
  * „Můj klub" — pro ZÁSTUPCE klubu.
  *
- * Čistě čtecí seznam členů plus jediná pravomoc: udělit členovi „právo navíc"
- * (smí si sám potvrdit svoji rezervaci). Přidávat a odebírat členy zůstává
- * adminovi — rozhodnutí PM P3 z 31. 8. 2026, dokud se nedořeší politika
- * odchodu z klubu.
+ * Seznam členů a pravomoci zástupce nad vlastním klubem:
+ *   • udělit členovi „právo navíc" (smí si sám potvrdit svoji rezervaci),
+ *   • jmenovat dalšího správce klubu (`jmenuj_spravce_klubu`, od 4. 9. 2026),
+ *   • přijmout nového člena — ale jen SCHVÁLENÍM ŽÁDOSTI na stránce „Žádosti"
+ *     (`approve_subject_request`); přímý zápis do `subject_reps` má v RLS
+ *     `subject_reps_insert_admin`, tedy jen admin.
+ *
+ * ODEBRAT člena zástupce nemůže: `subject_reps_delete_admin` pouští jen
+ * admina a žádná SECURITY DEFINER funkce na odebrání neexistuje (ověřeno
+ * 5. 9. 2026). Původní znění téhle poznámky tvrdilo, že adminovi zůstává
+ * i přidávání — to od zavedení schvalovací fronty neplatí.
  */
 const MujKlub = () => {
   const { toast } = useToast();
@@ -76,7 +83,8 @@ const MujKlub = () => {
           <ShieldCheck className="h-7 w-7" /> Můj klub
         </h1>
         <p className="text-muted-foreground mt-1 text-sm md:text-base">
-          Členové klubů, kterých jste správcem. Přidávat a odebírat členy může správce haly.
+          Členové klubů, kterých jste správcem. Nové členy přijmete schválením jejich
+          žádosti na stránce „Žádosti"; odebrat člena může jen správce haly.
         </p>
       </div>
 
