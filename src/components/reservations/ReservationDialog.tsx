@@ -864,7 +864,25 @@ export function ReservationDialog({
                   <p className="text-xs text-amber-700">{cenaChyba}</p>
                 )}
 
-                {!isAdmin && <p className="text-xs text-muted-foreground">Sazbu určuje správce podle ceníku.</p>}
+                {/* Cena je vidět rovnou nad tímhle řádkem, tak už neříkáme
+                    „sazbu určuje správce" (znělo to, jako by se cena teprve
+                    někde dohadovala). Zbývá jen vysvětlit, proč do ní nejde
+                    sáhnout — a co dělat, když nesedí. */}
+                {!isAdmin && (
+                  <p className="text-xs text-muted-foreground">
+                    {/* Větví se podle `zdroj`, ne podle toho, jestli cena vyšla.
+                        Klub s dohodnutou `subjects.default_rate` dostane
+                        `zdroj='sazba_subjektu'` — tam by věta o „ceníku ledu"
+                        lhala a odporovala si s řádkem nad sebou, který v tom
+                        případě píše jen „Sazba X Kč/h". Dnes takový klub není
+                        ani jeden, ale první dohodnutá cena by to zlomila. */}
+                    {cena?.zdroj === 'pasma'
+                      ? 'Cena je z platného ceníku ledu a měnit ji může jen správce haly.'
+                      : cena?.celkem != null
+                        ? 'Cenu určuje sazba sjednaná pro váš klub; měnit ji může jen správce haly.'
+                        : 'Cenu spočítá systém podle ceníku; měnit ji může jen správce haly.'}
+                  </p>
+                )}
               </div>
             )}
 
