@@ -68,7 +68,14 @@ if [ ! -f .env.local ]; then
   echo "❌ Chybí .env.local (a v něm SUPABASE_DB_PASSWORD)." >&2; exit 1
 fi
 # `tr -d` sundá uvozovky, kdyby někdo heslo v .env.local zapsal jako "…" nebo '…'.
-HESLO=$(grep -E '^SUPABASE_DB_PASSWORD=' .env.local | head -1 | cut -d= -f2- | tr -d "\"'")
+#
+# `command grep`, NE `grep`: v interaktivním shellu bývá `grep` přebitý funkcí
+# (Claude Code jich pár definuje), a když její binárka chybí, volání TIŠE
+# SELŽE a vrátí prázdno. Heslo by pak vyšlo prázdné a skript by se zastavil
+# na hlášce „SUPABASE_DB_PASSWORD není vyplněné", přestože v souboru je.
+# Změřeno 6. 9. 2026 — stálo to půl hodiny hledání ve špatném souboru.
+# `command` obchází funkce i aliasy a sáhne rovnou po binárce.
+HESLO=$(command grep -E '^SUPABASE_DB_PASSWORD=' .env.local | head -1 | cut -d= -f2- | tr -d "\"'")
 if [ -z "$HESLO" ]; then
   echo "❌ SUPABASE_DB_PASSWORD není v .env.local vyplněné." >&2; exit 1
 fi
@@ -85,7 +92,7 @@ echo "   → $DUMP"
 # s produkcí (17.x), jinak pg_dump odmítne dumpovat novější server. Kontejner
 # lokálního Supabase má přesně tu správnou — proto ta oklika.
 DUMP_CMD=""
-if command -v pg_dump >/dev/null 2>&1 && pg_dump --version | grep -qE ' 1[7-9]\.'; then
+if command -v pg_dump >/dev/null 2>&1 && pg_dump --version | command grep -qE ' 1[7-9]\.'; then
   DUMP_CMD="local"
 else
   KONTEJNER=$(docker ps --filter "name=supabase_db_" --format '{{.Names}}' | head -1)
@@ -106,8 +113,16 @@ if [ "$DUMP_CMD" = "local" ]; then
     -U "postgres.${REF}" -d postgres \
     --no-owner --no-privileges > "$DUMP"
 else
-  # Heslo jde do kontejneru přes -e, ne v příkazové řádce (byla by v `ps`).
-  docker exec -e PGPASSWORD="$HESLO" "$KONTEJNER" pg_dump \
+  # Heslo se předává `-e PGPASSWORD` BEZ HODNOTY — `docker` ho v té podobě
+  # převezme z prostředí klienta a do argv se nedostane.
+  #
+  # Dřív tu stálo `-e PGPASSWORD="$HESLO"` s komentářem, že tím se `ps` vyhneme.
+  # NEVYHNULI. Je to argument klienta `docker`, takže heslo bylo po celou dobu
+  # dumpu (minuty) čitelné komukoli pod stejným uživatelem:
+  #   docker exec -e PGPASSWORD=<heslo v čitelné podobě> supabase_db_… pg_dump
+  # Našla to bezpečnostní brána 6. 9. 2026; porušovalo to nepodkročitelné
+  # pravidlo 5. Ověřeno, že hodnota do kontejneru dorazí i takhle.
+  PGPASSWORD="$HESLO" docker exec -e PGPASSWORD "$KONTEJNER" pg_dump \
     -h aws-1-eu-west-1.pooler.supabase.com -p 5432 \
     -U "postgres.${REF}" -d postgres \
     --no-owner --no-privileges > "$DUMP"
@@ -121,7 +136,7 @@ if [ "$VELIKOST" -lt 100000 ]; then
   echo "❌ Dump je podezřele malý (< 100 kB). Zastavuji, migrace se nespustí." >&2
   exit 1
 fi
-if ! tail -5 "$DUMP" | grep -q "PostgreSQL database dump complete"; then
+if ! tail -5 "$DUMP" | command grep -q "PostgreSQL database dump complete"; then
   echo "❌ Dump nekončí hláškou o dokončení — je useknutý. Zastavuji." >&2
   exit 1
 fi
