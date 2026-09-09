@@ -33,11 +33,15 @@
 --              timestamptz,uuid,text,jsonb,numeric,boolean,uuid,numeric);
 --        DROP FUNCTION public.fakturoid_podklady_akce(uuid);
 --        DROP FUNCTION public.fakturoid_podklady_klub(uuid,date,date);
---   2) obnovit z předchozích migrací VŠECH PĚT přepsaných funkcí:
---        `set_reservation_pricing`, `check_reservation_money`  ← na tuhle se
---            zapomínalo; bez ní krok 3 zastaví provoz (viz výš)
---        `create_booking` (11 parametrů), `fakturoid_podklady_akce`,
---        `fakturoid_podklady_klub` (v původních návratových typech)
+--   2) obnovit VŠECH PĚT přepsaných funkcí, VŽDY Z POSLEDNÍ MIGRACE, KTERÁ JE
+--      DEFINUJE (starší verze nesou starší těla — viz varování níž):
+--        `set_reservation_pricing`  z `20260902264000_dph_i_pri_rucni_sazbe.sql`
+--            (je v repu v devíti migracích, tohle je ta poslední)
+--        `check_reservation_money`  z `20260831110000_cenik_pasma.sql`
+--            ← na tuhle se zapomínalo; bez ní krok 3 zastaví provoz (viz výš)
+--        `create_booking` (11 parametrů) z `20260817100000_serie_kolize.sql`
+--        `fakturoid_podklady_akce` + `_klub` z `20260831231000_dph_jedno_misto.sql`
+--            (v původních návratových typech, tedy bez `cena_rucni`)
 --
 --      A KE VŠEM TŘEM DROPNUTÝM FUNKCÍM ZNOVU PUSTIT GRANTY:
 --        REVOKE ALL ON FUNCTION <fn> FROM PUBLIC, anon;
@@ -511,6 +515,18 @@ BEGIN
   _celkem := CASE WHEN _is_admin THEN p_celkem ELSE NULL END;
 
   IF _celkem IS NOT NULL THEN
+    -- NaN A NEKONEČNO PROKLOUZNOU OBĚMA KONTROLAMA NÍŽ.
+    --
+    -- PostgREST umí `p_celkem` poslat jako řetězec, takže „NaN" i „Infinity"
+    -- se do numeric dostanou. V Postgresu je `NaN = NaN` PRAVDA a NaN se řadí
+    -- NAD všechny hodnoty, takže `NaN < 0` i `NaN <> round(NaN, 2)` jsou obě
+    -- false — a spadlo by to až o kus dál na `NaN::int` v rozpadu částky,
+    -- syrovou hláškou „cannot convert NaN to integer". (Proto ne `_celkem
+    -- <> _celkem`, jak by se čekalo od plovoucí čárky — ta podmínka je tu
+    -- vždycky false.) `-Infinity` chytne až kontrola na zápornou částku.
+    IF _celkem = 'NaN'::numeric OR _celkem = 'Infinity'::numeric THEN
+      RAISE EXCEPTION 'Celková cena musí být číslo.';
+    END IF;
     IF _celkem < 0 THEN
       RAISE EXCEPTION 'Celková cena nemůže být záporná.';
     END IF;
@@ -990,7 +1006,11 @@ GRANT EXECUTE ON FUNCTION public.fakturoid_podklady_klub(uuid, date, date) TO au
 -- na `reservations` sloupcové UPDATE granty, takže si přes PATCH /rest/v1
 -- `amount` i `end_at` přepíše mimo tyhle funkce. Není to regrese — totéž jde
 -- dnes u pásmové ceny — ale „blokované i adminovi" je tvrzení o RPC, ne
--- o databázi jako celku. (Poznámka bezpečnostní brány.)
+-- o databázi jako celku. Jeden důsledek té meze stojí za pojmenování:
+-- kdyby se u pevně oceněné rezervace vynulovalo `subject_id`, větev pevné
+-- ceny v `set_reservation_pricing` se přeskočí a `amount` se přepočítá
+-- z hodin a odvozené sazby. Žádné RPC to nedělá, jde to jen přímým zápisem.
+-- (Obojí poznámka bezpečnostní brány.)
 --
 -- Těla jsou VYGENEROVANÁ z `pg_get_functiondef` a vložený je do nich jen guard;
 -- ověřeno diffem, že z původní logiky neubyl ani řádek (pravidlo 7). Signatury

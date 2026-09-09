@@ -533,6 +533,43 @@ END $$;
 RESET ROLE;
 
 -- -----------------------------------------------------------------------------
+-- 11b) NaN A NEKONEČNO DOSTANOU ČESKOU HLÁŠKU, NE SYROVOU CHYBU
+-- -----------------------------------------------------------------------------
+-- PostgREST umí `p_celkem` poslat jako řetězec, takže „NaN" i „Infinity" se do
+-- numeric dostanou. Obě proklouznou kontrolám na zápornou částku i na haléře
+-- (`NaN < 0` a `NaN <> round(NaN, 2)` jsou v Postgresu obě false, protože
+-- `NaN = NaN` je pravda) a spadly by až na `NaN::int` v rozpadu částky.
+-- Odmítnuté to bylo i předtím, ale hláškou „cannot convert NaN to integer".
+SET LOCAL ROLE authenticated;
+DO $$
+BEGIN
+  PERFORM pg_temp.prihlas('11111111-1111-1111-1111-111111111111');
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.create_booking(ARRAY[%L::uuid], ''tournament'', ''NaN'','
+           || ' %L::timestamptz, %L::timestamptz, %L::uuid, NULL, ''{}''::jsonb,'
+           || ' NULL, false, NULL, ''NaN''::numeric)',
+           pg_temp.draha(1), pg_temp.den(603, 8), pg_temp.den(603, 10), pg_temp.klub()),
+    'musí být číslo', 'NaN dostane českou hlášku, ne syrovou chybu z rozpadu částky');
+
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.create_booking(ARRAY[%L::uuid], ''tournament'', ''Inf'','
+           || ' %L::timestamptz, %L::timestamptz, %L::uuid, NULL, ''{}''::jsonb,'
+           || ' NULL, false, NULL, ''Infinity''::numeric)',
+           pg_temp.draha(1), pg_temp.den(603, 8), pg_temp.den(603, 10), pg_temp.klub()),
+    'musí být číslo', 'nekonečno dostane českou hlášku taky');
+
+  -- a záporné nekonečno chytne až kontrola na zápornou částku — jiná hláška,
+  -- ale pořád česká a pořád odmítnuté
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.create_booking(ARRAY[%L::uuid], ''tournament'', ''-Inf'','
+           || ' %L::timestamptz, %L::timestamptz, %L::uuid, NULL, ''{}''::jsonb,'
+           || ' NULL, false, NULL, ''-Infinity''::numeric)',
+           pg_temp.draha(1), pg_temp.den(603, 8), pg_temp.den(603, 10), pg_temp.klub()),
+    'nemůže být záporná', 'záporné nekonečno spadne na kontrolu záporné částky');
+END $$;
+RESET ROLE;
+
+-- -----------------------------------------------------------------------------
 -- 12) `anon` NEMÁ EXECUTE NA PENĚŽNÍCH FUNKCÍCH
 -- -----------------------------------------------------------------------------
 -- `anon` není `PUBLIC`, takže `REVOKE ALL … FROM PUBLIC` ho nesundá — a Supabase

@@ -993,6 +993,14 @@ zavřené není — je to admin-only, vědomé, přebitá rezervace je vyjmenova
 v odpovědi a klub dostane notifikaci; a účtovat dál 14 000 za akci, které hala
 sama vzala půlku, by bylo horší. Přecenit zbytek umí až editor paušálu.
 
+**NaN a nekonečno.** PostgREST umí `p_celkem` poslat jako řetězec, takže „NaN"
+i „Infinity" se do `numeric` dostanou — a obě proklouznou kontrolám na zápornou
+částku i na haléře, protože v Postgresu je `NaN = NaN` **pravda** a NaN se řadí
+nad všechny hodnoty (`NaN < 0` i `NaN <> round(NaN, 2)` jsou false). Odmítnuté to
+bylo vždycky, ale až o kus dál na `NaN::int` v rozpadu částky, syrovou hláškou
+„cannot convert NaN to integer". Teď to chytá vlastní kontrola na začátku.
+Pozor: `_celkem <> _celkem` by nefungovalo — to je zvyk z plovoucí čárky.
+
 Pozor na mez: guardy platí pro **RPC, ne pro přímý zápis do tabulky**. Admin má
 na `reservations` sloupcové UPDATE granty, takže si přes `PATCH /rest/v1` `amount`
 přepíše mimo ně. Není to regrese (totéž jde u pásmové ceny), ale „blokované i
@@ -1029,7 +1037,7 @@ vzniknout brzo.
 ### Testy
 
 ```
-supabase/tests/rucni_cena_test.sql   50 tvrzení, celé pod SET LOCAL ROLE authenticated
+supabase/tests/rucni_cena_test.sql   53 tvrzení, celé pod SET LOCAL ROLE authenticated
                                      — obě fakturační cesty, korekce, všech pět
                                        zavřených mutačních cest včetně storna jedné dráhy,
                                        anon bez EXECUTE
