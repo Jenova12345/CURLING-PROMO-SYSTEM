@@ -19,6 +19,7 @@ import { useRateLimit } from '@/hooks/useRateLimit';
 import { useReservations, type CalendarReservation } from '@/hooks/useReservations';
 import { hoursForDay, openingHoursEnvelope } from '@/lib/openingHours';
 import { fmtHodin, fmtKc, fmtSazba } from '@/lib/money';
+import { podkladKlubu, barvaProRezervaci } from '@/lib/barvaKlubu';
 import { ReservationCalendar } from '@/components/reservations/ReservationCalendar';
 import { ReservationDialog } from '@/components/reservations/ReservationDialog';
 import { ObsazeniDetail } from '@/components/reservations/ObsazeniDetail';
@@ -35,15 +36,22 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   maintenance: 'Údržba ledu',
 };
 
-// Barva podle typu akce (stejná paleta se používá i v mřížce kalendáře).
+// Chip v měsíčním pohledu. Barvu nese KLUB (stejně jako bloky v mřížce);
+// co klub nemá — komerce, údržba, rezervace bez subjektu — zůstává neutrální.
+//
+// Údržba drží oranžový okraj stejně jako blok v mřížce: není to „akce klubu",
+// ale stav ledu, a splynutí s komerční akcí by v provozu mátlo. Bez tohohle
+// řádku si týdenní a měsíční pohled odporovaly.
 function chipClass(r: CalendarReservation): string {
-  switch (r.event_type) {
-    case 'commercial':
-    case 'recruitment': return 'bg-green-100 text-green-800';
-    case 'tournament': return 'bg-purple-100 text-purple-800';
-    case 'maintenance': return 'bg-orange-100 text-orange-800';
-    default: return 'bg-blue-100 text-blue-800';
-  }
+  const zaklad = barvaProRezervaci(r) ? 'text-slate-900' : 'bg-slate-100 text-slate-800';
+  return r.event_type === 'maintenance' ? `${zaklad} border-l-2 border-l-orange-500` : zaklad;
+}
+
+// Podklad chipu pro klubovou rezervaci. Vrací undefined, když klub barvu nemá,
+// a chip si nechá třídu z `chipClass`.
+function chipStyle(r: CalendarReservation): { backgroundColor: string } | undefined {
+  const podklad = podkladKlubu(barvaProRezervaci(r), 0.22);
+  return podklad ? { backgroundColor: podklad } : undefined;
 }
 
 // Název, který vidí VŠICHNI přihlášení (klub / akce) — maskuje se jen částka.
@@ -343,7 +351,7 @@ const Calendar = () => {
                       <div className="text-xs font-medium">{format(day, 'd')}</div>
                       <div className="mt-1 space-y-0.5">
                         {dayRes.slice(0, 3).map((r) => (
-                          <div key={r.id} className={cn('truncate rounded px-1 text-[10px]', chipClass(r))}>
+                          <div key={r.id} className={cn('truncate rounded px-1 text-[10px]', chipClass(r))} style={chipStyle(r)}>
                             {format(new Date(r.start_at!), 'HH:mm')} {reservationLabel(r)}
                           </div>
                         ))}

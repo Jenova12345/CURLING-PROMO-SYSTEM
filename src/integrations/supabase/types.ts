@@ -2119,6 +2119,7 @@ export type Database = {
       subjects: {
         Row: {
           address: string | null
+          barva: string | null
           created_at: string
           created_by: string | null
           default_rate: number | null
@@ -2133,6 +2134,7 @@ export type Database = {
         }
         Insert: {
           address?: string | null
+          barva?: string | null
           created_at?: string
           created_by?: string | null
           default_rate?: number | null
@@ -2147,6 +2149,7 @@ export type Database = {
         }
         Update: {
           address?: string | null
+          barva?: string | null
           created_at?: string
           created_by?: string | null
           default_rate?: number | null
@@ -2508,6 +2511,7 @@ export type Database = {
           sheet_id: string | null
           start_at: string | null
           status: Database["public"]["Enums"]["reservation_status"] | null
+          subject_color: string | null
           subject_id: string | null
           subject_name: string | null
           subject_type: Database["public"]["Enums"]["subject_type"] | null

@@ -21,7 +21,7 @@ export const useSubjectsAdmin = () => {
       // nečitelný a hvězdička by skončila na 42501. Sazby se dotahují zvlášť
       // z `subjects_rates`, který je vydá jen adminovi.
       const { data, error } = await supabase.from('subjects')
-        .select('id, type, name, ico, dic, address, created_by, created_at, updated_by, updated_at, deleted_at')
+        .select('id, type, name, ico, dic, address, barva, created_by, created_at, updated_by, updated_at, deleted_at')
         .is('deleted_at', null).order('type').order('name');
       if (error) throw error;
 
@@ -99,7 +99,7 @@ export const useSubjectsAdmin = () => {
   });
 
   const updateSubject = useMutation({
-    mutationFn: async ({ id, fields }: { id: string; fields: Partial<Pick<Subject, 'name' | 'ico' | 'dic' | 'address' | 'default_rate'>> }) => {
+    mutationFn: async ({ id, fields }: { id: string; fields: Partial<Pick<Subject, 'name' | 'ico' | 'dic' | 'address' | 'default_rate' | 'barva'>> }) => {
       const { error } = await supabase.from('subjects').update(fields).eq('id', id);
       if (error) throw new Error('Nepodařilo se upravit subjekt.');
     },

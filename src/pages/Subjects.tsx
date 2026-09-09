@@ -17,6 +17,8 @@ import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSubjectsAdmin, type Subject, type RepLevel } from '@/hooks/useSubjectsAdmin';
 import { parseSazba } from '@/lib/money';
+import { PALETA_KLUBU } from '@/lib/barvaKlubu';
+import { cn } from '@/lib/utils';
 
 const LEVELS: [RepLevel, string][] = [['rep', 'Správce klubu'], ['member', 'Člen']];
 
@@ -77,6 +79,7 @@ function SubjectCard({ subject, admin, onDelete, onErr }: {
   const { toast } = useToast();
   const [rate, setRate] = useState(subject.default_rate != null ? String(subject.default_rate) : '');
   const [name, setName] = useState(subject.name);
+  const [barva, setBarva] = useState(subject.barva ?? '');
   const [addUser, setAddUser] = useState('');
   const [addLevel, setAddLevel] = useState<RepLevel>('member');
   const subjectReps = admin.reps.filter((r) => r.subject_id === subject.id);
@@ -86,7 +89,16 @@ function SubjectCard({ subject, admin, onDelete, onErr }: {
     try {
       const sazba = parseSazba(rate);
       if (sazba.chyba) { onErr(new Error(sazba.chyba)); return; }
-      await admin.updateSubject({ id: subject.id, fields: { name: name.trim() || subject.name, default_rate: sazba.hodnota } });
+      // Barva se posílá jen u klubů — komerční subjekty ji podle zadání nemají
+      // mít, ať je v kalendáři na první pohled poznat, co je klubový led.
+      await admin.updateSubject({
+        id: subject.id,
+        fields: {
+          name: name.trim() || subject.name,
+          default_rate: sazba.hodnota,
+          ...(subject.type === 'club' ? { barva: barva || null } : null),
+        },
+      });
       toast({ title: 'Uloženo' });
     } catch (e) { onErr(e); }
   };
@@ -114,6 +126,58 @@ function SubjectCard({ subject, admin, onDelete, onErr }: {
             <Label className="text-xs">Sazba (Kč/h, nepovinné)</Label>
             <Input value={rate} onChange={(e) => setRate(e.target.value)} className="h-8 w-32" placeholder="z ceníku" inputMode="numeric" />
           </div>
+          {subject.type === 'club' && (
+            <div className="space-y-1">
+              <Label className="text-xs" htmlFor={`barva-${subject.id}`}>Barva v kalendáři</Label>
+              <div className="flex items-center gap-1.5" role="group" aria-label={`Barva klubu ${subject.name}`}>
+                {/* Vlastní odstín — nativní paleta prohlížeče. Vrací vždy #rrggbb,
+                    což je přesně tvar, který drží CHECK v databázi. */}
+                <input
+                  id={`barva-${subject.id}`}
+                  type="color"
+                  value={barva || '#2563eb'}
+                  onChange={(e) => setBarva(e.target.value)}
+                  className="h-8 w-10 cursor-pointer rounded border bg-background p-0.5"
+                  aria-label={`Vlastní barva klubu ${subject.name}`}
+                />
+                {/* Rychlá volba z palety — stejné barvy, jaké rozdala migrace. */}
+                {PALETA_KLUBU.map((b) => (
+                  <button
+                    key={b.hex}
+                    type="button"
+                    title={b.nazev}
+                    aria-label={`${b.nazev} — ${subject.name}`}
+                    aria-pressed={barva.toLowerCase() === b.hex}
+                    onClick={() => setBarva(b.hex)}
+                    className={cn(
+                      'h-5 w-5 rounded-full border transition',
+                      barva.toLowerCase() === b.hex && 'ring-2 ring-ring ring-offset-1',
+                    )}
+                    style={{ backgroundColor: b.hex }}
+                  />
+                ))}
+                {/* Barvu musí jít i sundat: NULL je platný stav (= neutrální blok),
+                    ale nativní `type="color"` prázdnou hodnotu nezná a paleta jen
+                    nastavuje. Bez tohohle tlačítka by se jednou zvolená barva
+                    nedala odebrat. */}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-2 text-xs"
+                  disabled={!barva}
+                  onClick={() => setBarva('')}
+                >Bez barvy</Button>
+              </div>
+              {/* Bez tohohle by admin viděl u klubu bez barvy modrý čtvereček
+                  (výchozí hodnota inputu), v kalendáři šedý blok — a neměl by jak
+                  poznat, že barva ve skutečnosti nastavená není. */}
+              {!barva && (
+                <p className="text-xs text-muted-foreground">
+                  Nenastaveno — v kalendáři bude neutrální šedá.
+                </p>
+              )}
+            </div>
+          )}
           <Button size="sm" variant="outline" onClick={saveMeta} disabled={admin.isBusy}>Uložit</Button>
         </div>
 

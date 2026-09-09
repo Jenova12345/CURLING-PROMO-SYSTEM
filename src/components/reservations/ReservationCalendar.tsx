@@ -4,28 +4,31 @@ import { cs } from 'date-fns/locale';
 import { Clock, Link2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { fmtKc } from '@/lib/money';
+import { podkladKlubu, barvaProRezervaci } from '@/lib/barvaKlubu';
 import type { Sheet, CalendarReservation, ShiftFill } from '@/hooks/useReservations';
 
 const PX_PER_MIN = 1;      // 1 minuta = 1 px
 const DRAG_THRESHOLD = 6;  // menší posun bereme jako klik, ne tažení
 
-// Barva podle typu akce (komerční / turnaj / trénink / údržba).
-const TYPE_STYLE: Record<string, string> = {
-  commercial:  'border-l-green-500 bg-green-50',
-  recruitment: 'border-l-green-500 bg-green-50',
-  tournament:  'border-l-purple-500 bg-purple-50',
-  maintenance: 'border-l-orange-500 bg-orange-50',
-  training:    'border-l-blue-500 bg-blue-50',
-};
+// Blok se barví podle KLUBU, ne podle typu akce — tři kluby na tréninku
+// vypadaly dřív úplně stejně a v týdnu nešlo poznat, kdo kde je. Barvu drží
+// `subjects.barva`, kreslí ji `podkladKlubu` (viz lib/barvaKlubu.ts).
+//
+// Tohle je jen vzhled pro rezervace BEZ barvy klubu: komerce, rezervace bez
+// subjektu a kluby, kterým admin barvu nenastavil. Zůstávají neutrálně šedé,
+// aby bylo na první pohled vidět, co je barevně rozlišený klubový led a co ne.
+//
+// Údržba je jediná výjimka: není to „akce klubu", ale stav ledu, a splynutí
+// s komerční akcí by v provozu mátlo. Podklad má neutrální jako ostatní,
+// rozlišuje ji jen oranžový pruh. (Stejné pravidlo platí pro měsíční chip
+// v `Calendar.tsx` — kdyby se měnilo tady, musí se změnit i tam.)
+function neutralniStyl(eventType: string | null | undefined): string {
+  return eventType === 'maintenance'
+    ? 'border-l-orange-500 bg-slate-50'
+    : 'border-l-slate-400 bg-slate-50';
+}
 
-const TYPE_LEGEND: [string, string, string][] = [
-  ['commercial', 'Komerční akce', 'bg-green-500'],
-  ['tournament', 'Turnaj', 'bg-purple-500'],
-  ['training', 'Trénink / klub', 'bg-blue-500'],
-  ['maintenance', 'Údržba ledu', 'bg-orange-500'],
-];
-
-// Jemné odlišení drah — barva tady nesmí konkurovat barvám typů akcí,
+// Jemné odlišení drah — barva tady nesmí konkurovat barvám KLUBŮ,
 // proto jen decentní podklad druhé dráhy + popisek nad každým sloupcem.
 // (Hala má dvě dráhy; při případné třetí by se odstíny opakovaly — přidat další.)
 const LANE_TINT = ['', 'bg-muted/40'];
@@ -58,6 +61,38 @@ export function ReservationCalendar({
   openHour, closeHour, canBook, onSlotClick, onReservationClick, onMove, onOutsideHours,
   hoursForDay,
 }: Props) {
+  /**
+   * Kluby, které jsou v zobrazeném období vidět — pro legendu pod kalendářem.
+   *
+   * Odvozuje se z právě načtených rezervací, ne samostatným dotazem na
+   * `subjects`: tu tabulka RLS běžnému členovi u cizích klubů nevydá vůbec,
+   * takže by legenda buď byla prázdná, nebo by ji musel obsloužit nový, širší
+   * přístup. Takhle platí jednoduché pravidlo — v legendě je přesně to,
+   * co je v mřížce.
+   */
+  const legendaKlubu = useMemo(() => {
+    const m = new Map<string, { id: string; nazev: string; barva: string }>();
+    for (const r of reservations) {
+      const barva = barvaProRezervaci(r);
+      if (!barva || !r.subject_id) continue;
+      if (!m.has(r.subject_id)) {
+        m.set(r.subject_id, { id: r.subject_id, nazev: r.subject_name ?? 'Klub', barva });
+      }
+    }
+    return [...m.values()].sort((a, b) => a.nazev.localeCompare(b.nazev, 'cs'));
+  }, [reservations]);
+
+  // Je v období aspoň jedna rezervace bez barvy klubu? Jen tehdy má smysl
+  // v legendě vysvětlovat, co ta šedá znamená.
+  //
+  // Popisek se ZÁMĚRNĚ nejmenuje „komerce, údržba": šedý může být i klub, kterému
+  // admin barvu nenastavil (nebo ji vybral tak světlou, že by nebyla vidět).
+  // Tvrdit u něj „komerce" by byla nepravda přímo v legendě.
+  const maNeutralni = useMemo(
+    () => reservations.some((r) => !barvaProRezervaci(r)),
+    [reservations],
+  );
+
   /**
    * Akce, které jedou přes VÍC DRAH — kolik drah a kolik stojí dohromady.
    *
@@ -261,6 +296,8 @@ export function ReservationCalendar({
           const fill = r.event_id ? shiftFill[r.event_id] : undefined;
           const isCommercial = r.event_type === 'commercial' || r.event_type === 'recruitment';
           const label = r.event_title ?? r.subject_name ?? 'Rezervace';
+          // spočítat jednou: styl bloku ji potřebuje na dvou místech
+          const barvaKlubu = barvaProRezervaci(r);
           const dragging = preview?.id === r.id;
           const skupina = r.event_id ? akce.get(r.event_id) : undefined;
           const vicDrah = (skupina?.drah ?? 1) > 1;
@@ -293,7 +330,7 @@ export function ReservationCalendar({
                 // Akce přes víc drah dostane výraznější rám, aby bylo vidět,
                 // že ty bloky patří k sobě a nejsou to dvě samostatné akce.
                 vicDrah && 'ring-1 ring-inset ring-primary/40',
-                TYPE_STYLE[r.event_type ?? 'training'] ?? 'border-l-slate-400 bg-slate-50',
+                neutralniStyl(r.event_type),
                 !r.approved_at && 'border-dashed',
                 // Roztažený blok se netáhne: tah míří do jednoho sloupce
                 // a akce jich zabírá víc. Přesouvá se přes Upravit.
@@ -302,6 +339,13 @@ export function ReservationCalendar({
               )}
               style={{
                 top, height,
+                // Barva klubu vyhrává nad neutrálním základem z neutralniStyl().
+                // Podklad je barva zesvětlená na bílé (viz podkladKlubu), aby
+                // na něm zůstal čitelný tmavý text i u tmavě modrého klubu;
+                // plná barva jde jen do levého pruhu, kde na ní text neleží.
+                ...(barvaKlubu
+                  ? { backgroundColor: podkladKlubu(barvaKlubu), borderLeftColor: barvaKlubu }
+                  : null),
                 // Sloupce drah jsou stejně široké `flex-1` sourozenci, takže
                 // roztažení přes N drah je N × šířka sloupce (minus okraje,
                 // které blok drží uvnitř `left-1 right-1`).
@@ -410,14 +454,25 @@ export function ReservationCalendar({
         </div>
       </div>
 
-      {/* legenda */}
+      {/* legenda — kluby se berou z právě zobrazených rezervací, ne zvlášť
+          dotazem: `reservations_calendar` barvu i jméno vydává rovnou, takže
+          legenda nemůže ukázat klub, který uživatel v mřížce stejně nevidí. */}
       <div className="mt-3 flex flex-wrap items-center gap-4 px-2 text-xs text-muted-foreground">
-        {TYPE_LEGEND.map(([key, label, dot]) => (
-          <span key={key} className="flex items-center gap-1.5">
-            <span className={cn('inline-block h-2.5 w-2.5 rounded-full', dot)} />
-            {label}
+        {legendaKlubu.map((k) => (
+          <span key={k.id} className="flex items-center gap-1.5">
+            <span
+              className="inline-block h-2.5 w-2.5 rounded-full border"
+              style={{ backgroundColor: k.barva }}
+            />
+            {k.nazev}
           </span>
         ))}
+        {maNeutralni && (
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-2.5 w-2.5 rounded-full border bg-slate-300" />
+            Bez barvy klubu (komerce, údržba)
+          </span>
+        )}
         <span className="flex items-center gap-1.5">
           <Clock className="h-3 w-3 text-amber-600" /> čeká na potvrzení správcem klubu
         </span>
