@@ -1377,6 +1377,7 @@ export type Database = {
           cancelled_at: string | null
           cancelled_by: string | null
           cena_bez_dph: boolean
+          cena_rucni: boolean
           cenove_pasma: Json | null
           corrected_amount: number | null
           corrected_hours: number | null
@@ -1409,6 +1410,7 @@ export type Database = {
           cancelled_at?: string | null
           cancelled_by?: string | null
           cena_bez_dph?: boolean
+          cena_rucni?: boolean
           cenove_pasma?: Json | null
           corrected_amount?: number | null
           corrected_hours?: number | null
@@ -1441,6 +1443,7 @@ export type Database = {
           cancelled_at?: string | null
           cancelled_by?: string | null
           cena_bez_dph?: boolean
+          cena_rucni?: boolean
           cenove_pasma?: Json | null
           corrected_amount?: number | null
           corrected_hours?: number | null
@@ -2574,27 +2577,6 @@ export type Database = {
             referencedColumns: ["event_id"]
           },
           {
-            foreignKeyName: "reservations_preferovany_trener_fkey"
-            columns: ["preferovany_trener"]
-            isOneToOne: false
-            referencedRelation: "profiles"
-            referencedColumns: ["user_id"]
-          },
-          {
-            foreignKeyName: "reservations_preferovany_trener_fkey"
-            columns: ["preferovany_trener"]
-            isOneToOne: false
-            referencedRelation: "profiles_public"
-            referencedColumns: ["user_id"]
-          },
-          {
-            foreignKeyName: "reservations_preferovany_trener_fkey"
-            columns: ["preferovany_trener"]
-            isOneToOne: false
-            referencedRelation: "profiles_self"
-            referencedColumns: ["user_id"]
-          },
-          {
             foreignKeyName: "reservations_sheet_id_fkey"
             columns: ["sheet_id"]
             isOneToOne: false
@@ -2781,61 +2763,7 @@ export type Database = {
       }
     }
     Functions: {
-      cena_je_bez_dph: {
-        Args: {
-          _event_type: Database["public"]["Enums"]["event_type"]
-          _sazba_subjektu: number
-          _subject_type: Database["public"]["Enums"]["subject_type"]
-        }
-        Returns: boolean
-      }
-      hodiny_bez_pasma: {
-        Args: { _oh: Json }
-        Returns: {
-          den: number
-          hodina: number
-        }[]
-      }
-      nastav_prani_trenera: {
-        Args: { _reservation_ids: string[]; _user_id: string }
-        Returns: Json
-      }
-      over_danovy_rezim_podkladu: {
-        Args: {
-          _ceka_bez_dph: boolean
-          _popis_dokladu: string
-          _rezervace: string[]
-        }
-        Returns: undefined
-      }
-      over_neni_vyfakturovano: {
-        Args: { _co: string; _event_id: string }
-        Returns: undefined
-      }
-      jmenuj_spravce_klubu: {
-        Args: { _subject: string; _user: string }
-        Returns: undefined
-      }
-      nahled_ceny_ledu: {
-        Args: {
-          _subject_id: string
-          _event_type: Database["public"]["Enums"]["event_type"]
-          _start: string
-          _end: string
-          _drah?: number
-        }
-        Returns: Json
-      }
-      trener_akce: {
-        Args: { _event_id: string }
-        Returns: {
-          hourly_rate: number
-          jmeno: string
-          shift_id: string
-          status: string
-          user_id: string
-        }[]
-      }
+      akce_je_zrusena: { Args: { p_event_id: string }; Returns: boolean }
       approve_reservation: { Args: { p_reservation_id: string }; Returns: Json }
       approve_subject_request: {
         Args: {
@@ -2890,6 +2818,14 @@ export type Database = {
         Args: { p_reason?: string; p_reservation_id: string; p_scope?: string }
         Returns: Json
       }
+      cena_je_bez_dph: {
+        Args: {
+          _event_type: Database["public"]["Enums"]["event_type"]
+          _sazba_subjektu: number
+          _subject_type: Database["public"]["Enums"]["subject_type"]
+        }
+        Returns: boolean
+      }
       cena_ledu: {
         Args: { _end: string; _start: string }
         Returns: {
@@ -2931,6 +2867,7 @@ export type Database = {
       }
       create_booking: {
         Args: {
+          p_celkem?: number
           p_end: string
           p_kind: string
           p_note?: string
@@ -3009,6 +2946,7 @@ export type Database = {
         Args: { _event: string }
         Returns: {
           castka: number
+          cena_rucni: boolean
           cenove_pasma: Json
           end_at: string
           event_title: string
@@ -3024,6 +2962,7 @@ export type Database = {
         Args: { _do: string; _od: string; _subject: string }
         Returns: {
           castka: number
+          cena_rucni: boolean
           cenove_pasma: Json
           end_at: string
           event_title: string
@@ -3142,10 +3081,21 @@ export type Database = {
         }
         Returns: boolean
       }
+      hodiny_bez_pasma: {
+        Args: { _oh: Json }
+        Returns: {
+          den: number
+          hodina: number
+        }[]
+      }
       iban_je_platny: { Args: { _iban: string }; Returns: boolean }
       is_subject_member: { Args: { _subject: string }; Returns: boolean }
       is_subject_rep: { Args: { _subject: string }; Returns: boolean }
       issue_invoice: { Args: { _invoice_id: string }; Returns: Json }
+      jmenuj_spravce_klubu: {
+        Args: { _subject: string; _user: string }
+        Returns: undefined
+      }
       ma_pravo_navic: { Args: { _subject: string }; Returns: boolean }
       mark_invoice_paid: {
         Args: { _datum?: string; _invoice_id: string }
@@ -3158,6 +3108,20 @@ export type Database = {
           p_sheet_id?: string
           p_start: string
         }
+        Returns: Json
+      }
+      nahled_ceny_ledu: {
+        Args: {
+          _drah?: number
+          _end: string
+          _event_type: Database["public"]["Enums"]["event_type"]
+          _start: string
+          _subject_id: string
+        }
+        Returns: Json
+      }
+      nastav_prani_trenera: {
+        Args: { _reservation_ids: string[]; _user_id: string }
         Returns: Json
       }
       nastav_pravo_navic: {
@@ -3198,6 +3162,18 @@ export type Database = {
         }[]
       }
       odeber_trenera: { Args: { _event_id: string }; Returns: Json }
+      over_danovy_rezim_podkladu: {
+        Args: {
+          _ceka_bez_dph: boolean
+          _popis_dokladu: string
+          _rezervace: string[]
+        }
+        Returns: undefined
+      }
+      over_neni_vyfakturovano: {
+        Args: { _co: string; _event_id: string }
+        Returns: undefined
+      }
       prirad_trenera: {
         Args: { _event_id: string; _user_id: string }
         Returns: Json
@@ -3224,9 +3200,27 @@ export type Database = {
         Args: { _hodnota: number; _rada: string; _rok: number }
         Returns: number
       }
+      smena_je_na_zrusene_akci: {
+        Args: { p_shift_id: string }
+        Returns: boolean
+      }
+      smena_prijima_prihlasky: {
+        Args: { p_shift_id: string }
+        Returns: boolean
+      }
       storno_invoice: {
         Args: { _duvod?: string; _invoice_id: string }
         Returns: Json
+      }
+      trener_akce: {
+        Args: { _event_id: string }
+        Returns: {
+          hourly_rate: number
+          jmeno: string
+          shift_id: string
+          status: string
+          user_id: string
+        }[]
       }
       ucet_aktivni: { Args: { _uid?: string }; Returns: boolean }
       unmark_invoice_paid: { Args: { _invoice_id: string }; Returns: undefined }
@@ -3254,6 +3248,7 @@ export type Database = {
         }
         Returns: Json
       }
+      zrusene_akce_se_smenami: { Args: never; Returns: string[] }
     }
     Enums: {
       app_role:
