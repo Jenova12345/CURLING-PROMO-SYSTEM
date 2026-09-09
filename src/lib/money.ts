@@ -265,3 +265,54 @@ export function parseSazba(vstup: string, strop: number = SAZBA_STROP): Vysledek
   // ji od nuly rozezná — což už jednou shodilo vlastnostní test.
   return { hodnota: cislo + 0 };
 }
+
+/**
+ * Přečte PEVNOU CELKOVOU CENU AKCE z formulářového pole.
+ *
+ * PROČ NE `parseSazba`: ta čte HODINOVOU SAZBU a platí pro ni jiná pravidla —
+ * celé koruny a strop 50 000. U ceny za celou akci je obojí špatně:
+ *   • 14 000,50 je legitimní částka a databáze ji bere (`round(p_celkem, 2)`),
+ *     ale `parseSazba` ji odmítne jako „sazbu s haléři";
+ *   • 60 000 za víkendový turnaj je běžné číslo, jenže `SAZBA_STROP` je strop
+ *     KČ ZA HODINU, ne za akci — a hláška by mluvila o Kč/h, které admin nezadal.
+ * Když se tohle četlo `parseSazba`, chyba se cestou ztratila, částka se zahodila
+ * a rezervace tiše vznikla za ceníkovou cenu s hláškou „Rezervace vytvořena".
+ *
+ * STROP JE ODVOZENÝ, ne vymyšlený: `dráhohodiny × SAZBA_STROP`, tedy tatáž mez,
+ * jakou by uhlídala hodinová sazba. Drží se tím jedno pravidlo, ne dvě čísla,
+ * která se časem rozejdou. Ochrana proti překlepu o řád (140 000 místo 14 000)
+ * to není — na tu by byl potřeba strop na cenu akce a to je rozhodnutí pro PM.
+ *
+ * @param jednotek Dráhohodiny akce (dráhy × hodiny). Nula nebo míň vypne strop —
+ *   formulář ještě nemusí mít vyplněný čas a hlásit strop dřív než chybějící
+ *   datum by bylo matoucí.
+ */
+export function parseCelkovouCenu(vstup: string, jednotek: number): VysledekSazby {
+  const text = vstup.trim();
+  if (!text) return { hodnota: null };
+
+  if (!SAZBA_TVAR.test(text)) {
+    return { hodnota: null, chyba: 'Celková cena musí být číslo, bez mezer a oddělovače tisíců.' };
+  }
+
+  const cislo = Number(text.replace(',', '.'));
+  if (!Number.isFinite(cislo)) return { hodnota: null, chyba: 'Celková cena musí být číslo.' };
+  if (cislo < 0) return { hodnota: null, chyba: 'Celková cena nesmí být záporná.' };
+
+  // Haléře ano, ne víc. `numeric(10,2)` by třetí desetinné místo tiše
+  // zaokrouhlil — a tichému zaokrouhlení se u peněz vyhýbáme i tady.
+  if (toSetiny(cislo) !== toSetiny(Number(cislo.toFixed(2)))) {
+    return { hodnota: null, chyba: 'Celková cena jde nejvýš na haléře.' };
+  }
+
+  if (jednotek > 0 && cislo > jednotek * SAZBA_STROP) {
+    const mez = String(jednotek * SAZBA_STROP).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    return {
+      hodnota: null,
+      chyba: `Celková cena je u téhle akce nejvýš ${mez} Kč. Vyšší číslo je skoro jistě překlep.`,
+    };
+  }
+
+  // `+ 0` srovnává zápornou nulu, stejně jako `parseSazba`.
+  return { hodnota: cislo + 0 };
+}

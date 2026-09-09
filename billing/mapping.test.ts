@@ -487,3 +487,88 @@ describe('pásmový ceník na dokladu', () => {
     expect(soucetRadku(d.lines)).toBe(5400);
   });
 });
+
+describe('pevná cena akce — paušál, ne hodinovka', () => {
+  const AKCE = 'dddddddd-4444-4444-8444-dddddddddddd';
+
+  /**
+   * Skutečný případ z produkce: turnaj 8:00–21:00 (13 h) na dvou drahách za
+   * 14 000 Kč. `create_booking` částku rozdělí na dráhy (7 000 + 7 000) a sazbu
+   * dopočítá jako průměr — 7 000 / 13 = 538,46 Kč/h. Součin se na částku
+   * NEVRACÍ (13 × 538,46 = 6 999,98) a přesně proto se doklad skládá jinak.
+   */
+  const pevna = (id: string, sheet: string, castka: number): BillableReservation => ({
+    id,
+    start_at: '2027-01-17T07:00:00Z',
+    end_at: '2027-01-17T20:00:00Z',
+    sheet_name: sheet,
+    event_title: 'DIVIZE soutěžní utkání',
+    hodiny: 13,
+    sazba: 538.46,
+    castka,
+    cenove_pasma: null,
+    cena_rucni: true,
+  });
+
+  const obeDrahy = [pevna('r-d1', 'Dráha 1', 7000), pevna('r-d2', 'Dráha 2', 7000)];
+
+  it('řádek zní „1 akce × 7 000 Kč“, ne „13 h × 538,46“', () => {
+    const [radek] = mapujKomercniAkci({
+      eventId: AKCE, subjekt: FIRMA, jePlatceDph: false, rezervace: obeDrahy,
+    })!.lines;
+    expect(radek.quantity).toBe(1);
+    expect(radek.unitPrice).toBe(7000);
+    expect(radek.unitName).toBe('akce');
+    expect(radek.unitName).not.toBe(JEDNOTKA);
+  });
+
+  it('součet přes obě dráhy dá PŘESNĚ zadaných 14 000 Kč', () => {
+    const d = mapujKomercniAkci({
+      eventId: AKCE, subjekt: FIRMA, jePlatceDph: false, rezervace: obeDrahy,
+    })!;
+    expect(soucetRadku(d.lines)).toBe(14000);
+    // A proč se nepoužívá hodinový rozpad: 13 × 538,46 je 6 999,98, tedy o dva
+    // haléře vedle na každé dráze. Porovnává se v HALÉŘÍCH — `roundCzk` je
+    // zaokrouhlí na koruny a rozdíl by zmizel, přesně ten rozdíl, o který jde.
+    expect(toSetiny(13 * 538.46)).not.toBe(toSetiny(7000));
+  });
+
+  it('projde i měsíční klubovou cestou se stejnou částkou', () => {
+    const d = mapujKlubMesicne({
+      subjekt: KLUB, obdobiOd: '2027-01-01', jePlatceDph: true, rezervace: obeDrahy,
+    })!;
+    expect(d.lines).toHaveLength(2);
+    expect(soucetRadku(d.lines)).toBe(14000);
+    expect(d.lines.every((l) => l.quantity === 1)).toBe(true);
+  });
+
+  it('bez příznaku by táž rezervace neprošla — to je ta chyba, kterou to řeší', () => {
+    const bezPriznaku = obeDrahy.map((r) => ({ ...r, cena_rucni: false }));
+    expect(() => mapujKomercniAkci({
+      eventId: AKCE, subjekt: FIRMA, jePlatceDph: false, rezervace: bezPriznaku,
+    })).toThrow(BillingValidationError);
+  });
+
+  it('nedělitelná částka: 3 333,33 na dvě dráhy sedí na haléř', () => {
+    // `create_booking` rozdá zbylý haléř první dráze, doklad ho jen opíše.
+    const d = mapujKomercniAkci({
+      eventId: AKCE, subjekt: FIRMA, jePlatceDph: false,
+      rezervace: [pevna('r-a', 'Dráha 1', 1666.67), pevna('r-b', 'Dráha 2', 1666.66)],
+    })!;
+    expect(soucetRadku(d.lines)).toBe(3333.33);
+  });
+
+  it('záporná pevná cena neprojde', () => {
+    expect(() => mapujKomercniAkci({
+      eventId: AKCE, subjekt: FIRMA, jePlatceDph: false,
+      rezervace: [pevna('r-zap', 'Dráha 1', -1)],
+    })).toThrow(BillingValidationError);
+  });
+
+  it('DPH se u pevné ceny chová jako u hodinové', () => {
+    const [radek] = mapujKlubMesicne({
+      subjekt: KLUB, obdobiOd: '2027-01-01', jePlatceDph: true, rezervace: obeDrahy,
+    })!.lines;
+    expect(radek.vatRate).toBe(SAZBA_DPH_LED);
+  });
+});

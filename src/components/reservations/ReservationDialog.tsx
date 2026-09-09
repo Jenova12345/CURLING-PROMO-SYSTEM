@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { format } from 'date-fns';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
@@ -21,7 +21,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { sanitizeText, VALIDATION_LIMITS } from '@/lib/validation';
 import { nadpisSerie, souhrnSerie } from '@/lib/serie';
 import { hoursForDay } from '@/lib/openingHours';
-import { parseSazba } from '@/lib/money';
+import { parseCelkovouCenu, parseSazba } from '@/lib/money';
 import type {
   Sheet, Subject, NovaFirma, Settings, CalendarReservation, BookingKind, Conflict, NahledCeny,
   BookingInput, SeriesInput, SeriesResult, Membership,
@@ -127,6 +127,15 @@ export function ReservationDialog({
   const [roleCounts, setRoleCounts] = useState<Record<string, number>>({ instructor: 1, bar_staff: 0, manager: 0 });
   const [instructorsTouched, setInstructorsTouched] = useState(false);
   const [rate, setRate] = useState('');
+  // JAKÁ SAZBA PŘIŠLA Z DATABÁZE.
+  //
+  // U pevné ceny (a u pásmové taky) je `rate_per_hour` ODVOZENÝ PRŮMĚR
+  // `round(amount / hodiny, 2)` — 7 000 Kč na 13 h je 538,46. Takovou sazbu
+  // `parseSazba` odmítne („v celých korunách, bez haléřů"), a protože se pole
+  // předvyplňuje z rezervace, zastavila ta chyba uložení i tehdy, když admin
+  // do sazby vůbec nesáhl: nešlo opravit ani překlep v názvu. Databáze přitom
+  // haléře u ruční i pásmové ceny výslovně povoluje.
+  const [puvodniRate, setPuvodniRate] = useState('');
 
   // opakování
   const [repeat, setRepeat] = useState(false);
@@ -189,7 +198,9 @@ export function ReservationDialog({
       setNote(editing.note ?? '');
       setTitle(editing.event_title ?? '');
       setTitleTouched(true);
-      setRate(editing.rate_per_hour != null ? String(editing.rate_per_hour) : '');
+      const rateZDb = editing.rate_per_hour != null ? String(editing.rate_per_hour) : '';
+      setRate(rateZDb);
+      setPuvodniRate(rateZDb);
       setPraniTrenera(editing.preferovany_trener ?? '');
       setRepeat(false);
     } else {
@@ -206,6 +217,7 @@ export function ReservationDialog({
       setRoleCounts({ instructor: 1, bar_staff: 0, manager: 0 });
       setInstructorsTouched(false);
       setRate(defaultRateFor('training', firstClub));
+      setPuvodniRate('');
       setRepeat(false); setWeekdays([]); setUntil('');
     }
     setNewFirm(false); setIco(''); setFirmName(''); setFirmAddress(''); setFirmDic('');
@@ -271,6 +283,31 @@ export function ReservationDialog({
   // akce s jednou cenou: celkem = dráhy × hodiny × sazba. Sazba i celková cena
   // jsou editovatelné a přepočítávají se navzájem.
   const [celkem, setCelkem] = useState('');
+  /**
+   * Kde se ukazuje pole „Celková cena" a co v něm ta částka znamená.
+   *
+   * KOMERCE (`kalkulacka`): dvě okna do jedné pravdy. Částka se přepočítá na
+   * hodinovou sazbu, do databáze jde sazba a `amount` se dopočítá jako
+   * `hodiny × sazba` — proto tam nevyjde každé číslo na celé koruny.
+   *
+   * TRÉNINK A TURNAJ (`pevna`): částka JE cena akce. Posílá se jako částka,
+   * uloží se napevno a rozdělí mezi dráhy tak, aby součet seděl na haléř.
+   * Jakub tak zadá turnaj za 14 000 bez ohledu na délku a počet drah.
+   */
+  const rezimCeny: 'kalkulacka' | 'pevna' | null =
+    kind === 'commercial' ? 'kalkulacka'
+    : (kind === 'training' || kind === 'tournament') ? 'pevna'
+    : null;
+  // PEVNÁ CENA SE PO ZALOŽENÍ NEEDITUJE.
+  //
+  // Větev `isEdit` v `handleSubmit` neposílá `celkova_cena` nikam — a poslat
+  // ji nemá kam: v databázi je paušál zamčený ve všech pěti mutačních RPC
+  // (`uprav_sazbu_akce`, `zmen_typ_akce`, `uprav_drahy_akce`, `move_booking`,
+  // `update_booking`), skutečný editor paušálu je samostatný ticket. Kdyby
+  // pole zůstalo v editaci zapsatelné, admin by napsal 14 000, dostal
+  // „Rezervace upravena" a cena by se nezměnila — tichá změna ceny, přesně
+  // to, co zbytek téhle změny všude jinde zavírá.
+  const pevnaVEditaci = isEdit && rezimCeny === 'pevna';
   // Sáhl už admin do celkové ceny? Pak ji dopočet nesmí přepisovat pod rukama.
   // Týž vzor jako `titleTouched` a `instructorsTouched` výš.
   const [celkemTouched, setCelkemTouched] = useState(false);
@@ -290,8 +327,19 @@ export function ReservationDialog({
   // z každé strany dopočítá ta druhá. Nedrží se to v useEffectu schválně —
   // ten by při psaní přepisoval pole pod rukama.
 
+  // POJISTKA JE UVNITŘ OBOU FUNKCÍ, ne na volajících místech.
+  //
+  // Dopočet dává smysl jen v režimu kalkulačky (komerce), kde jsou sazba
+  // a celková cena dvě okna do jedné pravdy. V pevném režimu je částka SAMA
+  // vstupem a dopočet ji rozbíjí z obou stran: napsáním sazby 900 se do pole
+  // „Celková cena" nasype 5 400 a odešle se jako PEVNÁ částka, kterou nikdo
+  // nezadal — a naopak sáhnutím na pole Sazba se zadaných 14 000 bez hlášky
+  // smaže. Kdyby pojistka visela na volajícím, přibude časem třetí volání
+  // a díra se vrátí.
+
   /** Sazba → celková. Prázdná nebo neplatná sazba nechá celkovou prázdnou. */
   const prepocitejCelkem = (novaSazba: string) => {
+    if (rezimCeny !== 'kalkulacka') return;
     const v = parseSazba(novaSazba);
     if (v.chyba || v.hodnota == null || jednotek <= 0) { setCelkem(''); return; }
     setCelkem(String(v.hodnota * jednotek));
@@ -299,6 +347,7 @@ export function ReservationDialog({
 
   /** Celková → sazba. */
   const prepocitejSazbu = (novaCelkem: string) => {
+    if (rezimCeny !== 'kalkulacka') return;
     const v = parseSazba(novaCelkem);
     if (v.chyba || v.hodnota == null || jednotek <= 0) { setRate(''); return; }
     setRate(String(v.hodnota / jednotek));
@@ -310,10 +359,22 @@ export function ReservationDialog({
   // ne každá celková částka je dosažitelná: 10 000 Kč za 3 h by dalo
   // 3 333,33 Kč/h a databáze to odmítne. Radši to řekneme dopředu a nabídneme
   // nejbližší možné, než aby admin dostal chybu až při ukládání.
-  const celkemNum = parseSazba(celkem).hodnota ?? null;
+  // U PEVNÉ CENY SE ČÁSTKA ČTE VLASTNÍM PARSEREM, ne `parseSazba`.
+  //
+  // `parseSazba` je parser HODINOVÉ sazby: chce celé koruny a strop 50 000 Kč/h.
+  // Na cenu za celou akci se to nehodí — 14 000,50 databáze bere a 60 000 za
+  // víkendový turnaj je běžné číslo. Chyba se navíc dřív ztrácela (`?? null`),
+  // takže se částka tiše zahodila a rezervace vznikla za ceníkovou cenu, zatímco
+  // admin viděl svoje číslo v poli a hlášku „Rezervace vytvořena".
+  const celkemVysledek = rezimCeny === 'pevna'
+    ? parseCelkovouCenu(celkem, jednotek)
+    : parseSazba(celkem);
+  const celkemNum = celkemVysledek.hodnota ?? null;
   const sazbaZCelkem = celkemNum != null && jednotek > 0 ? celkemNum / jednotek : null;
-  const celkemNevychazi =
-    sazbaZCelkem != null && Math.abs(sazbaZCelkem - Math.round(sazbaZCelkem)) > 1e-9;
+  // Jen u komerce: tam se z částky počítá sazba a ta musí vyjít na celé koruny.
+  // U pevné ceny se sazba neukládá jako vstup, takže projde jakákoli částka.
+  const celkemNevychazi = rezimCeny === 'kalkulacka'
+    && sazbaZCelkem != null && Math.abs(sazbaZCelkem - Math.round(sazbaZCelkem)) > 1e-9;
   const nejblizsiCelkem = celkemNevychazi && sazbaZCelkem != null
     ? [Math.floor(sazbaZCelkem) * jednotek, Math.ceil(sazbaZCelkem) * jednotek]
     : null;
@@ -328,8 +389,48 @@ export function ReservationDialog({
   // Které z nich je kotva, rozhoduje to, do čeho admin naposledy psal:
   //   • psal celkovou → celková platí, dopočítá se sazba (dohodnutá cena za akci),
   //   • jinak → platí sazba a dopočítá se celková.
+  // ČÁSTKA SE VYNULUJE PŘI KAŽDÉM OTEVŘENÍ DIALOGU I PŘI ZMĚNĚ TYPU AKCE.
+  //
+  // Dvě různé díry, jeden kořen — do `celkem` zapisoval kód patřícího jiné
+  // situaci a `buildInput` mu věřil:
+  //
+  // 1) DIALOG SE NEODMONTOVÁVÁ. V kalendáři je mountnutý trvale a `open` jen
+  //    přepíná Radix, takže `useState` přežije zavření. Admin založil trénink
+  //    za 14 000, otevřel jiný volný slot — a v poli pořád svítělo 14 000.
+  //    Cizí rezervace tak dostala napevno částku, kterou pro ni nikdo nezadal,
+  //    a `cena_rucni` zařídilo, že se už nikdy nepřepočítá.
+  // 2) PŘEPNUTÍ TYPU MĚNÍ VÝZNAM POLE. U komerce je to kalkulačka (přepočítá se
+  //    na sazbu), u tréninku a turnaje pevná částka. Číslo, které přepnutí
+  //    přežije, začne znamenat něco jiného: 14 000 z turnaje se po přepnutí na
+  //    komerci uloží jako sazba z ceníku, zatímco v poli dál svítí 14 000.
+  //
+  // Vynulování je schválně TVRDÉ, ne přepočet: převádět „14 000 napevno" na
+  // ekvivalentní sazbu by znamenalo rozhodnout za admina, že tu cenu chtěl
+  // i pro jinou akci a jiný typ. Ať ji zadá znovu — je to jedno pole.
+  //
+  // K čemu jsou ty dva refy: dnes NIC nezmění. Pole závislostí `[rezimCeny,
+  // open]` samo zařídí, že se efekt pustí jen při skutečné změne, takže se
+  // stráž trefí jedině při mountu — a tam potlačí reset na hodnoty, které
+  // stejně platí. Jsou to POJISTKY PROTI BUDOUCÍ ÚPRAVĚ: kdyby někdo pole
+  // závislostí zúžil nebo odstranil, stráž udrží chování správné a částka,
+  // kterou admin právě píše, se při překreslení nesmaže. (Dřívější znění
+  // tohohle komentáře tvrdilo, že proti překreslení chrání už dnes — nechrání,
+  // to dělá pole závislostí o osm řádků níž. Nález brány code review.)
+  const rezimMinule = useRef(rezimCeny);
+  const otevreniMinule = useRef(open);
   useEffect(() => {
-    if (kind !== 'commercial') { setCelkem(''); return; }
+    if (rezimMinule.current === rezimCeny && otevreniMinule.current === open) return;
+    rezimMinule.current = rezimCeny;
+    otevreniMinule.current = open;
+    setCelkem('');
+    setCelkemTouched(false);
+  }, [rezimCeny, open]);
+
+  useEffect(() => {
+    if (rezimCeny === null) { setCelkem(''); return; }
+    // U pevné ceny se PŘEPOČÍTÁVAT NESMÍ: 14 000 zůstává 14 000, i když admin
+    // přidá dráhu nebo prodlouží akci. To je celý smysl toho pole.
+    if (rezimCeny === 'pevna') return;
     if (celkemTouched) prepocitejSazbu(celkem);
     else prepocitejCelkem(rate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -338,11 +439,12 @@ export function ReservationDialog({
   // Změna sazby (z ceníku, z typu akce, z výběru subjektu) dopočítá celkovou —
   // dokud do ní admin sám nesáhl.
   useEffect(() => {
-    if (kind !== 'commercial') { setCelkem(''); return; }
+    if (rezimCeny === null) { setCelkem(''); return; }
+    if (rezimCeny === 'pevna') return;   // pevná částka se ze sazby neodvozuje
     if (celkemTouched) return;
     prepocitejCelkem(rate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rate, kind, open, celkemTouched]);
+  }, [rate, kind, open, celkemTouched, rezimCeny]);
 
 
   const busy = api.isCreating || api.isUpdating || aresLoading;
@@ -365,7 +467,11 @@ export function ReservationDialog({
   // mátl.
   const [cena, setCena] = useState<NahledCeny | null>(null);
   const [cenaChyba, setCenaChyba] = useState<string | null>(null);
-  const cenaZCeniku = needsSubject && !rate.trim();
+  // Vyplněná pevná cena náhled vypíná: dvě různá čísla na jedné obrazovce
+  // ve chvíli potvrzení jsou horší než žádné. Uloží se to zadané, ale oko
+  // padne na to větší v rámečku pod formulářem.
+  const cenaZCeniku = needsSubject && !rate.trim()
+    && !(rezimCeny === 'pevna' && celkem.trim());
 
   useEffect(() => {
     if (!open || !cenaZCeniku || !subjectId || hodinAkce <= 0) {
@@ -444,8 +550,41 @@ export function ReservationDialog({
     if (!title.trim()) return 'Vyplňte název akce.';
     if (needsSubject && !subjectId) return kind === 'commercial' ? 'Vyberte firmu.' : 'Vyberte klub.';
     if (kind === 'commercial' && (roleCounts.instructor ?? 0) < 1) return 'Komerční akce potřebuje aspoň jednoho instruktora.';
-    if (isAdmin && kind !== 'maintenance' && sazba.chyba) {
+    // Jen když admin do sazby SÁHL. Nedotčený odvozený průměr s haléři
+    // (538,46 u paušálu) není chyba, kterou by měl opravovat — a neodešle se:
+    // `parseSazba` z něj vrátí `hodnota: undefined`, takže `meniSazbu` vyjde
+    // `false` a `rate_per_hour` se do `update_booking` vůbec nepošle.
+    if (isAdmin && kind !== 'maintenance' && sazba.chyba && rate !== puvodniRate) {
       return `${sazba.chyba} Prázdné pole znamená sazbu z ceníku.`;
+    }
+    // CHYBA V CELKOVÉ CENĚ MUSÍ ZASTAVIT ULOŽENÍ.
+    //
+    // Dokud se tady neptalo, nepřečtená částka se jen zahodila a rezervace
+    // vznikla za ceníkovou cenu — admin přitom viděl svoje číslo v poli
+    // a dostal „Rezervace vytvořena". Tichý rozdíl mezi zobrazenou
+    // a fakturovanou cenou je to nejhorší, co peněžní vrstva umí.
+    if (isAdmin && rezimCeny && celkemVysledek.chyba) {
+      return `${celkemVysledek.chyba} Prázdné pole znamená cenu z ceníku.`;
+    }
+    // POJISTKA K `pevnaVEditaci`.
+    //
+    // Pole je v editaci readOnly, takže sem se za normálních okolností nedá
+    // dojít. Kontrola tu je pro případ, že readOnly někdo v budoucnu sundá:
+    // u peněz musí být poslední slovo hlasitá chyba, ne tiché zahození.
+    if (pevnaVEditaci && celkemTouched && celkemNum != null) {
+      return 'Pevnou celkovou cenu už po založení nejde změnit. '
+        + 'Když má akce stát jinak, stornujte ji a založte znovu.';
+    }
+    // PEVNÁ CENA A OPAKOVÁNÍ SE ZATÍM VYLUČUJÍ.
+    //
+    // `create_booking_series` parametr `p_celkem` nezná, takže by série
+    // s vyplněnou částkou skončila nesrozumitelným „Sérii se nepodařilo
+    // založit". A co paušál u série vlastně znamená — 14 000 za každý termín,
+    // nebo za celou řadu? — je otázka na PM, ne věc, kterou má rozhodnout
+    // formulář. Do té doby se ta kombinace nenabízí.
+    if (repeat && rezimCeny === 'pevna' && celkemNum != null) {
+      return 'Opakovanou akci zatím nejde zadat s pevnou celkovou cenou. '
+        + 'Buď vypněte opakování, nebo nechte cenu prázdnou (spočítá se z ceníku).';
     }
     if (repeat) {
       if (!weekdays.length) return 'Vyberte dny v týdnu, kdy se má opakovat.';
@@ -454,6 +593,15 @@ export function ReservationDialog({
     }
     return null;
   };
+
+  // POSÍLÁ SE JEN ČÁSTKA, KTEROU ADMIN DOOPRAVDY NAPSAL.
+  //
+  // `celkemTouched` je tu jako druhá pojistka vedle vynulování při otevření
+  // a při změně typu: co do pole nasypal dopočet nebo zbytek z minula, není
+  // rozhodnutí admina a nemá se ukládat napevno. Jedna hodnota, jedno místo —
+  // ať se `rate_per_hour` a `celkova_cena` nerozhodují každá podle jiné
+  // podmínky (na tom se ty dvě větve dřív rozcházely).
+  const pevnaCena = isAdmin && rezimCeny === 'pevna' && celkemTouched ? celkemNum : null;
 
   const buildInput = (): BookingInput => ({
     sheet_ids: sheetIds,
@@ -466,7 +614,16 @@ export function ReservationDialog({
     role_reqs: kind === 'commercial'
       ? Object.fromEntries(Object.entries(roleCounts).filter(([, c]) => c > 0))
       : {},
-    rate_per_hour: isAdmin && rateNum !== undefined ? rateNum : null,
+    // Sazba a pevná celková cena se navzájem vylučují — server takový rozpor
+    // odmítne. U pevného režimu proto sazbu neposíláme vůbec: admin do ní
+    // v tomhle režimu nepíše a případná zděděná hodnota (z ceníku, ze subjektu)
+    // by zadání shodila hláškou „zadejte buď sazbu, nebo celkovou cenu".
+    rate_per_hour: pevnaCena != null
+      ? null
+      : (isAdmin && rateNum !== undefined ? rateNum : null),
+    // Pevná cena akce (trénink, turnaj). Jen admin; u komerce se posílá sazba,
+    // protože tam je „celková cena" jen dopočet a engine se nemění.
+    celkova_cena: pevnaCena,
   });
 
   const submitBooking = async (override: boolean) => {
@@ -786,7 +943,7 @@ export function ReservationDialog({
             {/* sazba (+ celková cena u komerční akce) */}
             {kind !== 'maintenance' && (
               <div className="space-y-2">
-                <div className={kind === 'commercial' ? 'grid grid-cols-2 gap-3' : undefined}>
+                <div className={rezimCeny ? 'grid grid-cols-2 gap-3' : undefined}>
                   <div className="space-y-2">
                     <Label htmlFor="res-rate">Sazba (Kč/h)</Label>
                     <Input
@@ -796,10 +953,9 @@ export function ReservationDialog({
                     />
                   </div>
 
-                  {/* CELKOVÁ CENA — jen u komerční akce.
-                      Klubový led se oceňuje pásmy a turnaje pevnou cenou, tam by
-                      editovatelný součet jen sváděl přepsat něco, co určuje ceník. */}
-                  {kind === 'commercial' && (
+                  {/* CELKOVÁ CENA — komerce, trénink i turnaj. U údržby ne:
+                      tam není komu fakturovat. */}
+                  {rezimCeny && (
                     <div className="space-y-2">
                       <Label htmlFor="res-celkem">Celková cena (Kč)</Label>
                       <Input
@@ -807,19 +963,33 @@ export function ReservationDialog({
                         onChange={(e) => {
                           setCelkemTouched(true);
                           setCelkem(e.target.value);
-                          prepocitejSazbu(e.target.value);
+                          // Jen kalkulačka (komerce) dopočítává sazbu. U pevné
+                          // ceny je částka sama vstupem a sazbu by jen rozbila.
+                          if (rezimCeny === 'kalkulacka') prepocitejSazbu(e.target.value);
                         }}
-                        readOnly={!isAdmin} inputMode="numeric"
-                        placeholder={jednotek > 0 ? 'dopočítá se ze sazby' : undefined}
+                        readOnly={!isAdmin || pevnaVEditaci} inputMode="numeric"
+                        placeholder={pevnaVEditaci ? 'po založení už nejde změnit'
+                          : rezimCeny === 'pevna' ? 'nechte prázdné = z ceníku'
+                          : jednotek > 0 ? 'dopočítá se ze sazby' : undefined}
                       />
                     </div>
                   )}
                 </div>
 
-                {kind === 'commercial' && jednotek > 0 && (
+                {rezimCeny === 'kalkulacka' && jednotek > 0 && (
                   <p className="text-xs text-muted-foreground">
                     {drahAkce} {drahAkce === 1 ? 'dráha' : drahAkce < 5 ? 'dráhy' : 'drah'} × {hodinAkce} h
                     {' '}= {jednotek} dráhohodin. Cena platí pro celou akci, tedy pro všechny dráhy dohromady.
+                  </p>
+                )}
+
+                {rezimCeny === 'pevna' && isAdmin && (
+                  <p className="text-xs text-muted-foreground">
+                    {pevnaVEditaci
+                      ? 'Pevnou celkovou cenu už po založení nejde změnit. Když má akce stát jinak, '
+                        + 'stornujte ji a založte znovu.'
+                      : 'Celková cena platí pro celou akci — všechny dráhy i celou délku dohromady, '
+                        + 'ať trvá jakkoli dlouho. Když ji necháte prázdnou, spočítá se cena z ceníku.'}
                   </p>
                 )}
 

@@ -46,6 +46,14 @@ export interface BookingInput {
   note?: string;
   role_reqs?: Record<string, number>;
   rate_per_hour?: number | null;
+  /**
+   * Ruční celková cena celé akce v Kč (jen admin, jen trénink a turnaj).
+   *
+   * Uloží se napevno: nedopočítává se z hodin a sazby a nepřepíšou ji pásma.
+   * Mezi dráhy se rozdělí tak, aby jejich součet dal přesně tuhle částku.
+   * Nesmí být vyplněná zároveň se `rate_per_hour` — server takový rozpor odmítne.
+   */
+  celkova_cena?: number | null;
   /** vědomé přebití kolidující akce nižší priority (jen admin) */
   override?: boolean;
 }
@@ -255,6 +263,13 @@ export const useReservations = (range: DateRange | null) => {
       const { data, error } = await supabase.rpc('create_booking', {
         ...rpcArgs(input),
         p_override: input.override ?? false,
+        // `p_celkem` JE JEN TADY, ne ve sdíleném `rpcArgs` — stejně jako
+        // `p_override`. `create_booking_series` ten parametr nemá, a protože
+        // PostgREST hledá funkci podle JMEN parametrů, klíč navíc znamená
+        // PGRST202 („funkci jsem nenašel") a série s vyplněnou částkou by se
+        // vůbec nezaložila. Prázdná částka to schovávala: `?? undefined` klíč
+        // z JSONu vypustí, takže se to projevilo jen s pevnou cenou.
+        p_celkem: input.celkova_cena ?? undefined,
       });
       if (error) throw rpcError(error, 'Rezervaci se nepodařilo založit.');
       return data as { event_id: string; reservation_ids: string[]; approved: boolean; cancelled: unknown[] };

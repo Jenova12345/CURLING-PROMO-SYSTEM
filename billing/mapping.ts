@@ -44,8 +44,18 @@ export const SPLATNOST_DNI = 14;
  */
 export const SAZBA_DPH_LED = 12;
 
-/** Jednotka na řádku. Pronájem ledu se účtuje po hodinách, vždy. */
+/** Jednotka na řádku. Pronájem ledu se účtuje po hodinách — mimo pevnou cenu, viz níž. */
 export const JEDNOTKA = 'h';
+
+/**
+ * Jednotka řádku u PEVNĚ ZADANÉ CENY (`reservations.cena_rucni`).
+ *
+ * Paušál za akci není hodinovka: turnaj za 14 000 Kč stojí 14 000 bez ohledu na
+ * to, jestli trvá 12 nebo 14 hodin. Doklad to tak i říká — `1 akce × 14 000 Kč`,
+ * ne `13 h × 1 076,92 Kč/h`. Druhá podoba by navíc nešla vystavit: součin by
+ * dal 13 999,96 a doklad by zněl jinak než „Kdo kolik dluží".
+ */
+export const JEDNOTKA_AKCE = 'akce';
 
 /**
  * Rezervace k fakturaci — tvar 1:1 s výstupem `public.fakturovatelne_rezervace`.
@@ -75,6 +85,20 @@ export interface BillableReservation {
    * hlásil jako zaokrouhlovací šum.
    */
   cenove_pasma?: readonly { sazba: number; hodin: number }[] | null;
+  /**
+   * Cenu za celou akci zadal ručně admin (`reservations.cena_rucni`).
+   *
+   * Pak je `castka` AUTORITATIVNÍ a `sazba` jen odvozený průměr, který na ni
+   * nemusí vyjít: 7 000 Kč na 13 h je 538,46 Kč/h a součin dá 6 999,98. Doklad
+   * se proto skládá jako `1 akce × castka` a `overRadek` u takového řádku
+   * součin nekontroluje — kontroluje se to, co je tu autoritativní, tedy částka.
+   *
+   * Podklady ho posílají jen tehdy, když NENÍ admin korekce hodin: korekce
+   * („nedorazili, účtujeme 2 h místo 3") částku znovu odvodí z hodin a průměrné
+   * sazby, takže od té chvíle paušál neplatí a součin zase sedí. Táž úvaha,
+   * jakou má `cenove_pasma` o pár řádků výš.
+   */
+  cena_rucni?: boolean | null;
   /** Volitelné — kdo objednal. Dnešní RPC ho nevrací, doplní se, až bude potřeba. */
   objednal?: string | null;
 }
@@ -206,6 +230,29 @@ const overRadek = (r: BillableReservation): void => {
     );
   }
 
+  // U PEVNĚ ZADANÉ CENY SE SOUČIN NEKONTROLUJE — není co porovnávat.
+  //
+  // Admin zadal, kolik akce stojí dohromady; `sazba` je z té částky jen zpětně
+  // dopočítaný průměr (7 000 / 13 h = 538,46), takže součin z principu nevyjde.
+  // Trvat tu na `castka == hodiny × sazba` znamená paušál vůbec nevystavit —
+  // a přesně to se dělo: „částka 7000 Kč nesedí na 13 h × 538.46 Kč/h".
+  //
+  // Kontrola se tedy neruší, jen se ptá na to, co je u pevné ceny autoritativní:
+  // je částka použitelné číslo? Hodiny a sazba na doklad vůbec nejdou (řádek
+  // zní `1 akce × castka`), takže na nich nezáleží.
+  //
+  // Pořadí větví: pevná cena PŘED pásmy schválně. Podklady u ní rozpis neposílají
+  // (ruční částka pásma zahazuje), ale kdyby se sem někdy obojí dostalo najednou,
+  // má vyhrát ta autoritativní hodnota, ne rozpis, který částku přestal popisovat.
+  if (r.cena_rucni) {
+    if (castka < 0) {
+      throw new BillingValidationError(
+        `Rezervace ${r.id}: pevná cena nesmí být záporná (dostal jsem ${castka}).`, 'castka',
+      );
+    }
+    return;
+  }
+
   // U PÁSMOVÉ CENY SE KONTROLUJE ROZPIS, ne `hodiny × sazba`.
   //
   // `sazba` je tam odvozený průměr (3 400 / 3 h = 1 133,33), takže součin
@@ -277,6 +324,19 @@ const naRadky = (
   // což je jiný daňový režim než „neplátce" a doklad by to popsal špatně.
   const dph = jePlatceDph ? { vatRate: SAZBA_DPH_LED } : {};
   const zaklad = popis(r);
+
+  // PEVNÁ CENA = JEDEN ŘÁDEK NA CELOU ČÁSTKU.
+  //
+  // `1 akce × 7 000 Kč`, ne `13 h × 538,46 Kč/h`. Kromě toho, že druhá podoba
+  // nejde vystavit (součin dá 6 999,98), je i nepravdivá: paušál se neúčtuje
+  // za hodinu a klient by z dokladu četl hodinovku, kterou nikdo nesjednal.
+  //
+  // Akce na dvou drahách má dva takové řádky (7 000 + 7 000). Součet sedí na
+  // haléř, protože rozpad částky na dráhy dělá `create_booking` a zbylé haléře
+  // rozdává po jednom místo aby je zaokrouhlil stranou.
+  if (r.cena_rucni) {
+    return [{ name: zaklad, quantity: 1, unitName: JEDNOTKA_AKCE, unitPrice: Number(r.castka), ...dph }];
+  }
 
   const pasma = r.cenove_pasma;
   if (!pasma || pasma.length === 0) {

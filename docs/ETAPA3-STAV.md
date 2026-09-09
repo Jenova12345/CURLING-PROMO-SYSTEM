@@ -927,3 +927,132 @@ když se rozejdou, doklad se nevystaví. To je pojistka proti tomu, aby se ta
 **Cutover dělá člověk, ne skript** — klíče do Supabase secrets, kontrola, že
 účet ve Fakturoidu je veden jako plátce, a teprve pak první doklad v režimu
 `koncept`.
+
+---
+
+## Pevná („ruční") celková cena akce — 9. 9. 2026, NENASAZENO
+
+**Co to řeší.** Turnaj se účtuje paušálem za den (14 000 Kč za obě dráhy), ne za
+hodinu. Dosud to nešlo zadat: pole „Celková cena" existovalo jen u komerce a byla
+to POUZE KALKULAČKA VE FRONTENDU — přepočítala částku na hodinovou sazbu, tu
+poslala do `create_booking` a `amount` se zpátky dopočítalo jako `hodiny × sazba`.
+Protože sazba musí být na celé koruny, spousta částek nešla zadat vůbec: 14 000 na
+13 h × 2 dráhy je 538,46 Kč/h a databáze to odmítla.
+
+**Jak to funguje teď.** `create_booking` má nový parametr `p_celkem`. Zadat ho smí
+JEN admin a jen s vyplněným `p_subject_id` — to hlídá databáze. Že se nabízí jen
+u typů `training` a `tournament` (komerce beze změny) hlídá POUZE FORMULÁŘ:
+`create_booking` podle typu akce nefiltruje, takže volání s `p_kind = 'commercial'`
+a vyplněným `p_celkem` projde a uloží `cena_rucni`. Kdo bude psát druhého klienta
+nebo skript, ať s tím počítá — serverový kontrakt je tu volnější než UI. Částka se
+uloží napevno do `reservations.amount`, označí příznakem `reservations.cena_rucni`
+a **rozdělí mezi dráhy tak, aby součet seděl na haléř** — zbylé haléře se rozdají
+po jednom, ne zaokrouhlí stranou. Když admin nic nezadá, platí dnešní chování
+(pásmový ceník).
+
+**Příznak `cena_rucni` je odvozená hodnota, ne vstup.** `reservations` má tabulkové
+INSERT/UPDATE granty, takže by si ho jinak nastavil kdokoli a vypnul si tím dopočet
+částky. Zapíná ho výhradně `create_booking` transakčním markerem `app.rucni_cena`,
+zvenčí se zahazuje a na UPDATE se drží stará hodnota. Platí pro něj pravidlo 8
+z `CLAUDE.md` — první RPC, které vezme jméno GUC parametrem, tuhle ochranu zruší.
+
+### Na co si dát pozor
+
+**1. Bez zásahu do fakturace by to bylo k ničemu.** `overRadek` v `billing/mapping.ts`
+trvá na `castka = hodiny × sazba`, a u paušálu součin z principu nevyjde (7 000 ≠
+13 × 538,46 = 6 999,98). Rezervace se tedy uložila správně, ale doklad se odmítl
+vystavit — **na obou cestách**, u dokladu za akci i u měsíční klubové faktury.
+Proto podklady (`fakturoid_podklady_akce`, `fakturoid_podklady_klub`) nově vracejí
+i `cena_rucni` a doklad z toho složí **jeden řádek `1 akce × 7 000 Kč`** místo
+hodinového rozpisu. Kdo bude sahat na fakturační vrstvu: tohle je třetí větev
+v `overRadek`, vedle pásmové.
+
+**2. Korekce hodin paušál ruší.** Podklady posílají příznak jen když
+`corrected_hours IS NULL`. Korekce („nedorazili, účtujeme 10 h ze 13") částku znovu
+odvodí z hodin a průměrné sazby, takže od té chvíle paušál neplatí a součin zase
+sedí. Kdyby se příznak posílal i u korekce, doklad by zněl na původní paušál,
+přestože se fakturuje krácená částka.
+
+**3. Pevná cena je po založení ZAMČENÁ — fail-closed, i adminovi.** Zadává se
+výhradně při zakládání. Všech pět mutačních RPC nad takovou akcí skončí hlasitou
+chybou („Akce má pevně zadanou celkovou cenu…"): `uprav_sazbu_akce`, `zmen_typ_akce`,
+`uprav_drahy_akce`, `move_booking` a `update_booking` s vyplněným `p_rate`.
+Název a poznámku `update_booking` měnit smí — ty nejsou peníze. Ve frontendu je pole
+v editaci `readOnly` a `validate()` má tutéž hlášku jako databáze.
+
+Název a poznámku ale opravit **jde** — a musí jít, jinak by u paušálu nešel opravit
+ani překlep. Dřív to formulář blokoval: pole Sazba se předvyplňuje odvozeným
+průměrem `amount / hodiny` (538,46 u 7 000 na 13 h), `parseSazba` na haléřích
+zahlásil chybu a `validate()` odmítl uložit cokoli. Sazba se proto validuje jen
+tehdy, když do ní admin doopravdy sáhl.
+
+Otevřená zůstává jedna cesta: **přebití** (`create_booking` s `p_override`). Ruší
+kolidující rezervace vlastním UPDATE mimo `cancel_booking`, takže admin, který si
+vezme jednu dráhu vyšší prioritou, srazí pevných 14 000 na 7 000. Schválně to
+zavřené není — je to admin-only, vědomé, přebitá rezervace je vyjmenovaná
+v odpovědi a klub dostane notifikaci; a účtovat dál 14 000 za akci, které hala
+sama vzala půlku, by bylo horší. Přecenit zbytek umí až editor paušálu.
+
+Pozor na mez: guardy platí pro **RPC, ne pro přímý zápis do tabulky**. Admin má
+na `reservations` sloupcové UPDATE granty, takže si přes `PATCH /rest/v1` `amount`
+přepíše mimo ně. Není to regrese (totéž jde u pásmové ceny), ale „blokované i
+adminovi" je tvrzení o RPC.
+
+Šestá zavřená cesta je **storno JEDNÉ dráhy** (`cancel_booking` s `p_scope`
+„single") u akce na víc drahách — vyjmutí dráhy z paušálu částku tiše půlilo,
+ze 14 000 na 7 000, a narozdíl od `uprav_drahy_akce` bez jediné chyby. Navíc
+to nepotřebovalo admina, `can_manage_reservation` pustí i zástupce klubu.
+Nález bezpečnostní brány. **Storno celé akce (`p_scope = 'event'`) zůstává
+otevřené** — cenu nepůlí, ruší ji celou, a je to jediná cesta ven.
+
+Je to schválně zavřené i adminovi: **skutečný editor paušálu je samostatný ticket.**
+Do té doby se cena mění jedině stornem a novým založením. Důvod: dřív ta cesta
+existovala, ale byla tichá — `uprav_sazbu_akce` prošla bez chyby a cenu nezměnila,
+admin zadal 600 Kč/h a dostal „uloženo". U peněz je hlasitá chyba vždycky lepší než
+tichý no-op.
+
+**4. Typ akce u pevné ceny nejde změnit.** `zmen_typ_akce` je na pevně oceněné akci
+zablokovaná úplně (viz bod 3), takže turnaj za 14 000 nejde převést na komerční akci.
+Dřív to prošlo a cena zůstala — což bylo konzistentní s „pevná cena vyhrává", ale
+znamenalo to akci v jiném typu, než jak byla oceněná.
+
+**5. Dvoudenní akce jsou dvě rezervace.** `validate_reservation_slot` nepustí
+rezervaci přes půlnoc, takže pevná cena se zadává NA DEN (14 000 + 12 000 = 26 000),
+ne na celou vícedenní akci.
+
+**6. Zkrácení ani prodloužení akce přes `move_booking` neprojde.** Paušál by měl
+zůstat stejný a sazba by vyskočila (13 h → 3 h), takže je i tahle cesta zavřená
+chybou. Přesun pevně oceněné akce na jiný čas nebo dráhu tedy dnes znamená storno
+a nové založení — spolu s bodem 3 je to hlavní důvod, proč editor paušálu chce
+vzniknout brzo.
+
+### Testy
+
+```
+supabase/tests/rucni_cena_test.sql   50 tvrzení, celé pod SET LOCAL ROLE authenticated
+                                     — obě fakturační cesty, korekce, všech pět
+                                       zavřených mutačních cest včetně storna jedné dráhy,
+                                       anon bez EXECUTE
+billing/mapping.test.ts              +7 testů (paušální řádek, součet na haléř, DPH)
+src/lib/branyFrontendu.test.ts       +8 testů hranice (reset částky, zámek v editaci,
+                                       p_celkem mimo sdílený rpcArgs, náhled ceny)
+src/lib/money.test.ts                +10 testů `parseCelkovouCenu` (haléře, strop, chyby)
+```
+
+Ověřeno mutačně (vypnout opravu → test zčervená) u všech oprav: admin gating,
+rozdávání haléřů, větev pevné ceny v triggeru, držení příznaku na UPDATE, obě větve
+v `mapping.ts`, příznak v podkladech, reset částky při zavření dialogu i přepnutí
+typu, vlastní parser částky, série s pevnou cenou, DPH příznak při přecenění,
+`anon` bez EXECUTE, zámek pevné ceny v editaci, `p_celkem` jen v `create_booking`.
+
+**Pozor na mutačně slepé testy nad zdrojákem.** `branyFrontendu.test.ts` čte text
+souboru, takže `toContain('p_celkem')` zůstalo zelené i po smazání toho řádku —
+slovo bylo třikrát v komentáři nad ním. Kotvi na kód (`'p_celkem: input.celkova_cena'`),
+ne na jméno.
+
+**Kontrolní součet sedí:** klub 14 000 na dokladu i v „Kdo kolik dluží";
+firma základ 14 000 na dokladu, 15 680 v dluhu (12 % DPH).
+
+**Stav: NENASAZENO.** Migrace `20260909180000_rucni_celkova_cena.sql` čeká na
+`scripts/safe-deploy.sh`. Ověřeno proti produkci (read-only), že ani jeden ze
+416 živých řádků neporuší nové CHECK constrainty.

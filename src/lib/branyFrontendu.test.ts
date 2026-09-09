@@ -135,3 +135,111 @@ describe('Registrace: heslo se zadává dvakrát a jde zobrazit', () => {
     expect(kolik, 'přepínač zobrazení nepokrývá obě pole').toBe(2);
   });
 });
+
+describe('ReservationDialog: „Celková cena" nepošle nic, co admin nenapsal', () => {
+  const zdroj = cti('src/components/reservations/ReservationDialog.tsx');
+  const hook = cti('src/hooks/useReservations.ts');
+
+  // Dialog je v kalendáři mountnutý trvale (`open` jen přepíná Radix), takže
+  // `useState` přežije zavření. Bez vynulování zůstala v poli částka z minulé
+  // rezervace a odešla s další — cizí akce dostala napevno cizí cenu.
+  // Totéž při přepnutí typu, kde částka navíc mění význam (kalkulačka × pevná).
+  it('částka se nuluje při otevření dialogu i při změně typu akce', () => {
+    // Kotvíme na EFEKT a jeho deps, ne na jména refů `rezimMinule` /
+    // `otevreniMinule`. Ty dnes chování nemění (jsou to pojistky proti budoucí
+    // úpravě), takže kdo je odstraní a chování nechá správné, nemá dostat
+    // červený test znějící jako regrese. Podstatné je, že se efekt pustí na
+    // změnu režimu i otevření a že vynuluje obojí.
+    const zac = zdroj.indexOf('const celkemVysledek');
+    const konec = zdroj.indexOf('}, [rezimCeny, open]);');
+    expect(konec, 'efekt, který nuluje částku, v dialogu chybí nebo má jiné deps').toBeGreaterThan(-1);
+    const telo = zdroj.slice(zdroj.lastIndexOf('useEffect(', konec), konec);
+    expect(telo, 'nevynuluje zadanou částku').toContain("setCelkem('')");
+    expect(telo, 'nevynuluje příznak celkemTouched').toContain('setCelkemTouched(false)');
+  });
+
+  // U pevné ceny je `rate_per_hour` odvozený průměr `amount / hodiny`, tedy
+  // 538,46 u 7 000 na 13 h. Pole Sazba se předvyplňuje z rezervace, takže
+  // `parseSazba` na něm hlásil „v celých korunách, bez haléřů" a `validate()`
+  // odmítl uložit i pouhou opravu překlepu v názvu — u akce, kterou databáze
+  // schválně nechává upravitelnou. Validovat se smí jen sazba, na kterou admin
+  // doopravdy sáhl.
+  it('nedotčená odvozená sazba s haléři nebrání uložení', () => {
+    expect(zdroj, 'původní sazba z databáze se nepamatuje, nejde poznat dotčení')
+      .toContain('setPuvodniRate(rateZDb)');
+    const validate = zdroj.slice(zdroj.indexOf('const validate ='), zdroj.indexOf('const pevnaCena'));
+    expect(validate, 'validace sazby běží i na nedotčené pole — u paušálu zablokuje i opravu názvu')
+      .toContain('sazba.chyba && rate !== puvodniRate');
+  });
+
+  // Pojistka patří DOVNITŘ dopočtu, ne na volající místo: jinak stačí přidat
+  // třetí volání a díra se vrátí. Bez ní napsání sazby 900 v pevném režimu
+  // nasypalo do pole 5 400 a odeslalo je jako PEVNOU částku.
+  it('dopočet sazba ⇄ částka běží jen v režimu kalkulačky', () => {
+    for (const fn of ['prepocitejCelkem', 'prepocitejSazbu']) {
+      const zac = zdroj.indexOf(`const ${fn} = `);
+      expect(zac, `funkce ${fn} zmizela`).toBeGreaterThan(-1);
+      const telo = zdroj.slice(zac, zdroj.indexOf('};', zac));
+      expect(telo, `${fn} nemá pojistku na režim — v pevném režimu rozbíjí zadanou částku`)
+        .toContain("if (rezimCeny !== 'kalkulacka') return;");
+    }
+  });
+
+  // `celkemTouched` je druhá pojistka vedle vynulování: co do pole nasypal
+  // dopočet nebo zbytek z minula, není rozhodnutí admina.
+  it('posílá se jen částka, kterou admin doopravdy napsal', () => {
+    expect(zdroj).toMatch(/const pevnaCena = isAdmin && rezimCeny === 'pevna' && celkemTouched \? celkemNum : null/);
+    // a obě větve se rozhodují podle TÉŽE hodnoty, ne každá podle své podmínky
+    expect(zdroj).toContain('rate_per_hour: pevnaCena != null');
+    expect(zdroj).toContain('celkova_cena: pevnaCena');
+  });
+
+  // `parseSazba` je parser HODINOVÉ sazby (celé koruny, strop 50 000 Kč/h).
+  // Na cenu akce se nehodí a chyba se navíc ztrácela — 60 000 za víkendový
+  // turnaj se tiše zahodilo a rezervace vznikla za ceník.
+  it('částka se čte vlastním parserem a jeho chyba zastaví uložení', () => {
+    expect(zdroj, 'pevná cena se pořád čte parserem hodinové sazby')
+      .toContain('parseCelkovouCenu(celkem, jednotek)');
+    const validate = zdroj.slice(zdroj.indexOf('const validate ='), zdroj.indexOf('const pevnaCena'));
+    expect(validate, 'validate() chybu v celkové ceně ignoruje — částka se tiše zahodí')
+      .toContain('celkemVysledek.chyba');
+  });
+
+  // `create_booking_series` parametr `p_celkem` nemá a PostgREST hledá funkci
+  // podle jmen parametrů → klíč navíc znamená PGRST202 a série se nezaloží.
+  it('p_celkem nejde do sdíleného rpcArgs, jen do create_booking', () => {
+    const args = hook.slice(hook.indexOf('const rpcArgs'), hook.indexOf('const createBooking'));
+    expect(args, 'p_celkem je ve sdíleném rpcArgs — série s pevnou cenou spadne na PGRST202')
+      .not.toContain('p_celkem');
+    // Kotvíme na KÓD, ne na výskyt slova: `p_celkem` je v tom řezu třikrát
+    // v komentáři, takže `toContain('p_celkem')` zůstalo zelené i po smazání
+    // samotného řádku. Test, který nezčervená po vypnutí opravy, nehlídá nic.
+    const create = hook.slice(hook.indexOf('const createBooking'), hook.indexOf('const createSeries'));
+    expect(create, 'create_booking pevnou cenu neposílá vůbec')
+      .toContain('p_celkem: input.celkova_cena');
+  });
+
+  // Editace pevný paušál neumí — větev `isEdit` `celkova_cena` nikam neposílá.
+  // Zapsatelné pole by tam znamenalo „Rezervace upravena" a nezměněnou cenu.
+  it('v editaci je pevná cena zamčená, ne tiše zahozená', () => {
+    expect(zdroj).toContain("const pevnaVEditaci = isEdit && rezimCeny === 'pevna'");
+    expect(zdroj, 'pole s pevnou cenou jde v editaci přepsat, ale uložit ne')
+      .toContain('readOnly={!isAdmin || pevnaVEditaci}');
+    const validate = zdroj.slice(zdroj.indexOf('const validate ='), zdroj.indexOf('const pevnaCena'));
+    expect(validate, 'validate() editaci pevné ceny propustí — částka se tiše zahodí')
+      .toContain('pevnaVEditaci && celkemTouched && celkemNum != null');
+  });
+
+  // Náhled z ceníku a zadaná pevná cena jsou dvě různá čísla. Vedle sebe na
+  // jedné obrazovce ve chvíli potvrzení je to past: uloží se to zadané.
+  it('náhled ceny z ceníku se u zadané pevné ceny nezobrazuje', () => {
+    expect(zdroj, 'pod formulářem svítí pásmová cena, i když je vyplněný paušál')
+      .toContain("!(rezimCeny === 'pevna' && celkem.trim())");
+  });
+
+  it('kombinace opakování + pevná cena se v UI nenabízí', () => {
+    const validate = zdroj.slice(zdroj.indexOf('const validate ='), zdroj.indexOf('const pevnaCena'));
+    expect(validate, 'opakovaná akce s pevnou cenou projde až na nesrozumitelnou chybu ze serveru')
+      .toContain("repeat && rezimCeny === 'pevna'");
+  });
+});

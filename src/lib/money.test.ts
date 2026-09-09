@@ -6,6 +6,7 @@ import {
   fmtKc,
   fmtSazba,
   fromHal,
+  parseCelkovouCenu,
   parseSazba,
   roundCzk,
   roundingDiff,
@@ -570,5 +571,61 @@ describe('parseSazba — sazba z formulářového pole', () => {
       expect(v.hodnota).toBe(roundCzk(v.hodnota));
     }
     expect(prijatych).toBeGreaterThan(0); // ať test neprojde naprázdno
+  });
+});
+
+describe('parseCelkovouCenu — pevná cena akce, ne hodinovka', () => {
+  // 2 dráhy × 13 h = 26 dráhohodin → strop 26 × 50 000 = 1 300 000
+  const JEDNOTEK = 26;
+
+  it('prázdné pole je platný vstup a znamená „z ceníku"', () => {
+    expect(parseCelkovouCenu('', JEDNOTEK)).toEqual({ hodnota: null });
+    expect(parseCelkovouCenu('   ', JEDNOTEK).chyba).toBeUndefined();
+  });
+
+  it('bere haléře — na rozdíl od parseSazba', () => {
+    // Tohle je ten rozdíl, kvůli kterému funkce vznikla: `parseSazba` haléře
+    // odmítá jako „sazbu s haléři" a chyba se cestou ztrácela.
+    expect(parseCelkovouCenu('14000,50', JEDNOTEK).hodnota).toBe(14000.5);
+    expect(parseSazba('14000,50').hodnota).toBeNull();
+  });
+
+  it('bere částku nad 50 000 — to je strop Kč/H, ne ceny akce', () => {
+    expect(parseCelkovouCenu('60000', JEDNOTEK).hodnota).toBe(60000);
+    expect(parseSazba('60000').hodnota).toBeNull();
+  });
+
+  it('nulu bere (akce zdarma je legitimní)', () => {
+    expect(parseCelkovouCenu('0', JEDNOTEK)).toEqual({ hodnota: 0 });
+  });
+
+  it('zápornou částku odmítne', () => {
+    expect(parseCelkovouCenu('-5000', JEDNOTEK).hodnota).toBeNull();
+    expect(parseCelkovouCenu('-5000', JEDNOTEK).chyba).toMatch(/záporná/i);
+  });
+
+  it('nesmysl odmítne s chybou, ne tichým null', () => {
+    // Podstatné je to `chyba`: bez ní volající nepozná rozdíl mezi „prázdné"
+    // a „nepřečetl jsem to" — a přesně tím se částka tiše zahazovala.
+    const r = parseCelkovouCenu('abc', JEDNOTEK);
+    expect(r.hodnota).toBeNull();
+    expect(r.chyba).toBeTruthy();
+  });
+
+  it('mezeru v tisících odmítne (zkopírované z appky)', () => {
+    expect(parseCelkovouCenu('14 000', JEDNOTEK).chyba).toBeTruthy();
+  });
+
+  it('třetí desetinné místo odmítne, místo aby ho tiše zaokrouhlilo', () => {
+    expect(parseCelkovouCenu('100.005', JEDNOTEK).chyba).toMatch(/haléře/i);
+  });
+
+  it('strop je odvozený z dráhohodin, ne vymyšlené číslo', () => {
+    expect(parseCelkovouCenu(String(JEDNOTEK * 50_000), JEDNOTEK).hodnota).toBe(1_300_000);
+    expect(parseCelkovouCenu(String(JEDNOTEK * 50_000 + 1), JEDNOTEK).chyba).toBeTruthy();
+  });
+
+  it('bez známých hodin se strop neuplatní (formulář nemusí mít vyplněný čas)', () => {
+    expect(parseCelkovouCenu('999999999', 0).hodnota).toBe(999999999);
   });
 });
