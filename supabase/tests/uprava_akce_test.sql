@@ -10,6 +10,17 @@
 -- že přidaná dráha stojí totéž co první, že změna typu cenu opravdu přepočítá
 -- (a nepřepočítá ji nic jiného), a že akce za nulu zmizí z fakturace, ale ne
 -- z „Kdo kolik dluží" — a kontrolní součet přitom zůstane nulový.
+--
+-- ČÍSLA V TOMHLE SOUBORU VISÍ NA PÁSMOVÉM CENÍKU ze seedu (vš. 700/900/1000,
+-- vík. 900/1000). Migrace `20260906120000_cenik_ledu_nekomercni.sql` ho
+-- 6. 9. 2026 vědomě přepsala (staré sazby soft-smazala) a tenhle test se s ní
+-- rozešel: čekal 1 200 Kč/h večer, tedy sazbu, která už neplatí. Padal na tom
+-- od té doby až do 10. 9. 2026 — a protože je to test fakturace, chyběla u
+-- peněz jedna kontrolní vrstva. Když se ceník změní znovu, opraví se čísla
+-- TADY. A ber je vážně: mutace ceníku (změna sazby v `cenik_pasma`) tenhle
+-- soubor SPOLEHLIVĚ zčervená — ta tvrzení ceník doopravdy měří, nejen to,
+-- že se pásmová cena nepřepočítá tam, kde nemá. Když je „opravíš" tím, že je
+-- přepíšeš na to, co zrovna vyjde, přijdeš přesně o tu kontrolní vrstvu.
 -- =============================================================================
 
 \set ON_ERROR_STOP on
@@ -154,8 +165,8 @@ BEGIN
 
   _v := public.zmen_typ_akce(_ev, 'training');
   SELECT rate_per_hour, amount, cenove_pasma INTO _r FROM public.reservations WHERE event_id=_ev;
-  PERFORM pg_temp.tvrd(_r.amount = 2400,
-    'po změně na TRÉNINK se klub ocení pásmy: 2 h × 1 200 = 2 400 Kč');
+  PERFORM pg_temp.tvrd(_r.amount = 2000,
+    'po změně na TRÉNINK se klub ocení pásmy: 2 h × 1 000 = 2 000 Kč');
   PERFORM pg_temp.tvrd(_r.cenove_pasma IS NOT NULL, '… a dostane rozpis po pásmech');
 END $$;
 
@@ -258,7 +269,7 @@ BEGIN
   SELECT id INTO _d1 FROM public.sheets WHERE active ORDER BY name LIMIT 1;
   SELECT id INTO _d2 FROM public.sheets WHERE active AND id <> _d1 ORDER BY name LIMIT 1;
 
-  -- Středa 16–19: 1 h × 1 000 (odpolední) + 2 h × 1 200 (večerní) = 3 400 Kč.
+  -- Středa 16–19: 1 h × 900 (odpolední) + 2 h × 1 000 (večerní) = 2 900 Kč.
   INSERT INTO public.events (title, event_type, start_time, end_time, created_by)
   VALUES ('TEST pasma draha','training','2027-06-23 16:00+02','2027-06-23 19:00+02',
           '11111111-1111-1111-1111-111111111111') RETURNING id INTO _ev;
@@ -266,17 +277,21 @@ BEGIN
   VALUES (_d1, _klub, _ev, '2027-06-23 16:00+02','2027-06-23 19:00+02');
 
   PERFORM pg_temp.tvrd(
-    (SELECT amount FROM public.reservations WHERE event_id = _ev) = 3400,
-    'příprava: klubový trénink přes dvě pásma stojí 3 400 Kč');
+    (SELECT amount FROM public.reservations WHERE event_id = _ev) = 2900,
+    'příprava: klubový trénink přes dvě pásma stojí 2 900 Kč (1 h × 900 + 2 h × 1 000)');
   PERFORM pg_temp.tvrd(
-    (SELECT rate_per_hour FROM public.reservations WHERE event_id = _ev) = 1133.33,
+    (SELECT rate_per_hour FROM public.reservations WHERE event_id = _ev) = 966.67,
     '… a odvozený průměr má haléře (to je ta mina)');
+  -- Pozor na směr zaokrouhlení: 2 900 / 3 = 966,666… se zaokrouhlí NAHORU
+  -- (966,67), zatímco po starém ceníku to bylo 3 400 / 3 = 1 133,33, tedy DOLŮ.
+  -- Ta mina tím nezmizela, jen si vyměnila znaménko: 3 × 966,67 = 2 900,01,
+  -- dřív 3 × 1 133,33 = 3 399,99. Rozdíl proti `amount` je pořád jeden haléř.
 
   _v := public.uprav_drahy_akce(_ev, ARRAY[_d1, _d2]);
   PERFORM pg_temp.tvrd((_v->>'pridano')::int = 1,
     'druhá dráha k DVOUPÁSMOVÉ klubové rezervaci se přidat DÁ (dřív to padalo na celé koruny)');
-  PERFORM pg_temp.tvrd((_v->>'celkem')::numeric = 6800,
-    '… a celá akce stojí 2 × 3 400 = 6 800 Kč');
+  PERFORM pg_temp.tvrd((_v->>'celkem')::numeric = 5800,
+    '… a celá akce stojí 2 × 2 900 = 5 800 Kč');
   PERFORM pg_temp.tvrd(
     (SELECT count(DISTINCT amount) FROM public.reservations
       WHERE event_id = _ev AND deleted_at IS NULL) = 1,

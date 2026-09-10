@@ -770,12 +770,20 @@ export function ReservationDialog({
         // teď podepsal admin, který změnu udělal — je to údaj o tom, kdo pod
         // akcí stojí ve fakturaci, a generické „Rezervace upravena" by ho
         // spolklo. (Nález brány code review, 10. 9. 2026.)
-        toast(zmenaFirmy?.schvaleni_prerazeno
+        //
+        // Když se ale razítko nepřerazilo, NESMÍ se to tvrdit — u neschválené
+        // akce žádné není a funkce ho nevyrábí. Mlčet ale taky nejde: uživatel
+        // právě přepsal odběratele, tedy to, komu se bude fakturovat.
+        // (Druhý nález téže brány.)
+        const drah = zmenaFirmy?.drah && zmenaFirmy.drah > 1
+          ? `Odběratel je přepsaný na všech ${zmenaFirmy.drah} drahách akce. `
+          : '';
+        toast(zmenaFirmy
           ? {
               title: 'Firma změněna',
-              description: zmenaFirmy.drah && zmenaFirmy.drah > 1
-                ? `Odběratel je přepsaný na všech ${zmenaFirmy.drah} drahách akce. Cena zůstala beze změny a potvrzení akce je nově podepsané vámi.`
-                : 'Cena zůstala beze změny a potvrzení akce je nově podepsané vámi.',
+              description: zmenaFirmy.schvaleni_prerazeno
+                ? `${drah}Cena zůstala beze změny a potvrzení akce je nově podepsané vámi.`
+                : `${drah}Cena zůstala beze změny.`,
             }
           : { title: 'Rezervace upravena' });
         onOpenChange(false);

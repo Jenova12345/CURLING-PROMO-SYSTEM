@@ -161,9 +161,10 @@ BEGIN
   -- nemá, drží ho každá rezervace zvlášť.
   --
   -- Zjišťuje se přitom i to, jestli je JEDEN. Akce se smíšenými odběrateli
-  -- existovat nemá, ale `faktura_z_akce` na ni umí narazit (má na to vlastní
-  -- hlášku), takže se to stát může. Vzít z ní „ten první podle id" by znamenalo
-  -- udělat daňovou kontrolu proti jednomu z nich a druhého tiše přepsat — u
+  -- existovat nemá, ale `create_invoice_draft_commercial` na ni umí narazit
+  -- (má na to vlastní hlášku), takže se to stát může. Vzít z ní „ten první
+  -- podle id" by znamenalo udělat daňovou kontrolu proti jednomu z nich
+  -- a druhého tiše přepsat — u
   -- akce, která je rozbitá, a bez zmínky komukoli. Fail-closed: takovou akci
   -- odmítneme a řekneme to. (Nález bezpečnostní brány, 10. 9. 2026.)
   SELECT count(DISTINCT r.subject_id),
@@ -222,6 +223,15 @@ BEGIN
 
   -- Akce, jejíž dráhy se v daňovém významu neshodují, je rozbitá už teď a
   -- změna odběratele by to jen zhoršila. Fail-closed.
+  --
+  -- POZOR, TAHLE VĚTEV NEDRŽÍ DVEŘE — drží PŘESNOST DIAGNÓZY. Změna neprojde
+  -- ani bez ní: `min(cena_bez_dph::int)::boolean` je u smíšené sady vždycky
+  -- `false`, `cena_je_bez_dph` pro komerční subjekt vrací `true` bezpodmínečně,
+  -- takže to spadne o pár řádků níž. Rozdíl je v hlášce: bez téhle větve se
+  -- admin dozví, že „nesedí daňový význam částky s odběratelem X", vypraví se
+  -- spravovat vztah k odběrateli — a přitom je rozbitá akce, každá dráha jinak.
+  -- (Doměřila brána code review, 10. 9. 2026; dřívější znění tenhle blok
+  -- prodávalo jako samostatnou pojistku, což nebyla pravda.)
   IF _ruznych_dph > 1 THEN
     RAISE EXCEPTION 'Dráhy téhle akce mají různý daňový význam částky — to je potřeba spravit dřív, než se změní odběratel.'
       USING HINT = 'Obrať se na správce systému, akce má nekonzistentní data.';
@@ -291,6 +301,14 @@ BEGIN
   -- SEBEKONTROLA: ani částka, ani fakturovatelnost se hnout nesměly. Kdyby se
   -- hnuly, je to tichý posun dluhu — tak ať je z toho hlasitý pád a celá změna
   -- se vrátí.
+  --
+  -- ČÍM TY DVĚ KONTROLY JSOU: NÁSTRAHOU NA BUDOUCÍ ZÁSAH DO TRIGGERŮ, ne živou
+  -- bránou. Dnešní cestou se `amount` přepočítá z nezměněných `hours × rate`
+  -- na totéž, takže samy od sebe nespustí — `supabase/tests/zmen_firmu_akce_test.sql`
+  -- proto v kapitole 1f musí cizí trigger nasimulovat, aby je vůbec změřil.
+  -- Že to není teorie, ukázala kapitola 1c: `zrus_schvaleni_pri_uprave` razítko
+  -- shodilo, částka seděla na haléř a akce vypadla z „Kdo kolik dluží".
+  -- (Doměřila brána code review, 10. 9. 2026.)
   SELECT COALESCE(sum(COALESCE(r.corrected_amount, r.amount)), 0),
          count(*) FILTER (WHERE r.approved_at IS NOT NULL)
     INTO _celkem_po, _schvalenych_po
@@ -539,13 +557,23 @@ BEGIN
   IF _nedomereno IS NOT NULL THEN
     RAISE NOTICE 'Změna firmy: tvar OK, chování NEDOMĚŘENO — %', _nedomereno;
   ELSE
-    -- NOTICE si nárokuje jen to, co se opravdu změřilo. U jednodráhové akce
-    -- neříká „na všech drahách" — to by znělo jako tvrzení o propsání na víc
-    -- drah, které se na jedné dráze změřit nedá (nález migrační brány).
-    IF _drah > 1 THEN
-      RAISE NOTICE 'Změna firmy OK: neadmin neprojde, admin změní odběratele na všech % drahách akce, částka i schválení zůstaly.', _drah;
-    ELSE
-      RAISE NOTICE 'Změna firmy OK: neadmin neprojde, admin změní odběratele, částka i schválení zůstaly. POZOR: měřeno na JEDNODRÁHOVÉ akci, propsání na víc drah hlídá jen supabase/tests/zmen_firmu_akce_test.sql.';
-    END IF;
+    -- NOTICE si nárokuje JEN TO, CO SE OPRAVDU ZMĚŘILO. Obě půlky jsou proto
+    -- podmíněné zvlášť:
+    --   * u jednodráhové akce se neříká „na všech drahách" — to by znělo jako
+    --     tvrzení o propsání na víc drah, které se na jedné dráze změřit nedá
+    --     (nález migrační brány);
+    --   * neadminská noha běží celá pod `IF _neadmin IS NOT NULL`, takže
+    --     v databázi bez neadminského zástupce se vůbec nespustí — a tvrdit
+    --     pak „neadmin neprojde" by bylo tvrzení o něčem, co se neměřilo
+    --     (nález brány code review).
+    RAISE NOTICE 'Změna firmy OK: %admin změní odběratele%, částka i schválení zůstaly.%',
+      CASE WHEN _neadmin IS NOT NULL THEN 'neadmin neprojde, ' ELSE '' END,
+      CASE WHEN _drah > 1 THEN ' na všech ' || _drah || ' drahách akce' ELSE '' END,
+      CASE WHEN _neadmin IS NULL
+             THEN ' POZOR: neadminská brána NEPROMĚŘENA — v databázi není neadminský zástupce; hlídá ji jen supabase/tests/zmen_firmu_akce_test.sql.'
+           ELSE '' END
+      || CASE WHEN _drah <= 1
+                THEN ' POZOR: měřeno na JEDNODRÁHOVÉ akci, propsání na víc drah hlídá jen supabase/tests/zmen_firmu_akce_test.sql.'
+              ELSE '' END;
   END IF;
 END $kontrola$;

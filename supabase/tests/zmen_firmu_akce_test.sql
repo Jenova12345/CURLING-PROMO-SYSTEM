@@ -172,11 +172,15 @@ END $$;
 -- -----------------------------------------------------------------------------
 DO $$
 DECLARE _ev uuid; _stara uuid; _nova uuid; _celkem_pred numeric; _pred text;
+        _puv_sazba numeric;
 BEGIN
   _stara := pg_temp.firma('Testovací Firma s.r.o.');
   _nova  := pg_temp.firma('Demo Firma s.r.o.');
 
-  -- dohodnutá sazba jen pro tenhle test (transakce se stejně rollbackuje)
+  -- Dohodnutá sazba jen pro tenhle test — na konci kapitoly se vrací. Kapitoly stojí za sebou v jedné
+  -- transakci, takže co jedna nechá rozházené, zdědí ta příští, aniž by o tom
+  -- věděla. (Nález brány code review.)
+  SELECT default_rate INTO _puv_sazba FROM public.subjects WHERE id = _nova;
   UPDATE public.subjects SET default_rate = 800 WHERE id = _nova;
 
   _ev := pg_temp.zaloz_akci('TEST firma s vlastni sazbou', _stara,
@@ -197,6 +201,7 @@ BEGIN
            _celkem_pred, pg_temp.celkem(_ev)));
   PERFORM pg_temp.tvrd(pg_temp.penize(_ev) = _pred,
     '… a nezměnila se ani sazba, hodiny nebo daňový význam');
+  UPDATE public.subjects SET default_rate = _puv_sazba WHERE id = _nova;
 END $$;
 
 -- -----------------------------------------------------------------------------
@@ -228,6 +233,17 @@ BEGIN
 
   _ev := pg_temp.zaloz_akci('TEST firma razitko', _stara,
            '2027-09-16 16:00+02', '2027-09-16 18:00+02', 2);
+
+  -- Razítko schválně podepíše NĚKDO JINÝ než admin, který bude firmu měnit.
+  -- Bez toho by tvrzení „razítko je podepsané tím, kdo změnu udělal" neměřilo
+  -- nic: admin akci zakládá i schvaluje, takže by sedělo i tehdy, kdyby se
+  -- razítko nepřerazilo vůbec. (Odhaleno mutací `approved_by = approved_by`.)
+  UPDATE public.reservations SET approved_by = pg_temp.zastupce()
+   WHERE event_id = _ev AND deleted_at IS NULL;
+  PERFORM pg_temp.tvrd(
+    (SELECT bool_and(approved_by = pg_temp.zastupce()) FROM public.reservations
+      WHERE event_id = _ev AND deleted_at IS NULL),
+    'příprava: razítko je zatím podepsané NĚKÝM JINÝM než adminem');
 
   SELECT count(*) FILTER (WHERE approved_at IS NOT NULL) INTO _schvalenych_pred
     FROM public.reservations WHERE event_id = _ev AND deleted_at IS NULL;
@@ -266,7 +282,7 @@ END $$;
 -- změna odběratele tiše protlačila do fakturace akci, kterou nikdo nepotvrdil —
 -- tichý posun opačným směrem.
 DO $$
-DECLARE _ev uuid; _stara uuid; _nova uuid;
+DECLARE _ev uuid; _stara uuid; _nova uuid; _v jsonb;
 BEGIN
   _stara := pg_temp.firma('Testovací Firma s.r.o.');
   _nova  := pg_temp.firma('Demo Firma s.r.o.');
@@ -278,12 +294,19 @@ BEGIN
   INSERT INTO public.reservations (sheet_id, subject_id, event_id, start_at, end_at)
   VALUES (pg_temp.draha(1), _stara, _ev, '2027-09-17 16:00+02', '2027-09-17 18:00+02');
 
-  PERFORM pg_temp.tvrd((public.zmen_firmu_akce(_ev, _nova) ->> 'zmena') = 'true',
+  _v := public.zmen_firmu_akce(_ev, _nova);
+  PERFORM pg_temp.tvrd((_v ->> 'zmena') = 'true',
     'u NESCHVÁLENÉ akce změna odběratele projde');
   PERFORM pg_temp.tvrd(
     (SELECT bool_and(approved_at IS NULL) FROM public.reservations
       WHERE event_id = _ev AND deleted_at IS NULL),
     '… ale razítko schválení jí NEVYROBILA (do fakturace se nepropašuje)');
+  -- A ani to volajícímu netvrdí. `schvaleni_prerazeno` se propisuje do hlášky
+  -- „potvrzení akce je nově podepsané vámi" — u akce, kterou nikdo nepotvrdil,
+  -- by to byla nepravda o tom, kdo pod ní ve fakturaci stojí.
+  -- (Bez tohohle tvrzení projde mutace `'schvaleni_prerazeno', true`.)
+  PERFORM pg_temp.tvrd((_v ->> 'schvaleni_prerazeno') = 'false',
+    '… a ani netvrdí volajícímu, že nějaké razítko přerazila');
 END $$;
 
 -- -----------------------------------------------------------------------------
@@ -295,7 +318,7 @@ END $$;
 -- nemá, stornovaná dráha se nefakturuje.
 -- -----------------------------------------------------------------------------
 DO $$
-DECLARE _ev uuid; _stara uuid; _nova uuid;
+DECLARE _ev uuid; _stara uuid; _nova uuid; _smazana uuid;
 BEGIN
   _stara := pg_temp.firma('Testovací Firma s.r.o.');
   _nova  := pg_temp.firma('Demo Firma s.r.o.');
@@ -310,6 +333,9 @@ BEGIN
                                    status, cancelled_at, cancelled_by)
   VALUES (pg_temp.draha(2), _stara, _ev, '2027-09-18 16:00+02','2027-09-18 18:00+02',
           'cancelled', now(), pg_temp.admin());
+  INSERT INTO public.reservations (sheet_id, subject_id, event_id, start_at, end_at, deleted_at)
+  VALUES (pg_temp.draha(1), _stara, _ev, '2027-09-18 19:00+02','2027-09-18 20:00+02', now())
+  RETURNING id INTO _smazana;
 
   PERFORM public.zmen_firmu_akce(_ev, _nova);
 
@@ -319,6 +345,16 @@ BEGIN
     (SELECT subject_id FROM public.reservations
       WHERE event_id = _ev AND status = 'cancelled' AND deleted_at IS NULL) = _nova,
     '… i stornovaná dráha nese nového odběratele');
+
+  -- SOFT-SMAZANÁ dráha je něco JINÉHO než stornovaná a měnit se NESMÍ.
+  -- Filtr `deleted_at IS NULL` v UPDATE je nosný právě kvůli obchvatu
+  -- popsanému v `docs/TICKET-obchvaty-zamku-fakturace.md`: když admin
+  -- vyfakturovanou dráhu soft-smaže, zámek ji přestane vidět a změna projde.
+  -- Dnes se tím rozejde „jen" rozvrh s dokladem. Bez toho filtru by se přepsal
+  -- i záznam POD vystavenou fakturou a z „rozvrh nesedí s dokladem" by se stalo
+  -- „doklad nesedí sám se sebou". (Nález brány code review, třetí kolo.)
+  PERFORM pg_temp.tvrd((SELECT subject_id FROM public.reservations WHERE id = _smazana) = _stara,
+    '… ale SOFT-SMAZANÁ dráha si nechala starou firmu (nesahá se pod doklad)');
 END $$;
 
 -- -----------------------------------------------------------------------------
@@ -506,13 +542,116 @@ BEGIN
 END $$;
 
 -- -----------------------------------------------------------------------------
+-- 3b) DOKLAD NA *STORNOVANÉ* DRÁZE BLOKUJE TAKY
+--
+-- Přímý důsledek rozhodnutí, že se odběratel přepisuje i u stornovaných drah
+-- (kapitola 1d): když se stornovaná dráha přepisuje, musí ji stejně tak
+-- pokrývat i zámek fakturace. Jinak by šlo přepsat odběratele na dráze, na
+-- kterou už zní vystavený doklad — a faktura by mířila na jinou firmu než
+-- záznam pod ní.
+--
+-- Rozhodnutí zákazníka, 10. 9. 2026: JAKÁKOLI dráha akce na dokladu → změna
+-- se zablokuje. Ne „jen ta živá".
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _ev uuid; _ziva uuid; _storno uuid; _stara uuid; _nova uuid; _dok uuid;
+        _penize_pred text;
+BEGIN
+  _stara := pg_temp.firma('Testovací Firma s.r.o.');
+  _nova  := pg_temp.firma('Demo Firma s.r.o.');
+
+  INSERT INTO public.events (title, event_type, start_time, end_time, created_by)
+  VALUES ('TEST firma storno na dokladu','commercial','2027-09-21 16:00+02','2027-09-21 18:00+02',
+          pg_temp.admin()) RETURNING id INTO _ev;
+  -- živá dráha BEZ dokladu…
+  INSERT INTO public.reservations (sheet_id, subject_id, event_id, start_at, end_at, approved_at, approved_by)
+  VALUES (pg_temp.draha(1), _stara, _ev, '2027-09-21 16:00+02','2027-09-21 18:00+02',
+          now(), pg_temp.admin())
+  RETURNING id INTO _ziva;
+  -- …a stornovaná dráha, která JE na dokladu
+  INSERT INTO public.reservations (sheet_id, subject_id, event_id, start_at, end_at,
+                                   status, cancelled_at, cancelled_by)
+  VALUES (pg_temp.draha(2), _stara, _ev, '2027-09-21 16:00+02','2027-09-21 18:00+02',
+          'cancelled', now(), pg_temp.admin())
+  RETURNING id INTO _storno;
+
+  -- Součet z dokladu se bere z rezervací, ne od oka — kdyby se pak částka akce
+  -- hnula, byl by to rozdíl PROTI DOKLADU, a ten se má poznat.
+  _penize_pred := pg_temp.penize(_ev);
+  INSERT INTO public.fakturoid_invoices
+    (idempotency_key, druh, subject_id, event_id, nas_soucet, radku, rezervace, cislo)
+  VALUES ('firma-storno-'||_ev::text, 'commercial_event', _stara, _ev,
+          pg_temp.celkem(_ev), 1, ARRAY[_storno], '2027-0021')
+  RETURNING id INTO _dok;
+  INSERT INTO public.fakturoid_invoice_reservations (fakturoid_invoice_id, reservation_id)
+  VALUES (_dok, _storno);
+
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.zmen_firmu_akce(%L, %L)', _ev, _nova),
+    'na vystaveném dokladu',
+    'doklad na STORNOVANÉ dráze zablokuje změnu odběratele celé akce');
+  -- Pozor, čím tyhle dvě tvrzení JSOU a čím NEJSOU: samotné zablokování měří
+  -- `ocekavej_chybu` výš — výjimka shodí podtransakci, takže se sem stejně nic
+  -- zapsat nemůže. Tohle je levná pojistka na budoucí refaktor, který by bránu
+  -- schoval do vlastního EXCEPTION bloku a výjimku spolkl. Kdyby někdy zbyla
+  -- v souboru jako jediná obrana proti zápisu, je to málo.
+  PERFORM pg_temp.tvrd(
+    (SELECT count(*) FROM public.reservations
+      WHERE event_id = _ev AND deleted_at IS NULL AND subject_id = _stara) = 2,
+    '… obě dráhy akce (živá i stornovaná) zůstaly na firmě, na kterou doklad zní');
+  PERFORM pg_temp.tvrd(pg_temp.penize(_ev) = _penize_pred,
+    '… a nehnula se ani částka, ani razítko schválení (brána padla PŘED zápisem)');
+END $$;
+
+-- Totéž druhou cestou dokladu: interní `invoice_id` na stornované dráze.
+DO $$
+DECLARE _ev uuid; _storno uuid; _stara uuid; _nova uuid; _fak uuid; _castka numeric;
+BEGIN
+  _stara := pg_temp.firma('Testovací Firma s.r.o.');
+  _nova  := pg_temp.firma('Demo Firma s.r.o.');
+
+  INSERT INTO public.events (title, event_type, start_time, end_time, created_by)
+  VALUES ('TEST firma storno interni doklad','commercial','2027-09-22 16:00+02','2027-09-22 18:00+02',
+          pg_temp.admin()) RETURNING id INTO _ev;
+  INSERT INTO public.reservations (sheet_id, subject_id, event_id, start_at, end_at,
+                                   status, cancelled_at, cancelled_by)
+  VALUES (pg_temp.draha(1), _stara, _ev, '2027-09-22 16:00+02','2027-09-22 18:00+02',
+          'cancelled', now(), pg_temp.admin())
+  RETURNING id INTO _storno;
+
+  _castka := pg_temp.celkem(_ev);
+  INSERT INTO public.invoices
+    (kind, status, cislo, variabilni_symbol, datum_vystaveni, datum_splatnosti,
+     dodavatel_nazev, odberatel_nazev, pdf_status, subject_id, event_id, obdobi_od, obdobi_do,
+     subtotal, total, total_rounded, rounding_amount, vat_mode, created_by, issued_at, issued_by)
+  VALUES ('komercni', 'vystaveno', '2027-9922', '20279922', '2027-09-22', '2027-10-06',
+          'Curling Promo Ostrava', 'Testovací Firma s.r.o.', 'pending', _stara, _ev,
+          '2027-09-22', '2027-09-22', _castka, _castka, _castka, 0, 'neplatce', pg_temp.admin(),
+          now(), pg_temp.admin())
+  RETURNING id INTO _fak;
+
+  PERFORM set_config('app.trusted_booking', 'on', true);
+  UPDATE public.reservations SET invoice_id = _fak, invoiced_at = now() WHERE id = _storno;
+  PERFORM set_config('app.trusted_booking', 'off', true);
+
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.zmen_firmu_akce(%L, %L)', _ev, _nova),
+    'na vystaveném dokladu',
+    'interní doklad na STORNOVANÉ dráze zablokuje změnu taky');
+  PERFORM pg_temp.tvrd(
+    (SELECT subject_id FROM public.reservations WHERE id = _storno) = _stara,
+    '… a odběratel se nezměnil');
+END $$;
+
+-- -----------------------------------------------------------------------------
 -- 4) NOVÝ SUBJEKT MUSÍ BÝT KOMERČNÍ
 -- -----------------------------------------------------------------------------
 DO $$
-DECLARE _ev uuid; _stara uuid; _klub uuid;
+DECLARE _ev uuid; _stara uuid; _klub uuid; _smazana uuid;
 BEGIN
-  _stara := pg_temp.firma('Testovací Firma s.r.o.');
-  _klub  := pg_temp.firma('CK Ostravské kameny');
+  _stara   := pg_temp.firma('Testovací Firma s.r.o.');
+  _klub    := pg_temp.firma('CK Ostravské kameny');
+  _smazana := pg_temp.firma('Demo Firma s.r.o.');
   _ev := pg_temp.zaloz_akci('TEST firma jen komercni subjekt', _stara,
            '2027-09-12 16:00+02', '2027-09-12 18:00+02', 1);
 
@@ -522,13 +661,23 @@ BEGIN
   PERFORM pg_temp.ocekavej_chybu(
     format('SELECT public.zmen_firmu_akce(%L, %L)', _ev, gen_random_uuid()),
     'Firma nenalezena', 'neexistující firma skončí srozumitelnou hláškou');
+
+  -- SMAZANÁ firma je pro `subjects` pořád řádek — jen s `deleted_at`. Kdyby
+  -- funkce filtr vynechala, dala by se akce přepsat na odběratele, který
+  -- v systému oficiálně není, a doklad by pak zněl na někoho vyřazeného.
+  UPDATE public.subjects SET deleted_at = now() WHERE id = _smazana;
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.zmen_firmu_akce(%L, %L)', _ev, _smazana),
+    'Firma nenalezena', 'SMAZANÁ firma se odběratelem stát nemůže');
+  UPDATE public.subjects SET deleted_at = NULL WHERE id = _smazana;
+
   PERFORM pg_temp.tvrd(pg_temp.firma_akce(_ev) = _stara, '… a odběratel se nezměnil');
 END $$;
 
 -- -----------------------------------------------------------------------------
 -- 4b) AKCE SE SMÍŠENÝMI ODBĚRATELI SE ODMÍTNE
 --
--- Existovat nemá, ale `faktura_z_akce` na ni umí narazit. Vzít z ní „toho
+-- Existovat nemá, ale `create_invoice_draft_commercial` na ni umí narazit. Vzít z ní „toho
 -- prvního podle id" by znamenalo udělat daňovou kontrolu proti jednomu
 -- odběrateli a druhého tiše přepsat — u akce, která je rozbitá už teď.
 -- -----------------------------------------------------------------------------
@@ -552,6 +701,248 @@ BEGIN
     'každá jiného odběratele', 'akci se smíšenými odběrateli funkce ODMÍTNE');
   PERFORM pg_temp.tvrd(pg_temp.firem_na_akci(_ev) = 2,
     '… a nic na ní nepřepsala (nechala rozbitý stav tak, jak byl)');
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 1f) PENĚŽNÍ SÍŤ FUNKCE OPRAVDU CHYTÁ
+--
+-- `zmen_firmu_akce` si po vlastním UPDATE přeměří součet částek a počet
+-- schválených drah a při rozdílu se shodí. Ty dvě kontroly jsou zálohou pro
+-- případ, že se pod funkci připlete cizí trigger — přesně tak vznikl blokér,
+-- kvůli kterému tenhle soubor má kapitolu 1c: `zrus_schvaleni_pri_uprave`
+-- shodil razítko a částka přitom seděla na haléř.
+--
+-- Bez téhle kapitoly ty dvě kontroly nehlídaly nic měřitelného: mutace
+-- `IF _celkem_po IS DISTINCT FROM _celkem_pred THEN` → `IF false THEN` prošla
+-- celým souborem zeleně, protože ostatní kapitoly měří VÝSLEDEK, ne síť pod ním.
+-- (Nález brány code review, druhé kolo.) Cizí trigger se tu proto nasimuluje.
+--
+-- DŮVOD NAVÍC NEPOUŠTĚT TENHLE SOUBOR PROTI NIČEMU SDÍLENÉMU: `CREATE TRIGGER`
+-- si na `public.reservations` bere `ShareRowExclusiveLock` a `DROP TRIGGER`
+-- dokonce `AccessExclusiveLock`, obojí drží do konce transakce. Nad seedovanou
+-- lokální databází je to jedno, nad čímkoli, co používá ještě někdo jiný, ne.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION pg_temp.cizi_trigger_penize() RETURNS trigger
+ LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.subject_id IS DISTINCT FROM OLD.subject_id THEN
+    NEW.amount := NEW.amount + 1;
+  END IF;
+  RETURN NEW;
+END $$;
+
+CREATE OR REPLACE FUNCTION pg_temp.cizi_trigger_razitko() RETURNS trigger
+ LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.subject_id IS DISTINCT FROM OLD.subject_id THEN
+    NEW.approved_at := NULL;
+  END IF;
+  RETURN NEW;
+END $$;
+
+DO $$
+DECLARE _ev uuid; _stara uuid; _nova uuid; _pred text;
+BEGIN
+  _stara := pg_temp.firma('Testovací Firma s.r.o.');
+  _nova  := pg_temp.firma('Demo Firma s.r.o.');
+
+  -- Jméno `trg_zzz_…` schválně: triggery se pouští podle abecedy, takže tenhle
+  -- se dostane ke slovu AŽ po všech ostrých, včetně `check_reservation_money`.
+  -- Simuluje se tím trigger, který si částku posune až úplně na konci.
+  _ev := pg_temp.zaloz_akci('TEST firma sit penize', _stara,
+           '2027-11-06 16:00+02', '2027-11-06 18:00+02', 1);
+  _pred := pg_temp.penize(_ev);
+  CREATE TRIGGER trg_zzz_test_penize BEFORE UPDATE ON public.reservations
+    FOR EACH ROW EXECUTE FUNCTION pg_temp.cizi_trigger_penize();
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.zmen_firmu_akce(%L, %L)', _ev, _nova),
+    'posunula částka akce',
+    'kdyby se pod funkcí hnula ČÁSTKA, funkce se shodí a nic nezapíše');
+  DROP TRIGGER trg_zzz_test_penize ON public.reservations;
+  PERFORM pg_temp.tvrd(pg_temp.penize(_ev) = _pred, '… a peníze zůstaly nedotčené');
+  PERFORM pg_temp.tvrd(pg_temp.firma_akce(_ev) = _stara, '… a odběratel taky');
+
+  _ev := pg_temp.zaloz_akci('TEST firma sit razitko', _stara,
+           '2027-11-07 16:00+02', '2027-11-07 18:00+02', 1);
+  CREATE TRIGGER trg_zzz_test_razitko BEFORE UPDATE ON public.reservations
+    FOR EACH ROW EXECUTE FUNCTION pg_temp.cizi_trigger_razitko();
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.zmen_firmu_akce(%L, %L)', _ev, _nova),
+    'vypadla z fakturace',
+    'a kdyby se pod ní shodilo RAZÍTKO, shodí se taky (to je ten blokér z 1c)');
+  DROP TRIGGER trg_zzz_test_razitko ON public.reservations;
+  PERFORM pg_temp.tvrd(
+    (SELECT bool_and(approved_at IS NOT NULL) FROM public.reservations
+      WHERE event_id = _ev AND deleted_at IS NULL),
+    '… a razítko na akci zůstalo');
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 4c) DAŇOVÝ VÝZNAM ZAPSANÉ ČÁSTKY SE NESMÍ POSUNOUT
+--
+-- Brána, kterou postavily předchozí revizní brány a která do 10. 9. 2026 neměla
+-- ANI JEDNO tvrzení: mutace `IF false THEN` na `cena_je_bez_dph` prošla celým
+-- souborem zeleně. (Nález brány code review, druhé kolo.)
+--
+-- Roh je dosažitelný: klub s dohodnutou sazbou na KOMERČNÍ akci má
+-- `cena_je_bez_dph('club','commercial',900) = false`, tedy „v částce už daň je".
+-- Nový odběratel je vždycky firma a pro tu vychází `true` bez ohledu na sazbu.
+-- Bez brány by se částka nehnula ani o haléř, jen by od té chvíle znamenala něco
+-- jiného — daň odvedená z jiného základu. Přesně ten vadný stav popisuje migrace
+-- `20260902264000_dph_i_pri_rucni_sazbe.sql`.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _ev uuid; _klub uuid; _firma uuid; _pred text; _puv_sazba numeric;
+BEGIN
+  _klub  := pg_temp.firma('CK Ostravské kameny');
+  _firma := pg_temp.firma('Demo Firma s.r.o.');
+
+  SELECT default_rate INTO _puv_sazba FROM public.subjects WHERE id = _klub;
+  UPDATE public.subjects SET default_rate = 900 WHERE id = _klub;
+  _ev := pg_temp.zaloz_akci('TEST firma dph roh', _klub,
+           '2027-10-05 16:00+02', '2027-10-05 18:00+02', 1);
+
+  PERFORM pg_temp.tvrd(
+    (SELECT bool_and(NOT cena_bez_dph) FROM public.reservations
+      WHERE event_id = _ev AND deleted_at IS NULL),
+    'příprava: částka je vedená S daní — jinak by tahle kapitola neměřila nic');
+
+  _pred := pg_temp.penize(_ev);
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.zmen_firmu_akce(%L, %L)', _ev, _firma),
+    'nesedí daňový význam',
+    'změna na firmu, u které by částka znamenala něco jiného, se ODMÍTNE');
+  PERFORM pg_temp.tvrd(pg_temp.penize(_ev) = _pred,
+    '… a na penězích se nezměnilo nic (ani na haléř, ani na příznaku DPH)');
+  PERFORM pg_temp.tvrd(pg_temp.firma_akce(_ev) = _klub,
+    '… a odběratel zůstal ten původní');
+  UPDATE public.subjects SET default_rate = _puv_sazba WHERE id = _klub;
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 4d) DRÁHY S RŮZNÝM DAŇOVÝM VÝZNAMEM SE ODMÍTNOU TAKY
+--
+-- POZOR, ČÍM TAHLE KAPITOLA JE A ČÍM NENÍ. `_ruznych_dph > 1` NEDRŽÍ DVEŘE —
+-- změna neprojde ani bez ní, chytne ji následující daňová kontrola. Není to
+-- náhoda dat: `min(cena_bez_dph::int)::boolean` je u smíšené sady vždycky
+-- `false` a `cena_je_bez_dph` pro komerční subjekt vrací `true` bezpodmínečně
+-- (obě větve končí na `_subject_type = 'commercial'`). Ta brána drží PŘESNOST
+-- DIAGNÓZY: bez ní admin dostane hlášku „nesedí daňový význam částky
+-- s odběratelem X", vypraví se spravovat vztah k odběrateli — a přitom je
+-- rozbitá akce, každá dráha jinak. Špatná hláška ho pošle opravovat něco
+-- jiného, než co je vadné, a to je pořád co měřit.
+-- (Rozdíl doměřila brána code review; původní znění téhle hlavičky tvrdilo, že
+-- bez brány by změna prošla. Netvrdilo pravdu.)
+--
+-- Existovat takový stav nemá, ale `create_invoice_draft_commercial` na něj umí
+-- narazit — a vzít z něj „ten první snímek podle id" by znamenalo udělat
+-- daňovou kontrolu proti jedné dráze a druhou tiše přepsat.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _ev uuid; _klub uuid; _nova uuid; _pred text; _puv_sazba numeric;
+BEGIN
+  _klub := pg_temp.firma('CK Ostravské kameny');
+  _nova := pg_temp.firma('Demo Firma s.r.o.');
+
+  INSERT INTO public.events (title, event_type, start_time, end_time, created_by)
+  VALUES ('TEST firma smiseny dph','commercial','2027-10-06 16:00+02','2027-10-06 18:00+02',
+          pg_temp.admin()) RETURNING id INTO _ev;
+
+  -- Rozporný stav se NEDÁ vyrobit přímým zápisem — `set_reservation_pricing`
+  -- `cena_bez_dph` u UPDATE přepíše zpátky ze staré hodnoty, je to odvozený
+  -- sloupec, ne vstup. Vyrobí se tak, jak by vznikl doopravdy: klub bez
+  -- dohodnuté sazby má na komerční akci `cena_bez_dph = true`, klub se sazbou
+  -- `false` (individuální sazba přebíjí typ akce) — a mezi založením první
+  -- a druhé dráhy někdo klubu sazbu doplní.
+  SELECT default_rate INTO _puv_sazba FROM public.subjects WHERE id = _klub;
+  UPDATE public.subjects SET default_rate = NULL WHERE id = _klub;
+  INSERT INTO public.reservations (sheet_id, subject_id, event_id, start_at, end_at,
+                                   approved_at, approved_by)
+  VALUES (pg_temp.draha(1), _klub, _ev, '2027-10-06 16:00+02','2027-10-06 18:00+02',
+          now(), pg_temp.admin());
+  UPDATE public.subjects SET default_rate = 900 WHERE id = _klub;
+  INSERT INTO public.reservations (sheet_id, subject_id, event_id, start_at, end_at,
+                                   approved_at, approved_by)
+  VALUES (pg_temp.draha(2), _klub, _ev, '2027-10-06 16:00+02','2027-10-06 18:00+02',
+          now(), pg_temp.admin());
+
+  PERFORM pg_temp.tvrd(
+    (SELECT count(DISTINCT cena_bez_dph) FROM public.reservations
+      WHERE event_id = _ev AND deleted_at IS NULL) = 2,
+    'příprava: dráhy akce mají vážně různý daňový význam částky');
+
+  _pred := pg_temp.penize(_ev);
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.zmen_firmu_akce(%L, %L)', _ev, _nova),
+    'různý daňový význam',
+    'akci s rozporným daňovým významem drah funkce ODMÍTNE');
+  PERFORM pg_temp.tvrd(pg_temp.penize(_ev) = _pred,
+    '… a nic na ní nepřepsala (nechala rozbitý stav tak, jak byl)');
+  UPDATE public.subjects SET default_rate = _puv_sazba WHERE id = _klub;
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 4e) AKCE BEZ ODBĚRATELE — DVA RŮZNÉ DŮVODY, DVĚ RŮZNÉ HLÁŠKY
+--
+-- Funkce rozlišuje „akce nemá žádnou živou rezervaci" od „rezervace má, ale
+-- není na nich plátce". Je to oprava, kterou si vyžádala migrační brána, a do
+-- 10. 9. 2026 neměla ani jedno tvrzení: mutace, která vnitřní `IF EXISTS` i
+-- s jeho `RAISE` smaže a nechá jen jednu hlášku, prošla celým souborem zeleně.
+-- (Nález brány code review, třetí kolo.)
+--
+-- Peníze ani dveře se tím nehnou — obě větve akci odmítnou. Měří se PŘESNOST
+-- HLÁŠKY: bez rozlišení systém adminovi řekne „nemáš živou rezervaci" u akce,
+-- která rezervace má, jen na nich není plátce, a admin je jde hledat jinam.
+--
+-- Roh je dosažitelný: `reservations_subject_or_event` je
+-- `CHECK (subject_id IS NOT NULL OR event_id IS NOT NULL)`, takže rezervace
+-- s `event_id` a bez odběratele legálně existuje (`set_reservation_pricing` jí
+-- nechá `amount` NULL). Doplnit jí plátce tímhle způsobem funkce ZÁMĚRNĚ neumí
+-- — bez odběratele není co přepsat, bylo by to ocenění, ne oprava adresáta.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _ev uuid; _firma uuid; _rez uuid;
+BEGIN
+  _firma := pg_temp.firma('Demo Firma s.r.o.');
+
+  -- (a) rezervace JE, odběratel na ní není
+  INSERT INTO public.events (title, event_type, start_time, end_time, created_by)
+  VALUES ('TEST firma bez platce','commercial','2027-10-07 16:00+02','2027-10-07 18:00+02',
+          pg_temp.admin()) RETURNING id INTO _ev;
+  INSERT INTO public.reservations (sheet_id, event_id, start_at, end_at)
+  VALUES (pg_temp.draha(1), _ev, '2027-10-07 16:00+02','2027-10-07 18:00+02');
+
+  PERFORM pg_temp.tvrd(
+    (SELECT count(*) FROM public.reservations
+      WHERE event_id = _ev AND deleted_at IS NULL) = 1,
+    'příprava: akce MÁ živou rezervaci, jen na ní není plátce');
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.zmen_firmu_akce(%L, %L)', _ev, _firma),
+    'nemá žádného odběratele',
+    'akce s rezervací BEZ plátce dostane hlášku o chybějícím odběrateli');
+
+  -- (b) rezervace byla, ale je soft-smazaná → jiný důvod, jiná hláška
+  INSERT INTO public.events (title, event_type, start_time, end_time, created_by)
+  VALUES ('TEST firma bez zive rezervace','commercial','2027-10-08 16:00+02','2027-10-08 18:00+02',
+          pg_temp.admin()) RETURNING id INTO _ev;
+  INSERT INTO public.reservations (sheet_id, subject_id, event_id, start_at, end_at, deleted_at)
+  VALUES (pg_temp.draha(1), pg_temp.firma('Testovací Firma s.r.o.'), _ev,
+          '2027-10-08 16:00+02','2027-10-08 18:00+02', now())
+  RETURNING id INTO _rez;
+
+  PERFORM pg_temp.tvrd(
+    (SELECT count(*) FROM public.reservations
+      WHERE event_id = _ev AND deleted_at IS NULL) = 0,
+    'příprava: tahle akce žádnou živou rezervaci nemá');
+  PERFORM pg_temp.ocekavej_chybu(
+    format('SELECT public.zmen_firmu_akce(%L, %L)', _ev, _firma),
+    'žádnou živou rezervaci',
+    '… kdežto akce bez živé rezervace dostane hlášku JINOU');
+  -- Pojistka, ne důkaz: `ocekavej_chybu` výš shodí podtransakci, takže se sem
+  -- zapsat stejně nic nemůže. Platí totéž, co je napsané u kapitoly 3b.
+  PERFORM pg_temp.tvrd(
+    (SELECT subject_id FROM public.reservations WHERE id = _rez) <> _firma,
+    '… a ani na smazané dráze se nic nepřepsalo');
 END $$;
 
 -- -----------------------------------------------------------------------------
