@@ -35,6 +35,60 @@ describe('ReservationDialog: typ akce se mění PŘED sazbou', () => {
   });
 });
 
+describe('ReservationDialog: změna firmy u komerční akce', () => {
+  const zdroj = cti('src/components/reservations/ReservationDialog.tsx');
+
+  // Odemčení výběru firmy při úpravě stojí a padá s `lzeZmenitFirmu`. Kdyby
+  // někdo tu podmínku zjednodušil na `isAdmin`, nabídl by dialog změnu
+  // odběratele i u klubového tréninku — a tam se odběratel měnit nesmí
+  // (server to odmítne, ale uživatel by dostal chybu místo zamčeného pole).
+  it('výběr firmy se odemyká jen adminovi u KOMERČNÍ akce s event_id', () => {
+    const podminka = zdroj.match(/const lzeZmenitFirmu = Boolean\(([\s\S]{0,300}?)\);/);
+    expect(podminka, 'podmínka lzeZmenitFirmu v dialogu zmizela').not.toBeNull();
+
+    const telo = podminka![1];
+    expect(telo, 'lzeZmenitFirmu nekontroluje admina').toContain('isAdmin');
+    expect(telo, 'lzeZmenitFirmu nekontroluje, že jde o úpravu').toContain('isEdit');
+    expect(telo, 'lzeZmenitFirmu nekontroluje event_id').toContain('event_id');
+    expect(telo,
+      'lzeZmenitFirmu nekontroluje, že akce je KOMERČNÍ — u klubového tréninku ' +
+      'se odběratel měnit nesmí, klub by se odpojil od členství i ceníku.',
+    ).toContain("kindOf(editing) === 'commercial'");
+    expect(telo,
+      'lzeZmenitFirmu nekontroluje AKTUÁLNÍ `kind`. Bez toho zůstane výběr firmy ' +
+      'odemčený i po přepnutí typu na trénink: zmenTypAkce se uloží, zmenFirmuAkce ' +
+      'pak spadne na „jen u komerční akce" — a úprava zůstane z půlky aplikovaná.',
+    ).toContain("kind === 'commercial'");
+  });
+
+  // Nová dráha vzniká v `uprav_drahy_akce` s firmou, kterou má akce V TU CHVÍLI.
+  // Kdyby se firma měnila dřív než dráhy, přibyla by dráha se starým
+  // odběratelem a akce by skončila se dvěma firmami — přesně tím, čemu
+  // `zmen_firmu_akce` brání.
+  it('zmenFirmuAkce se volá AŽ ZA upravDrahyAkce', () => {
+    const drahy = zdroj.indexOf('api.upravDrahyAkce(');
+    const firma = zdroj.indexOf('api.zmenFirmuAkce(');
+
+    expect(drahy, 'volání api.upravDrahyAkce v dialogu zmizelo').toBeGreaterThan(-1);
+    expect(firma, 'volání api.zmenFirmuAkce v dialogu zmizelo').toBeGreaterThan(-1);
+    expect(firma,
+      'zmenFirmuAkce se volá PŘED upravDrahyAkce. Nově přidaná dráha by pak ' +
+      'zůstala na staré firmě a akce by měla dva odběratele.',
+    ).toBeGreaterThan(drahy);
+  });
+
+  // Změna firmy nesmí sahat na cenu. V dialogu to drží tím, že se posílá
+  // jen `event_id` a `subject_id` — žádná sazba.
+  it('volání posílá jen akci a firmu, nic o ceně', () => {
+    const volani = zdroj.match(/api\.zmenFirmuAkce\(\{([\s\S]{0,200}?)\}\)/);
+    expect(volani, 'volání api.zmenFirmuAkce v dialogu zmizelo').not.toBeNull();
+    expect(volani![1]).toContain('event_id');
+    expect(volani![1]).toContain('subject_id');
+    expect(volani![1], 'do změny firmy se přimíchala cena — to je přecenění, ne oprava adresáta')
+      .not.toMatch(/rate|sazba|celkem|amount/i);
+  });
+});
+
 describe('Přihlášení: nenačtený profil = zavřeno', () => {
   const auth = cti('src/contexts/AuthContext.tsx');
 

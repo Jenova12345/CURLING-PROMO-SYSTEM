@@ -57,6 +57,9 @@ export interface ReservationApi {
   upravDrahyAkce: (args: { event_id: string; sheet_ids: string[] }) => Promise<unknown>;
   /** Změna typu akce s přepočtem ceny (C) — jen admin. */
   zmenTypAkce: (args: { event_id: string; typ: BookingKind }) => Promise<unknown>;
+  /** Změna odběratele (firmy) na všech drahách komerční akce — jen admin. */
+  zmenFirmuAkce: (args: { event_id: string; subject_id: string })
+    => Promise<{ schvaleni_prerazeno?: boolean; drah?: number; firma?: string }>;
   moveBooking: (args: { id: string; start_at: string; end_at: string; sheet_id?: string }) => Promise<unknown>;
   checkConflicts: (args: { sheet_ids: string[]; start_at: string; end_at: string; kind: BookingKind; ignore_event?: string }) => Promise<Conflict[]>;
   nahledCeny: (args: { subject_id: string | null; kind: BookingKind; start_at: string; end_at: string; drah: number }) => Promise<NahledCeny | null>;
@@ -453,6 +456,28 @@ export function ReservationDialog({
   const endOptions = Array.from({ length: Math.max(closeHour - startHour, 1) }, (_, i) => startHour + 1 + i);
   const subjectOptions = kind === 'commercial' ? commercials : myClubs;
 
+  // ZMĚNA ODBĚRATELE U KOMERČNÍ AKCE — jediný případ, kdy se výběr subjektu při
+  // úpravě odemyká. Podmínky musí platit všechny zároveň:
+  //   • admin (server to ověřuje taky, tohle je jen o tom, komu se pole nabídne),
+  //   • akce má `event_id` — mění se přes RPC nad celou akcí, ne nad rezervací,
+  //   • akce JE komerční (`kindOf(editing)`) — u klubového tréninku je odběratel
+  //     klub a přepsat ho na firmu by ho odpojilo od členství i klubového ceníku,
+  //   • a ZŮSTÁVÁ komerční (`kind`), tedy admin ji v témž formuláři nepřepnul
+  //     na něco jiného.
+  //
+  // Ta poslední podmínka tu není pro parádu. Bez ní zůstal select odemčený i po
+  // přepnutí typu na trénink — jen se v něm místo firem nabídly kluby. Kdyby
+  // admin v tom stavu klub vybral, `zmenTypAkce` by PROŠLA A ZAPSALA SE a až
+  // `zmenFirmuAkce` by spadla na „lze měnit jen u komerční akce". Každé RPC je
+  // vlastní požadavek, tedy vlastní transakce — uživatel by dostal červený toast
+  // nad úpravou, která je z půlky uložená (typ změněný a přeceněný).
+  // Fail-closed to bylo i tak, ale polovičatě uložený stav je matoucí.
+  // (Nález brány code review a bezpečnostní brány, 10. 9. 2026.)
+  const lzeZmenitFirmu = Boolean(
+    isAdmin && isEdit && editing?.event_id
+      && kindOf(editing) === 'commercial' && kind === 'commercial',
+  );
+
   const toIso = (h: number) => new Date(`${date}T${hh(h)}`).toISOString();
 
   // ---- NÁHLED CENY: kolik to bude stát, NEŽ to člověk potvrdí ----------------
@@ -725,13 +750,34 @@ export function ReservationDialog({
           }
         }
 
+        // ZMĚNA ODBĚRATELE — až ZA dráhami, aby nová firma sedla i na dráhu,
+        // která právě přibyla. Jde to jedním RPC nad celou akcí; cenu to nemění
+        // a nad vystaveným dokladem server odmítne (hlášku ukážeme, jak přišla).
+        let zmenaFirmy: { schvaleni_prerazeno?: boolean; drah?: number } | null = null;
+        if (lzeZmenitFirmu && subjectId && subjectId !== editing.subject_id) {
+          zmenaFirmy = await api.zmenFirmuAkce({
+            event_id: editing.event_id!, subject_id: subjectId,
+          });
+        }
+
         if (kind === 'training' && (editing.preferovany_trener ?? '') !== praniTrenera) {
           await api.nastavPraniTrenera({
             reservation_ids: [editing.id!],
             user_id: praniTrenera || null,
           });
         }
-        toast({ title: 'Rezervace upravena' });
+        // U změny odběratele se řekne i to, co se stalo s potvrzením. Razítko
+        // teď podepsal admin, který změnu udělal — je to údaj o tom, kdo pod
+        // akcí stojí ve fakturaci, a generické „Rezervace upravena" by ho
+        // spolklo. (Nález brány code review, 10. 9. 2026.)
+        toast(zmenaFirmy?.schvaleni_prerazeno
+          ? {
+              title: 'Firma změněna',
+              description: zmenaFirmy.drah && zmenaFirmy.drah > 1
+                ? `Odběratel je přepsaný na všech ${zmenaFirmy.drah} drahách akce. Cena zůstala beze změny a potvrzení akce je nově podepsané vámi.`
+                : 'Cena zůstala beze změny a potvrzení akce je nově podepsané vámi.',
+            }
+          : { title: 'Rezervace upravena' });
         onOpenChange(false);
         return;
       }
@@ -797,12 +843,18 @@ export function ReservationDialog({
             {needsSubject && !newFirm && (
               <div className="space-y-2">
                 <Label>{kind === 'commercial' ? 'Firma (zákazník)' : 'Klub'}</Label>
-                <Select value={subjectId} onValueChange={setSubjectId} disabled={isEdit}>
+                <Select value={subjectId} onValueChange={setSubjectId} disabled={isEdit && !lzeZmenitFirmu}>
                   <SelectTrigger><SelectValue placeholder={kind === 'commercial' ? 'Vyberte firmu' : 'Vyberte klub'} /></SelectTrigger>
                   <SelectContent>
                     {subjectOptions.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
+                {lzeZmenitFirmu && (
+                  <p className="text-xs text-muted-foreground">
+                    Přepsat jde jen odběratele — cena akce zůstane, jaká je. Nad akcí,
+                    která už je na vystaveném dokladu, změna neprojde.
+                  </p>
+                )}
                 {kind === 'commercial' && isAdmin && !isEdit && (
                   <Button type="button" variant="link" size="sm" className="h-auto p-0" onClick={() => setNewFirm(true)}>
                     + Přidat novou firmu (ARES)

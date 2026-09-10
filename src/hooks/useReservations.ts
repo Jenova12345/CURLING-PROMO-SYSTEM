@@ -531,6 +531,31 @@ export const useReservations = (range: DateRange | null) => {
     onSuccess: invalidate,
   });
 
+  // ZMĚNA ODBĚRATELE (FIRMY) U KOMERČNÍ AKCE — jen admin.
+  //
+  // Jde přes RPC nad celým `event_id`, ne přes `update_booking`: odběratel musí
+  // být na všech drahách akce stejný, jinak by se z jedné akce staly dva
+  // doklady. `subject_id` je navíc mimo whitelist v guardu rezervací, takže
+  // přímý zápis by neprošel ani adminovi omylem.
+  //
+  // Cena se tím NEMĚNÍ — je to oprava adresáta, ne přecenění. A nad akcí, která
+  // už má vystavený doklad, RPC hlasitě spadne; hláška ze serveru se ukáže
+  // uživateli tak, jak přišla (`rpcError`), protože přesně říká, co dělat.
+  const zmenFirmuAkce = useMutation({
+    mutationFn: async (a: { event_id: string; subject_id: string }) => {
+      const { data, error } = await supabase.rpc('zmen_firmu_akce', {
+        _event_id: a.event_id, _subject_id: a.subject_id,
+      });
+      if (error) throw rpcError(error, 'Firmu se nepodařilo změnit.');
+      // Návratová hodnota se NEZAHAZUJE: nese `schvaleni_prerazeno`, tedy že
+      // razítko potvrzení teď podepsal admin, který změnu udělal. Bez toho by
+      // se o tom nikdo nedozvěděl — a je to údaj o tom, kdo pod tou akcí stojí
+      // ve fakturaci. (Nález brány code review, 10. 9. 2026.)
+      return (data ?? {}) as { schvaleni_prerazeno?: boolean; drah?: number; firma?: string };
+    },
+    onSuccess: invalidate,
+  });
+
   // Založení komerčního subjektu (firmy) — jen admin (subjects RLS).
   //
   // ⚠️ `.select()` MUSÍ VYJMENOVAT SLOUPCE, holé `.select()` tady NEFUNGUJE.
@@ -591,6 +616,7 @@ export const useReservations = (range: DateRange | null) => {
     nastavPraniTrenera: nastavPraniTrenera.mutateAsync,
     upravDrahyAkce: upravDrahyAkce.mutateAsync,
     zmenTypAkce: zmenTypAkce.mutateAsync,
+    zmenFirmuAkce: zmenFirmuAkce.mutateAsync,
     moveBooking: moveBooking.mutateAsync,
     cancelBooking: cancelBooking.mutateAsync,
     approveReservation: approveReservation.mutateAsync,

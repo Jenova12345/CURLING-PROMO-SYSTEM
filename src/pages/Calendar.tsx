@@ -409,6 +409,7 @@ const Calendar = () => {
           nastavPraniTrenera: api.nastavPraniTrenera,
           upravDrahyAkce: api.upravDrahyAkce,
           zmenTypAkce: api.zmenTypAkce,
+          zmenFirmuAkce: api.zmenFirmuAkce,
           moveBooking: api.moveBooking,
           checkConflicts: api.checkConflicts,
           nahledCeny: api.nahledCeny,
