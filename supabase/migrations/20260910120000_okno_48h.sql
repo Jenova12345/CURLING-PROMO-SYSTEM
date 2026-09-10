@@ -1235,6 +1235,40 @@ $function$;
 -- Měří CHOVÁNÍ na skutečném zápisu, ne tvar objektů. Na prázdné databázi
 -- (lokální `db reset` — dráhy a klub zakládá až seed, tedy AŽ PO migracích)
 -- se kontrola chování přeskočí a hláška to řekne, ať se netváří, že měřila.
+--
+-- TAHLE KONTROLA BĚŽÍ UVNITŘ ZÁMKU. Než sem přidáš další nohu, přečti si to.
+--
+-- Supabase CLI neposílá `BEGIN`, ale celý migrační soubor pošle jako JEDNU
+-- dávku a potvrdí ji až na konci (rozšířený protokol, jediný `Sync` až za
+-- zápisem do `schema_migrations`). Soubor je tím pádem implicitní transakce —
+-- což je dobře, protože pád kdekoli uvnitř vrátí úplně všechno a produkce
+-- nezůstane půl migrovaná. Změřeno 10. 9. 2026 na lokále: úmyslný pád za
+-- `ALTER TABLE` nenechal ani sloupec, ani řádek v historii migrací.
+-- POZOR NA ROZSAH TOHO MĚŘENÍ: proběhlo na `supabase migration up`, ne na
+-- `db push`. Oba zapisují do téže historie, což na společný aplikátor ukazuje,
+-- ale `db push` proti živé databázi změřený není a tvrdit se to nedá.
+--
+-- Má to ale druhou stranu. V téže transakci leží:
+--     ACCESS EXCLUSIVE na `settings`         (z `ADD COLUMN` v kapitole 1)
+--     ACCESS EXCLUSIVE na `settings_public`  (z `CREATE OR REPLACE VIEW`, kap. 3)
+-- a oba se drží AŽ DO KONCE SOUBORU, ne do konce svého příkazu. Po celou dobu
+-- migrace tedy čeká všechno, co čte nastavení — včetně kalendáře, který si
+-- ze `settings_public` bere otevírací dobu.
+--
+-- Doba běhu téhle kontroly proto neleží jen na délce migrace, ale NA KRITICKÉ
+-- CESTĚ TOHO ZÁMKU. Dnes je to lokálně ~0,1 s a je to neškodné; každá další
+-- noha (a jsou to skutečné zápisy přes `create_booking`) to prodlužuje.
+-- Dřívější protokol uváděl „zámek držel 3,9 ms" — to byla délka samotného
+-- `ALTER TABLE` a je to o dva řády optimističtější než skutečnost.
+--
+-- Z téže atomicity plyne ještě jedna podmínka na celý soubor: nesmí obsahovat
+-- nic, co uvnitř transakce běžet nejde. Změřeno na téhle PG 17, ne odhadnuto:
+--     NELZE   VACUUM · REINDEX DATABASE · CREATE INDEX CONCURRENTLY · ALTER SYSTEM
+--     PROJDE  ALTER TYPE … ADD VALUE — uvnitř transakce se provést SMÍ (od PG 12);
+--             omezení je jinde: novou hodnotu nesmíš použít v TÉŽE transakci,
+--             tedy ani nikde dál v tomhle souboru.
+-- Dnes tu není nic z obojího. (Doplněno po měření s migrační bránou, 10. 9. 2026;
+-- dřívější znění řadilo `ADD VALUE` mezi zakázané, což NEPLATÍ.)
 DO $kontrola$
 DECLARE
   _sheet1 uuid; _subj uuid; _admin uuid; _neadmin uuid;
