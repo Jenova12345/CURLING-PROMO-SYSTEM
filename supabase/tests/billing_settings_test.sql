@@ -371,9 +371,12 @@ RESET ROLE;
 -- -----------------------------------------------------------------------------
 DO $$
 DECLARE
+  -- `ledar_jmeno` (okno 48 h, 10. 9. 2026) je provozní nastavení haly, ne
+  -- fakturační údaj — jméno, které se objeví v hlášce „…může rezervaci vytvořit
+  -- jen X". Do `billing_settings` nepatří: nemá co dělat na dokladu.
   _ocekavane text[] := ARRAY['id', 'singleton', 'club_default_rate', 'commercial_default_rate',
                              'opening_hours', 'updated_by', 'updated_at', 'training_rate',
-                             'tournament_rate', 'email_notifications_enabled'];
+                             'tournament_rate', 'email_notifications_enabled', 'ledar_jmeno'];
   _skutecne text[];
   _navic    text[];
 BEGIN

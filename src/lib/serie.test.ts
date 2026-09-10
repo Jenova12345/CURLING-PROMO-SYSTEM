@@ -118,6 +118,35 @@ describe('souhrnSerie — co uvidí klient', () => {
   });
 });
 
+describe('okno 48 h — vlastní věta, ne „zavřeno" ani „kolize"', () => {
+  // Termín v okně 48 h se od 10. 9. 2026 PŘESKOČÍ a zbytek série vznikne
+  // (rozhodnutí zákazníka). Uživatel s tím může něco udělat — domluvit se se
+  // správcem haly — takže se to nesmí schovat pod „Mimo otevírací dobu"
+  // (hala otevřená je) ani pod „kolizi" (nikdo mu dráhu nezabral).
+  it('vypíše dny pod vlastní hlavičkou', () => {
+    const s = souhrnSerie(vysledek({
+      created: 19,
+      skipped: [preskoceny('2026-09-11', 'okno_48h')],
+    }));
+    expect(s).toContain('Míň než 48 h do začátku');
+    expect(s).toContain('11. 9.');
+    expect(s).not.toContain('Mimo otevírací dobu');
+    expect(s).not.toContain('kolizi');
+  });
+
+  it('nezmizí, když se sejde s jiným důvodem', () => {
+    // Tohle je ta past: filtry si dny rozeberou po důvodech, takže nový důvod
+    // bez vlastní větve TIŠE VYPADNE — záloha pro starší server se nechytne,
+    // protože jiné důvody v souhrnu jsou.
+    const s = souhrnSerie(vysledek({
+      created: 18,
+      skipped: [preskoceny('2026-09-11', 'okno_48h'), preskoceny('2026-09-15', 'kolize')],
+    }));
+    expect(s).toContain('11. 9.');
+    expect(s).toContain('15. 9.');
+  });
+});
+
 describe('starší server (okno mezi nasazením frontendu a migrací)', () => {
   // Frontend se nasazuje z GitHubu sám, migrace se pouští ručně se souhlasem PM.
   // Mezi tím mluví nové UI se starou funkcí, která `celkem` ani `duvod` neposílá.

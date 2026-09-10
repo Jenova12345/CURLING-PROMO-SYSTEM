@@ -26,8 +26,27 @@ $$;
 CREATE OR REPLACE FUNCTION pg_temp.draha(_n int) RETURNS uuid
  LANGUAGE sql STABLE AS $$ SELECT id FROM public.sheets WHERE name = 'Dráha ' || _n; $$;
 
+-- POSUN V CELÝCH TÝDNECH. Data v tomhle souboru jsou psaná napevno (kvůli dnům
+-- v týdnu — série testují „každé Út a Čt"), ale napevno být nesmějí:
+--   • od pravidla 48 h (`20260910120000_okno_48h.sql`) neadmin nezaloží nic, co
+--     začíná dřív než za 48 h, takže by pevná data postupně propadla do okna;
+--   • demo v `supabase/seed.sql` je taky relativní a drží Dráhu 2 pár týdnů
+--     dopředu, takže by série z testu narazila na obsazený led.
+-- Posun je násobek 7 dní, takže dny v týdnu i rozestupy zůstávají — počty
+-- termínů v sériích se tím nemění. +45 dní je odstup od demo dat.
+CREATE OR REPLACE FUNCTION pg_temp.posun() RETURNS int
+ LANGUAGE sql STABLE AS $$
+  SELECT 7 * greatest(0, ceil(((current_date + 45) - date '2026-09-15') / 7.0))::int;
+$$;
+
 CREATE OR REPLACE FUNCTION pg_temp.cas(_text text) RETURNS timestamptz
- LANGUAGE sql IMMUTABLE AS $$ SELECT (_text::timestamp) AT TIME ZONE 'Europe/Prague'; $$;
+ LANGUAGE sql STABLE AS $$
+  SELECT ((_text::timestamp) + (pg_temp.posun() || ' days')::interval) AT TIME ZONE 'Europe/Prague';
+$$;
+
+-- Konec série. Musí se posunout stejně jako začátek, jinak by se rozjel počet termínů.
+CREATE OR REPLACE FUNCTION pg_temp.den(_text text) RETURNS date
+ LANGUAGE sql STABLE AS $$ SELECT (_text::date) + pg_temp.posun(); $$;
 
 -- Očekávaná chyba: tělo musí spadnout a hláška musí obsahovat úryvek.
 CREATE OR REPLACE FUNCTION pg_temp.ocekavej_chybu(_sql text, _obsahuje text, _popis text) RETURNS void
@@ -229,7 +248,7 @@ BEGIN
   _r := public.create_booking_series(
     ARRAY[pg_temp.draha(2)], 'training', 'Pravidelný trénink',
     pg_temp.cas('2026-10-06 16:00'), pg_temp.cas('2026-10-06 18:00'),
-    ARRAY[2, 4], '2026-10-31'::date,
+    ARRAY[2, 4], pg_temp.den('2026-10-31'),
     'aaaa1111-0000-0000-0000-000000000001');
 
   SELECT count(*) INTO _pocet FROM public.reservations
@@ -486,7 +505,7 @@ BEGIN
   _ser := public.create_booking_series(
     ARRAY[pg_temp.draha(1)], 'training', 'Série člena',
     pg_temp.cas('2026-11-03 17:00'), pg_temp.cas('2026-11-03 18:00'),
-    ARRAY[2], '2026-11-30'::date, 'aaaa1111-0000-0000-0000-000000000001');
+    ARRAY[2], pg_temp.den('2026-11-30'), 'aaaa1111-0000-0000-0000-000000000001');
   SELECT count(*) INTO _notif FROM public.notifications
    WHERE type = 'reservation_needs_approval' AND user_id = '44444444-4444-4444-4444-444444444444';
   PERFORM pg_temp.tvrd(_notif = 1,
@@ -574,7 +593,7 @@ BEGIN
   _ser := public.create_booking_series(
     ARRAY[pg_temp.draha(2)], 'training', 'Série klubu',
     pg_temp.cas('2026-12-08 17:00'), pg_temp.cas('2026-12-08 18:00'),
-    ARRAY[2], '2026-12-22'::date, 'aaaa1111-0000-0000-0000-000000000001');
+    ARRAY[2], pg_temp.den('2026-12-22'), 'aaaa1111-0000-0000-0000-000000000001');
   PERFORM pg_temp.prihlas('22222222-2222-2222-2222-222222222222');   -- jiný klub
   PERFORM pg_temp.ocekavej_chybu(
     format('SELECT public.create_booking(ARRAY[%L::uuid], %L, %L, %L::timestamptz, %L::timestamptz, %L::uuid, NULL, ''{}''::jsonb, NULL, false, %L::uuid)',

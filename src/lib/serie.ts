@@ -59,12 +59,13 @@ export function souhrnSerie(res: SeriesResult): string {
   const kolize = seznamDnu(res.skipped.filter((s) => s.duvod === 'kolize'), rozpocet);
   const zavreno = seznamDnu(res.skipped.filter((s) => s.duvod === 'mimo_otviraci_dobu'), rozpocet);
   const neexistuje = seznamDnu(res.skipped.filter((s) => s.duvod === 'neexistujici_cas'), rozpocet);
+  const okno = seznamDnu(res.skipped.filter((s) => s.duvod === 'okno_48h'), rozpocet);
 
   // ZÁLOHA PRO STARŠÍ SERVER. Frontend se nasazuje z GitHubu sám, kdežto migrace
   // se pouští ručně se souhlasem PM — mezi tím je okno, kdy nové UI mluví se
   // starou funkcí, která `duvod` neposílá vůbec. Bez tohohle by oba filtry
   // vyšly prázdné a uživatel by se nedozvěděl NIC, tedy míň než předtím.
-  if (!kolize && !zavreno && !neexistuje) {
+  if (!kolize && !zavreno && !neexistuje && !okno) {
     return `Přeskočené termíny: ${seznamDnu(res.skipped, { zbyva: MAX_DNU })}`;
   }
 
@@ -76,6 +77,11 @@ export function souhrnSerie(res: SeriesResult): string {
     // Vlastní věta schválně: „kolize" ani „zavřeno" by tady lhaly a uživatel by
     // marně hledal, kdo mu dráhu zabral.
     neexistuje && `Čas v daný den neexistuje (posun na letní čas): ${neexistuje}`,
+    // Zase vlastní věta, ne „zavřeno": hala otevřená je, jen je na to pozdě.
+    // Uživatel s tím může něco udělat (domluvit se se správcem), kdežto
+    // u zavřené haly ne — a splynout s kolizí by ho poslalo hledat, kdo mu
+    // dráhu zabral. Termín se přeskočí, zbytek série vznikne.
+    okno && `Míň než 48 h do začátku, zakládá jen správce: ${okno}`,
   ].filter(Boolean).join(' ');
 }
 

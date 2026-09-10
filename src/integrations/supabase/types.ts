@@ -1717,6 +1717,7 @@ export type Database = {
           commercial_default_rate: number | null
           email_notifications_enabled: boolean
           id: string
+          ledar_jmeno: string
           opening_hours: Json
           singleton: boolean
           tournament_rate: number | null
@@ -1729,6 +1730,7 @@ export type Database = {
           commercial_default_rate?: number | null
           email_notifications_enabled?: boolean
           id?: string
+          ledar_jmeno?: string
           opening_hours: Json
           singleton?: boolean
           tournament_rate?: number | null
@@ -1741,6 +1743,7 @@ export type Database = {
           commercial_default_rate?: number | null
           email_notifications_enabled?: boolean
           id?: string
+          ledar_jmeno?: string
           opening_hours?: Json
           singleton?: boolean
           tournament_rate?: number | null
@@ -2613,6 +2616,7 @@ export type Database = {
           commercial_default_rate: number | null
           email_notifications_enabled: boolean | null
           id: string | null
+          ledar_jmeno: string | null
           opening_hours: Json | null
           singleton: boolean | null
           tournament_rate: number | null
@@ -2626,6 +2630,7 @@ export type Database = {
           commercial_default_rate?: never
           email_notifications_enabled?: boolean | null
           id?: string | null
+          ledar_jmeno?: string | null
           opening_hours?: Json | null
           singleton?: boolean | null
           tournament_rate?: never
@@ -2639,6 +2644,7 @@ export type Database = {
           commercial_default_rate?: never
           email_notifications_enabled?: boolean | null
           id?: string | null
+          ledar_jmeno?: string | null
           opening_hours?: Json | null
           singleton?: boolean | null
           tournament_rate?: never
@@ -3081,6 +3087,7 @@ export type Database = {
         }
         Returns: boolean
       }
+      hlaska_okna_48h: { Args: { _co: string }; Returns: string }
       hodiny_bez_pasma: {
         Args: { _oh: Json }
         Returns: {
@@ -3241,6 +3248,7 @@ export type Database = {
         Args: { _event_id: string; _sazba: number }
         Returns: Json
       }
+      v_okne_48h: { Args: { _start: string }; Returns: boolean }
       zmen_typ_akce: {
         Args: {
           _event_id: string

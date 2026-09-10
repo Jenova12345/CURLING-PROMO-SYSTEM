@@ -53,6 +53,7 @@ export const useSettings = () => {
       training_rate?: number | null;
       tournament_rate?: number | null;
       opening_hours?: OpeningHours;
+      ledar_jmeno?: string;
     }) => {
       // POZOR: nepřidávej sem `.select()`. Vynutilo by `return=representation`,
       // což potřebuje SELECT na měněné sloupce — a ten je na sazbách po A2b

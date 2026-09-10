@@ -244,6 +244,24 @@ UPDATE public.reservations
  WHERE approved_at IS NULL;
 DELETE FROM public.notifications;
 
+-- Demo termíny jsou RELATIVNÍ ke dni, kdy seed běží — ne pevná srpnová data.
+-- Od migrace `20260910120000_okno_48h.sql` nesmí neadmin založit rezervaci v okně
+-- 48 h před začátkem a do okna spadá i minulost, takže pevné datum seed po pár
+-- týdnech položí („V okně 48 h před akcí může rezervaci vytvořit jen …") — přesně
+-- to se srpnovým termínům stalo.
+--
+-- `app.demo_pondeli` = pondělí 8–14 dní dopředu (`date_trunc('week')` vrací pondělí
+-- aktuálního týdne, +14 dní tedy nespadne do okna ani při běhu v neděli). Termíny
+-- se pak zadávají jako offset ve dnech od toho pondělí, takže si drží PŮVODNÍ DNY
+-- V TÝDNU — série „každé Út a Čt" vychází stejně jako dřív.
+--
+-- Je to GUC, ne funkce v `pg_temp`: `supabase db reset` seeduje jinou cestou než
+-- psql a dočasné funkce v ní nejsou vidět (ověřeno — padá to na „function
+-- pg_temp.demo_cas(integer, integer) does not exist"). GUC přes celý seed drží,
+-- stejně jako `request.jwt.claims` níž.
+SELECT set_config('app.demo_pondeli',
+  (date_trunc('week', now() AT TIME ZONE 'Europe/Prague') + interval '14 days')::text, false);
+
 -- --- admin ------------------------------------------------------------------
 SELECT set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111111"}', false);
 
@@ -252,7 +270,8 @@ SELECT public.create_booking(
   ARRAY[(SELECT id FROM public.sheets WHERE name = 'Dráha 1'),
         (SELECT id FROM public.sheets WHERE name = 'Dráha 2')],
   'tournament', 'Podzimní turnaj CK',
-  '2026-08-08 09:00+02', '2026-08-08 15:00+02',
+  (current_setting('app.demo_pondeli')::timestamp + interval '5 days 9 hours') AT TIME ZONE 'Europe/Prague',
+  (current_setting('app.demo_pondeli')::timestamp + interval '5 days 15 hours') AT TIME ZONE 'Europe/Prague',
   'aaaa1111-0000-0000-0000-000000000001', 'Turnaj pro 8 týmů');
 
 -- Komerční teambuilding na obou drahách (2 instruktoři = podle počtu drah + bar)
@@ -260,7 +279,8 @@ SELECT public.create_booking(
   ARRAY[(SELECT id FROM public.sheets WHERE name = 'Dráha 1'),
         (SELECT id FROM public.sheets WHERE name = 'Dráha 2')],
   'commercial', 'Teambuilding Demo Firma s.r.o.',
-  '2026-08-05 17:00+02', '2026-08-05 20:00+02',
+  (current_setting('app.demo_pondeli')::timestamp + interval '2 days 17 hours') AT TIME ZONE 'Europe/Prague',
+  (current_setting('app.demo_pondeli')::timestamp + interval '2 days 20 hours') AT TIME ZONE 'Europe/Prague',
   'bbbb2222-0000-0000-0000-000000000002', NULL,
   '{"instructor": 2, "bar_staff": 1}'::jsonb);
 
@@ -268,17 +288,19 @@ SELECT public.create_booking(
 SELECT public.create_booking(
   ARRAY[(SELECT id FROM public.sheets WHERE name = 'Dráha 1')],
   'maintenance', 'Frézování a kropení',
-  '2026-08-07 07:00+02', '2026-08-07 08:00+02');
+  (current_setting('app.demo_pondeli')::timestamp + interval '4 days 7 hours') AT TIME ZONE 'Europe/Prague',
+  (current_setting('app.demo_pondeli')::timestamp + interval '4 days 8 hours') AT TIME ZONE 'Europe/Prague');
 
 -- --- zástupce klubu (CK Ostravské kameny) ------------------------------------
 SELECT set_config('request.jwt.claims', '{"sub":"44444444-4444-4444-4444-444444444444"}', false);
 
--- Pravidelný trénink: každé Út a Čt 16–18 do konce srpna
+-- Pravidelný trénink: každé Út a Čt 16–18 po čtyři týdny
 SELECT public.create_booking_series(
   ARRAY[(SELECT id FROM public.sheets WHERE name = 'Dráha 2')],
   'training', 'Pravidelný trénink A-tým',
-  '2026-08-04 16:00+02', '2026-08-04 18:00+02',
-  ARRAY[2, 4], '2026-08-31'::date,
+  (current_setting('app.demo_pondeli')::timestamp + interval '1 days 16 hours') AT TIME ZONE 'Europe/Prague',
+  (current_setting('app.demo_pondeli')::timestamp + interval '1 days 18 hours') AT TIME ZONE 'Europe/Prague',
+  ARRAY[2, 4], (current_setting('app.demo_pondeli')::timestamp + interval '28 days')::date,
   'aaaa1111-0000-0000-0000-000000000001');
 
 -- --- člen klubu (rezervace čeká na potvrzení zástupcem) ---------------------
@@ -287,7 +309,8 @@ SELECT set_config('request.jwt.claims', '{"sub":"55555555-5555-5555-5555-5555555
 SELECT public.create_booking(
   ARRAY[(SELECT id FROM public.sheets WHERE name = 'Dráha 1')],
   'training', 'Trénink juniorů',
-  '2026-08-06 18:00+02', '2026-08-06 19:00+02',
+  (current_setting('app.demo_pondeli')::timestamp + interval '3 days 18 hours') AT TIME ZONE 'Europe/Prague',
+  (current_setting('app.demo_pondeli')::timestamp + interval '3 days 19 hours') AT TIME ZONE 'Europe/Prague',
   'aaaa1111-0000-0000-0000-000000000001', 'Zadal člen klubu — čeká na potvrzení');
 
 -- --- ukázka priority: komerční akce vědomě přebije klubový trénink ----------
@@ -295,14 +318,16 @@ SELECT set_config('request.jwt.claims', '{"sub":"22222222-2222-2222-2222-2222222
 SELECT public.create_booking(
   ARRAY[(SELECT id FROM public.sheets WHERE name = 'Dráha 1')],
   'training', 'Trénink Curling Ostrava',
-  '2026-08-12 17:00+02', '2026-08-12 19:00+02',
+  (current_setting('app.demo_pondeli')::timestamp + interval '9 days 17 hours') AT TIME ZONE 'Europe/Prague',
+  (current_setting('app.demo_pondeli')::timestamp + interval '9 days 19 hours') AT TIME ZONE 'Europe/Prague',
   'aaaa1111-0000-0000-0000-000000000002');
 
 SELECT set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111111"}', false);
 SELECT public.create_booking(
   ARRAY[(SELECT id FROM public.sheets WHERE name = 'Dráha 1')],
   'commercial', 'Firemní akce ČEZ',
-  '2026-08-12 17:00+02', '2026-08-12 19:00+02',
+  (current_setting('app.demo_pondeli')::timestamp + interval '9 days 17 hours') AT TIME ZONE 'Europe/Prague',
+  (current_setting('app.demo_pondeli')::timestamp + interval '9 days 19 hours') AT TIME ZONE 'Europe/Prague',
   'bbbb2222-0000-0000-0000-000000000001', 'Přebilo klubový trénink — klub dostal upozornění',
   '{"instructor": 1, "bar_staff": 1}'::jsonb, NULL, true);
 

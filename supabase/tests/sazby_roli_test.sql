@@ -539,10 +539,15 @@ SET LOCAL request.jwt.claims = '{"sub":"44444444-4444-4444-4444-444444444444"}';
 DO $$
 DECLARE _akce uuid; _smen int;
 BEGIN
+  -- Termín schválně 90 dní dopředu: pravidlo 48 h (`20260910120000_okno_48h.sql`)
+  -- by neadminovi rezervaci v okně shodilo dřív, než se dostane ke kontrole,
+  -- kterou tenhle test měří — a test by pak červenal na jinou hlášku, než čeká.
+  -- Dřív tu bylo pevné datum, které se mezitím propadlo do minulosti.
   PERFORM pg_temp.ocekavej_chybu(
     $q$SELECT public.create_booking(
          ARRAY[(SELECT id FROM public.sheets WHERE active ORDER BY name LIMIT 1)],
-         'commercial', 'TEST člen zkouší komerčku', '2026-09-02 10:00+02', '2026-09-02 11:00+02',
+         'commercial', 'TEST člen zkouší komerčku', (date_trunc('day', now() AT TIME ZONE 'Europe/Prague') + interval '90 days 10 hours') AT TIME ZONE 'Europe/Prague',
+           (date_trunc('day', now() AT TIME ZONE 'Europe/Prague') + interval '90 days 11 hours') AT TIME ZONE 'Europe/Prague',
          NULL, NULL, '{"instructor": 1}'::jsonb)$q$,
     'jen správce haly', 'člen (role authenticated): komerční akci nezaloží, takže dnes směny nevyrábí');
 
@@ -558,7 +563,8 @@ BEGIN
   -- a to byla nepravda: certifikovalo to jako bezpečné něco, co nebylo.
   SELECT (public.create_booking(
             ARRAY[(SELECT id FROM public.sheets WHERE active ORDER BY name LIMIT 1)],
-            'training', 'TEST členův trénink', '2026-09-02 10:00+02', '2026-09-02 11:00+02',
+            'training', 'TEST členův trénink', (date_trunc('day', now() AT TIME ZONE 'Europe/Prague') + interval '90 days 10 hours') AT TIME ZONE 'Europe/Prague',
+           (date_trunc('day', now() AT TIME ZONE 'Europe/Prague') + interval '90 days 11 hours') AT TIME ZONE 'Europe/Prague',
             'aaaa1111-0000-0000-0000-000000000001', NULL, '{"instructor": 1}'::jsonb) ->> 'event_id')::uuid
     INTO _akce;
 

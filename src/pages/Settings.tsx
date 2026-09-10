@@ -23,12 +23,14 @@ const Settings = () => {
   const [commercial, setCommercial] = useState('');
   const [hours, setHours] = useState<OpeningHours>({});
   const [newSheet, setNewSheet] = useState('');
+  const [ledar, setLedar] = useState('');
 
   useEffect(() => {
     if (!settings) return;
     setClub(settings.club_default_rate != null ? String(settings.club_default_rate) : '');
     setCommercial(settings.commercial_default_rate != null ? String(settings.commercial_default_rate) : '');
     setHours((settings.opening_hours as OpeningHours) ?? {});
+    setLedar(settings.ledar_jmeno ?? '');
   }, [settings]);
 
   const err = (e: unknown) => toast({ title: 'Chyba', description: e instanceof Error ? e.message : 'Uložení selhalo.', variant: 'destructive' });
@@ -101,6 +103,22 @@ const Settings = () => {
     catch (e) { err(e); }
   };
 
+  const saveLedar = async () => {
+    // Stejné meze jako CHECK `settings_ledar_jmeno_neprazdne` v databázi —
+    // ať se admin dozví důvod v češtině, ne přes technickou hlášku z Postgresu.
+    const jmeno = ledar.trim();
+    if (!jmeno) {
+      toast({ title: 'Vyplňte jméno', description: 'Hláška o okně 48 h se na někoho musí odvolat.', variant: 'destructive' });
+      return;
+    }
+    if (jmeno.length > 80) {
+      toast({ title: 'Jméno je moc dlouhé', description: 'Vejde se nejvýš 80 znaků.', variant: 'destructive' });
+      return;
+    }
+    try { await updateSettings({ ledar_jmeno: jmeno }); setLedar(jmeno); toast({ title: 'Uloženo' }); }
+    catch (e) { err(e); }
+  };
+
   const setDay = (d: string, key: 'open' | 'close', val: string) =>
     setHours((h) => ({ ...h, [d]: { open: h[d]?.open ?? '08:00', close: h[d]?.close ?? '22:00', [key]: val } }));
 
@@ -150,6 +168,27 @@ const Settings = () => {
                 </div>
               ))}
               <Button onClick={saveHours} disabled={isSaving}>Uložit otevírací dobu</Button>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><CardTitle>Pravidlo 48 hodin</CardTitle>
+              <CardDescription>
+                Míň než 48 h před začátkem akce smí rezervaci založit, zrušit i přesunout
+                (včetně přetažení v kalendáři) <strong>jen správce</strong>. Ostatní dostanou
+                hlášku s tímhle jménem — proto tu je, ať nemusí hádat, na koho se obrátit.
+                Pravidlo samo se nedá vypnout; mění se jen jméno v hlášce.
+              </CardDescription></CardHeader>
+            <CardContent className="space-y-3">
+              <div className="space-y-2 max-w-sm">
+                <Label htmlFor="ledar">Kdo smí zasáhnout na poslední chvíli</Label>
+                <Input id="ledar" value={ledar} maxLength={80} onChange={(e) => setLedar(e.target.value)} />
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Náhled hlášky: „V okně 48 h před akcí může rezervaci vytvořit jen{' '}
+                {ledar.trim() || 'Jirka – Ledař'}."
+              </p>
+              <Button onClick={saveLedar} disabled={isSaving}>Uložit jméno</Button>
             </CardContent>
           </Card>
 

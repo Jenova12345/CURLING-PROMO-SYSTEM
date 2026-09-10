@@ -243,3 +243,24 @@ describe('ReservationDialog: „Celková cena" nepošle nic, co admin nenapsal',
       .toContain("repeat && rezimCeny === 'pevna'");
   });
 });
+
+describe('Nastavení: jméno ledaře se opravdu ukládá', () => {
+  // Uživatel si vybral, že jméno z hlášky „V okně 48 h … jen <jméno>" nesmí být
+  // natvrdo v kódu — je to sloupec v databázi a pole v Nastavení. Pole, které se
+  // vykreslí, ale hodnotu nikam nepošle, by vypadalo úplně stejně a admin by se
+  // o tom dozvěděl až tím, že hláška pořád zní po starém.
+  it('Settings.tsx posílá ledar_jmeno do updateSettings', () => {
+    const zdroj = cti('src/pages/Settings.tsx');
+    expect(zdroj,
+      'v Nastavení se ukládá jméno ledaře voláním updateSettings({ ledar_jmeno: … }). ' +
+      'Bez něj je pole jen ozdoba a hláška o okně 48 h se nezmění.',
+    ).toContain('updateSettings({ ledar_jmeno: jmeno })');
+  });
+
+  it('useSettings ledar_jmeno v typu mutace připouští', () => {
+    const zdroj = cti('src/hooks/useSettings.ts');
+    expect(zdroj,
+      'updateSettings musí `ledar_jmeno` přijímat, jinak ho TypeScript ze Settings.tsx nepustí.',
+    ).toContain('ledar_jmeno?: string;');
+  });
+});
