@@ -9,6 +9,7 @@ import { format } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { Link } from 'react-router-dom';
 import NewShiftsAlert from '@/components/NewShiftsAlert';
+import { jeKomercni, BARVA_KOMERCE } from '@/lib/barvaKlubu';
 
 const Dashboard = () => {
   const { profile, roles, isAdmin, isStaff } = useAuth();
@@ -30,8 +31,12 @@ const Dashboard = () => {
     .filter(e => new Date(e.start_time) > new Date())
     .slice(0, 5);
 
+  // KOMERCE TU SCHVÁLNĚ NENÍ. Její barva žije v `BARVA_KOMERCE` a bere se
+  // odtamtud (viz tečka níž) — druhá hodnota vedle té konstanty by se rozešla
+  // s kalendářem, což je přesně stav, který tahle změna ruší: do 11. 9. 2026
+  // tu stálo `commercial: 'bg-green-500'`, takže táž akce byla na Přehledu
+  // zelená a v kalendáři nejdřív šedá, pak červená.
   const eventTypeColors: Record<string, string> = {
-    commercial: 'bg-green-500',
     training: 'bg-blue-500',
     maintenance: 'bg-orange-500',
   };
@@ -154,20 +159,31 @@ const Dashboard = () => {
               <p className="text-muted-foreground text-sm">Žádné nadcházející události</p>
             ) : (
               <div className="space-y-4">
-                {upcomingEvents.map((event) => (
-                  <div key={event.id} className="flex items-center gap-4">
-                    <div className={`w-3 h-3 rounded-full ${eventTypeColors[event.event_type]}`} />
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium truncate">{event.title}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {format(new Date(event.start_time), 'EEEE d. MMMM, HH:mm', { locale: cs })}
-                      </p>
+                {upcomingEvents.map((event) => {
+                  // Ptá se JEDNOU a obě větve čtou tentýž výsledek: třída
+                  // a inline barva se tak nemůžou rozejít ani omylem, kdyby
+                  // někdo příště jednu z těch dvou podmínek upravil.
+                  const komercni = jeKomercni(event.event_type);
+                  return (
+                    <div key={event.id} className="flex items-center gap-4">
+                      {/* `?? ''` kvůli typům, které v mapě nejsou (turnaj, nábor):
+                          bez něj se do `class` propsalo slovo „undefined". */}
+                      <div
+                        className={`w-3 h-3 rounded-full ${komercni ? '' : eventTypeColors[event.event_type] ?? ''}`}
+                        style={komercni ? { backgroundColor: BARVA_KOMERCE.podklad } : undefined}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium truncate">{event.title}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {format(new Date(event.start_time), 'EEEE d. MMMM, HH:mm', { locale: cs })}
+                        </p>
+                      </div>
+                      <Badge variant="outline">
+                        {eventTypeLabels[event.event_type]}
+                      </Badge>
                     </div>
-                    <Badge variant="outline">
-                      {eventTypeLabels[event.event_type]}
-                    </Badge>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </CardContent>

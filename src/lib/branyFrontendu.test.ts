@@ -527,6 +527,33 @@ describe('Barva v kalendáři: jedno pravidlo pro Týden i Měsíc', () => {
     }
   });
 
+  // PŘEHLED MUSÍ BARVIT KOMERCI STEJNĚ JAKO KALENDÁŘ.
+  //
+  // Do 11. 9. 2026 měl Dashboard vlastní mapu s `commercial: 'bg-green-500'`,
+  // takže táž akce byla na Přehledu zelená a v kalendáři šedá. Tohle je třetí
+  // plocha, která si barvu počítala sama — po Týdnu a Měsíci.
+  it('Přehled bere barvu komerce z BARVA_KOMERCE, ne z vlastní třídy', () => {
+    const zdroj = cti('src/pages/Dashboard.tsx');
+    expect(zdroj, 'Přehled nebere barvu komerce ze sdílené konstanty')
+      .toMatch(/backgroundColor:\s*BARVA_KOMERCE\.podklad/);
+    expect(zdroj, 'Přehled se neptá `jeKomercni` — barví podle vlastního klíče v mapě')
+      .toMatch(/jeKomercni\(event\.event_type\)/);
+  });
+
+  it('mapa barev na Přehledu už pro komerci vlastní hodnotu nemá', () => {
+    // Kdyby v mapě zůstal klíč `commercial`, byla by vedle konstanty druhá
+    // hodnota — a ta se rozejde, jakmile se změní jen jedna strana. Táž úvaha
+    // jako u zrušeného pole `tecka`.
+    const zdroj = cti('src/pages/Dashboard.tsx');
+    const mapa = zdroj.slice(
+      zdroj.indexOf('const eventTypeColors'),
+      zdroj.indexOf('const eventTypeLabels'),
+    );
+    expect(mapa, 'mapa eventTypeColors na Přehledu zmizela').not.toBe('');
+    expect(mapa, 'v mapě barev na Přehledu je zase klíč `commercial`')
+      .not.toMatch(/^\s*commercial:/m);
+  });
+
   it('legenda pojmenovává komerční akci a bere její barvu z konstanty', () => {
     const zdroj = cti('src/components/reservations/ReservationCalendar.tsx');
     expect(zdroj, 'v legendě chybí položka „Komerční akce"').toContain('Komerční akce');
