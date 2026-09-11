@@ -4,7 +4,7 @@ import { cs } from 'date-fns/locale';
 import { Clock, Link2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { fmtKc } from '@/lib/money';
-import { podkladKlubu, barvaProRezervaci } from '@/lib/barvaKlubu';
+import { barvaProRezervaci, jeKomercni, vzhledRezervace, BARVA_KOMERCE } from '@/lib/barvaKlubu';
 import type { Sheet, CalendarReservation, ShiftFill } from '@/hooks/useReservations';
 
 const PX_PER_MIN = 1;      // 1 minuta = 1 px
@@ -14,9 +14,13 @@ const DRAG_THRESHOLD = 6;  // menší posun bereme jako klik, ne tažení
 // vypadaly dřív úplně stejně a v týdnu nešlo poznat, kdo kde je. Barvu drží
 // `subjects.barva`, kreslí ji `podkladKlubu` (viz lib/barvaKlubu.ts).
 //
-// Tohle je jen vzhled pro rezervace BEZ barvy klubu: komerce, rezervace bez
-// subjektu a kluby, kterým admin barvu nenastavil. Zůstávají neutrálně šedé,
-// aby bylo na první pohled vidět, co je barevně rozlišený klubový led a co ne.
+// Tohle je jen vzhled pro rezervace BEZ vlastní barvy: rezervace bez subjektu
+// a kluby, kterým admin barvu nenastavil. Zůstávají neutrálně šedé, aby bylo
+// na první pohled vidět, co je barevně rozlišený led a co ne.
+//
+// KOMERCE UŽ MEZI NĚ NEPATŘÍ (11. 9. 2026): má vlastní sytě červenou
+// (`BARVA_KOMERCE`) a přebíjí i barvu klubu. Rozhoduje o tom `vzhledRezervace`,
+// ne tahle funkce.
 //
 // Údržba je jediná výjimka: není to „akce klubu", ale stav ledu, a splynutí
 // s komerční akcí by v provozu mátlo. Podklad má neutrální jako ostatní,
@@ -73,6 +77,10 @@ export function ReservationCalendar({
   const legendaKlubu = useMemo(() => {
     const m = new Map<string, { id: string; nazev: string; barva: string }>();
     for (const r of reservations) {
+      // Komerční akce se do klubové legendy nepočítá, i když jejím subjektem
+      // klub je: v mřížce je červená, takže tečka v barvě klubu by slibovala
+      // blok, který tam v té barvě není.
+      if (jeKomercni(r.event_type)) continue;
       const barva = barvaProRezervaci(r);
       if (!barva || !r.subject_id) continue;
       if (!m.has(r.subject_id)) {
@@ -85,11 +93,26 @@ export function ReservationCalendar({
   // Je v období aspoň jedna rezervace bez barvy klubu? Jen tehdy má smysl
   // v legendě vysvětlovat, co ta šedá znamená.
   //
-  // Popisek se ZÁMĚRNĚ nejmenuje „komerce, údržba": šedý může být i klub, kterému
-  // admin barvu nenastavil (nebo ji vybral tak světlou, že by nebyla vidět).
-  // Tvrdit u něj „komerce" by byla nepravda přímo v legendě.
+  // Komerce se od 11. 9. 2026 NEPOČÍTÁ — má vlastní červenou a v legendě
+  // vlastní řádek, takže by ji šedá položka popisovala nepravdivě.
+  //
+  // Popisek se ZÁMĚRNĚ nejmenuje po typech akcí a nic nevyjmenovává. Do šedé
+  // spadají tři různé věci — údržba, rezervace bez subjektu a klub, kterému
+  // admin barvu nenastavil (nebo ji vybral světlejší než MAX_JAS, takže by
+  // nebyla vidět) — a každý výčet, který se sem zkusil vejít, jeden z nich
+  // vynechal nebo popsal špatně. „Bez barvy klubu" je pravdivé o všech třech.
+  // (Dřív tu stálo „(komerce, údržba)", pak „(údržba, rezervace bez klubu)" —
+  // to první po zčervenání komerce lhalo, to druhé vydávalo klub bez barvy za
+  // rezervaci bez klubu. Nález brány code review, 11. 9. 2026.)
   const maNeutralni = useMemo(
-    () => reservations.some((r) => !barvaProRezervaci(r)),
+    () => reservations.some((r) => !jeKomercni(r.event_type) && !barvaProRezervaci(r)),
+    [reservations],
+  );
+
+  // Je v období komerční akce? Legenda ukazuje jen to, co je v mřížce vidět —
+  // stejné pravidlo jako u klubů výš.
+  const maKomercni = useMemo(
+    () => reservations.some((r) => jeKomercni(r.event_type)),
     [reservations],
   );
 
@@ -294,10 +317,16 @@ export function ReservationCalendar({
           const timeLabel = `${format(new Date(r.start_at!), 'HH:mm')}–${format(new Date(r.end_at!), 'HH:mm')}`;
           const amount = r.corrected_amount ?? r.amount;
           const fill = r.event_id ? shiftFill[r.event_id] : undefined;
-          const isCommercial = r.event_type === 'commercial' || r.event_type === 'recruitment';
+          // POZOR NA ROZDÍL PROTI `komercni` NÍŽ: tahle podmínka je širší
+          // (bere i nábor) a je o BRIGÁDNÍCÍCH, ne o barvě. Dokud se jmenovala
+          // `isCommercial`, stály tu pět řádků od sebe dvě skoro stejně znějící
+          // proměnné s různým významem. (Nález brány code review, 11. 9. 2026.)
+          const muzeMitBrigadniky = r.event_type === 'commercial' || r.event_type === 'recruitment';
           const label = r.event_title ?? r.subject_name ?? 'Rezervace';
-          // spočítat jednou: styl bloku ji potřebuje na dvou místech
-          const barvaKlubu = barvaProRezervaci(r);
+          // Barvu i to, jestli na ní má být bílý text, rozhoduje `vzhledRezervace`
+          // — táž funkce jako u měsíčních chipů, ať se ty dva pohledy nerozejdou.
+          const vzhled = vzhledRezervace(r);
+          const komercni = vzhled.bilyText;
           const dragging = preview?.id === r.id;
           const skupina = r.event_id ? akce.get(r.event_id) : undefined;
           const vicDrah = (skupina?.drah ?? 1) > 1;
@@ -329,8 +358,27 @@ export function ReservationCalendar({
                 'hover:ring-2 hover:ring-ring overflow-hidden',
                 // Akce přes víc drah dostane výraznější rám, aby bylo vidět,
                 // že ty bloky patří k sobě a nejsou to dvě samostatné akce.
-                vicDrah && 'ring-1 ring-inset ring-primary/40',
+                // Na sytě červené má `ring-primary/40` kontrast 1,88 : 1, tedy
+                // je prakticky neviditelný — právě u komerce přes dvě dráhy,
+                // kde ten rám nese nejvíc informace. Bílý rám tam dá 3,6 : 1,
+                // nad hranicí 3 : 1, kterou WCAG chce po grafických prvcích
+                // rozhraní. (Nález brány code review, 11. 9. 2026.)
+                vicDrah && (komercni ? 'ring-1 ring-inset ring-white/70' : 'ring-1 ring-inset ring-primary/40'),
+                // ROZTAŽENÝ BLOK MUSÍ BÝT NAD PODKLADEM DALŠÍ DRÁHY.
+                // Sloupce drah jsou sourozenci a druhý má `bg-muted/40`;
+                // protože je v DOM později a blok neměl žádné `z`, kreslil se
+                // ten průsvitný šedý podklad PŘES pravou polovinu bloku.
+                // U bledě modrého klubu to nebylo poznat, u syté červené ano:
+                // #c1121f pod tím závojem vyjde jako rgb(212 109 118) a bílý
+                // text na něm spadne ze 6,2 : 1 na 3,4 : 1, tedy pod WCAG AA.
+                // (Změřeno v prohlížeči 11. 9. 2026 přes elementFromPoint.)
+                roztazeniDrah > 1 && 'z-10',
                 neutralniStyl(r.event_type),
+                // Na sytě červené je výchozí tmavý text nečitelný. Bílá se
+                // dává TŘÍDOU, ne inline: potomci uvnitř mají vlastní
+                // `text-*` třídy a ty by inline barvu na rodiči stejně přebily,
+                // takže se přepínají níž jedna po druhé.
+                komercni && 'text-white',
                 !r.approved_at && 'border-dashed',
                 // Roztažený blok se netáhne: tah míří do jednoho sloupce
                 // a akce jich zabírá víc. Přesouvá se přes Upravit.
@@ -339,12 +387,13 @@ export function ReservationCalendar({
               )}
               style={{
                 top, height,
-                // Barva klubu vyhrává nad neutrálním základem z neutralniStyl().
-                // Podklad je barva zesvětlená na bílé (viz podkladKlubu), aby
-                // na něm zůstal čitelný tmavý text i u tmavě modrého klubu;
-                // plná barva jde jen do levého pruhu, kde na ní text neleží.
-                ...(barvaKlubu
-                  ? { backgroundColor: podkladKlubu(barvaKlubu), borderLeftColor: barvaKlubu }
+                // Barva z `vzhledRezervace` vyhrává nad neutrálním základem
+                // z neutralniStyl(). U KLUBU je podklad barva zesvětlená na
+                // bílé, aby na něm zůstal čitelný tmavý text i u tmavě modrého
+                // klubu, a plná barva jde jen do levého pruhu, kde text neleží.
+                // U KOMERCE je podklad plná červená a text se přepíná na bílý.
+                ...(vzhled.podklad
+                  ? { backgroundColor: vzhled.podklad, borderLeftColor: vzhled.pruh }
                   : null),
                 // Sloupce drah jsou stejně široké `flex-1` sourozenci, takže
                 // roztažení přes N drah je N × šířka sloupce (minus okraje,
@@ -365,22 +414,28 @@ export function ReservationCalendar({
                 {/* název vidí každý přihlášený — maskuje se jen částka */}
                 {vicDrah && (
                   <Link2
-                    className="h-3 w-3 shrink-0 text-primary"
+                    className={cn('h-3 w-3 shrink-0', komercni ? 'text-white' : 'text-primary')}
                     aria-label={`Jedna akce přes ${skupina!.drah} dráhy`}
                   />
                 )}
                 <span className="truncate text-xs font-medium">{label}</span>
-                {!r.approved_at && <Clock className="h-3 w-3 shrink-0 text-amber-600" />}
-                {isCommercial && fill && (
+                {/* jantarová na červené zaniká — světlejší odstín drží
+                    význam („čeká") i čitelnost */}
+                {!r.approved_at && (
+                  <Clock className={cn('h-3 w-3 shrink-0', komercni ? 'text-amber-200' : 'text-amber-600')} />
+                )}
+                {muzeMitBrigadniky && fill && (
                   <span className={cn(
                     'ml-auto shrink-0 rounded px-1 text-[10px] font-semibold',
                     fill.filled >= fill.total ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700',
                   )}>{fill.filled}/{fill.total}</span>
                 )}
               </div>
-              <div className="truncate text-[11px] text-muted-foreground">{timeLabel}</div>
+              <div className={cn('truncate text-[11px]', komercni ? 'text-white/85' : 'text-muted-foreground')}>
+                {timeLabel}
+              </div>
               {view === 'day' && r.can_see_amount && amount != null && (
-                <div className="text-[11px] text-muted-foreground">
+                <div className={cn('text-[11px]', komercni ? 'text-white/85' : 'text-muted-foreground')}>
                   {vicDrah && skupina?.celkem != null ? (
                     // U akce přes víc drah je hlavní číslo CELEK; částka téhle
                     // dráhy je jen podíl a sama o sobě mate. U SPOJENÉHO bloku
@@ -467,10 +522,19 @@ export function ReservationCalendar({
             {k.nazev}
           </span>
         ))}
+        {maKomercni && (
+          <span className="flex items-center gap-1.5">
+            <span
+              className="inline-block h-2.5 w-2.5 rounded-full border"
+              style={{ backgroundColor: BARVA_KOMERCE.podklad }}
+            />
+            Komerční akce
+          </span>
+        )}
         {maNeutralni && (
           <span className="flex items-center gap-1.5">
             <span className="inline-block h-2.5 w-2.5 rounded-full border bg-slate-300" />
-            Bez barvy klubu (komerce, údržba)
+            Bez barvy klubu
           </span>
         )}
         <span className="flex items-center gap-1.5">

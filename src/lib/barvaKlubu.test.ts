@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { podkladKlubu, pruhKlubu, barvaProRezervaci, PALETA_KLUBU } from './barvaKlubu';
+import {
+  podkladKlubu, pruhKlubu, barvaProRezervaci, PALETA_KLUBU,
+  BARVA_KOMERCE, jeKomercni, vzhledRezervace,
+} from './barvaKlubu';
 
 describe('podkladKlubu', () => {
   it('míchá barvu na bílé, takže podklad je vždy světlý', () => {
@@ -115,5 +118,126 @@ describe('PALETA_KLUBU', () => {
 
     expect(prvnichSest).toHaveLength(6);                       // migrace paletu opravdu obsahuje
     expect(PALETA_KLUBU.slice(0, 6).map((b) => b.hex)).toEqual(prvnichSest);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// KOMERČNÍ AKCE = SYTĚ ČERVENÁ (zadání 11. 9. 2026)
+// -----------------------------------------------------------------------------
+
+/**
+ * Kontrast podle WCAG 2.1 — počítá se TADY, ne importem z `barvaKlubu.ts`.
+ *
+ * Kdyby se sdílel helper, dala by se zesvětlením červené i „opravou" helperu
+ * shodit obě strany najednou a test by pořád svítil zeleně. Takhle měří
+ * konstantu nezávislým výpočtem.
+ */
+function kontrastNaBile(hex: string): number {
+  const n = parseInt(hex.slice(1), 16);
+  const kanaly = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => {
+    const v = c / 255;
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  });
+  const L = 0.2126 * kanaly[0] + 0.7152 * kanaly[1] + 0.0722 * kanaly[2];
+  return 1.05 / (L + 0.05);            // bílá má relativní luminanci 1
+}
+
+describe('BARVA_KOMERCE', () => {
+  it('bílý text na ní projde WCAG AA (4,5 : 1 pro běžný text)', () => {
+    // Popisky v bloku mají 11–12 px, takže platí hranice pro BĚŽNÝ text,
+    // ne pro velký (3 : 1). Kdo červenou zesvětlí, shodí tohle.
+    expect(kontrastNaBile(BARVA_KOMERCE.podklad)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('je opravdu sytá, ne růžová ani bordó', () => {
+    // Zadání znělo „sytě červená". Bez tohohle by kontrastní test prošel
+    // i černé, i tmavě modré — ty mají kontrastu dost taky.
+    const n = parseInt(BARVA_KOMERCE.podklad.slice(1), 16);
+    const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    expect(r).toBeGreaterThan(150);          // červený kanál dominuje
+    expect(g).toBeLessThan(80);
+    expect(b).toBeLessThan(80);
+  });
+
+  it('levý pruh je tmavší než podklad, jinak by na něm nebyl vidět', () => {
+    expect(kontrastNaBile(BARVA_KOMERCE.pruh))
+      .toBeGreaterThan(kontrastNaBile(BARVA_KOMERCE.podklad));
+  });
+
+  it('netluče se s žádnou barvou z palety klubů', () => {
+    // Zadání tvrdí „žádná kolize". Tvrzení, ne domněnka: palety se nesmí
+    // dotknout ani po zaokrouhlení, jinak by uživatel nepoznal komerci
+    // od klubu té barvy.
+    const hexy = PALETA_KLUBU.map((b) => b.hex);
+    expect(hexy).not.toContain(BARVA_KOMERCE.podklad);
+    expect(hexy).not.toContain(BARVA_KOMERCE.pruh);
+  });
+});
+
+describe('jeKomercni', () => {
+  it('bere jen typ commercial', () => {
+    expect(jeKomercni('commercial')).toBe(true);
+  });
+
+  it('NEbere nábor, trénink, turnaj ani údržbu', () => {
+    // `recruitment` je schválně mimo: jinde v kalendáři jede s komercí
+    // v jedné podmínce (`isCommercial`), ale zadání znělo na `commercial`.
+    for (const t of ['recruitment', 'training', 'tournament', 'maintenance', null, undefined, '']) {
+      expect(jeKomercni(t)).toBe(false);
+    }
+  });
+});
+
+describe('vzhledRezervace — pořadí KOMERCE > klub > neutrální', () => {
+  it('komerční akce je červená s bílým textem', () => {
+    const v = vzhledRezervace({ event_type: 'commercial', subject_type: 'commercial' });
+    expect(v.podklad).toBe(BARVA_KOMERCE.podklad);
+    expect(v.pruh).toBe(BARVA_KOMERCE.pruh);
+    expect(v.bilyText).toBe(true);
+  });
+
+  it('KOMERCE PŘEBÍJÍ KLUB, i když je subjektem klub s vlastní barvou', () => {
+    // Tohle není hypotetický tvar: na produkci je k 11. 9. 2026 jedna
+    // rezervace `event_type = 'commercial'` se subjektem typu `club`.
+    // Kdyby se ptalo obráceně, byla by to jediná komerční akce v kalendáři,
+    // kterou by červená minula — a nikdo by si toho nevšiml.
+    const v = vzhledRezervace({
+      event_type: 'commercial', subject_type: 'club', subject_color: '#2563eb',
+    });
+    expect(v.podklad).toBe(BARVA_KOMERCE.podklad);
+    expect(v.bilyText).toBe(true);
+  });
+
+  it('klubová akce si drží světlý podklad a TMAVÝ text', () => {
+    const v = vzhledRezervace({
+      event_type: 'training', subject_type: 'club', subject_color: '#2563eb',
+    });
+    expect(v.podklad).toBe(podkladKlubu('#2563eb'));
+    expect(v.pruh).toBe('#2563eb');
+    expect(v.bilyText).toBe(false);
+  });
+
+  it('podíl zesvětlení se propisuje — chip je sytější než blok v mřížce', () => {
+    const blok = vzhledRezervace({ subject_type: 'club', subject_color: '#2563eb' }, 0.18);
+    const chip = vzhledRezervace({ subject_type: 'club', subject_color: '#2563eb' }, 0.22);
+    expect(blok.podklad).not.toBe(chip.podklad);
+    expect(chip.podklad).toBe(podkladKlubu('#2563eb', 0.22));
+  });
+
+  it('komerce podíl IGNORUJE — plná barva se zesvětlovat nemá', () => {
+    expect(vzhledRezervace({ event_type: 'commercial' }, 0.18).podklad)
+      .toBe(vzhledRezervace({ event_type: 'commercial' }, 0.9).podklad);
+  });
+
+  it('údržba a rezervace bez klubu zůstávají neutrální', () => {
+    for (const r of [
+      { event_type: 'maintenance', subject_type: 'club', subject_color: null },
+      { event_type: 'training', subject_type: null, subject_color: null },
+      { event_type: 'training', subject_type: 'commercial', subject_color: '#2563eb' },
+    ]) {
+      const v = vzhledRezervace(r);
+      expect(v.podklad).toBeUndefined();
+      expect(v.bilyText).toBe(false);
+    }
   });
 });

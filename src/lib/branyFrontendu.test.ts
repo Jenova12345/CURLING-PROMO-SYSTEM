@@ -429,3 +429,133 @@ describe('Nastavení: jméno ledaře se opravdu ukládá', () => {
     ).toContain('ledar_jmeno?: string;');
   });
 });
+
+// BARVA REZERVACE SE POČÍTÁ NA JEDNOM MÍSTĚ.
+//
+// Týdenní mřížka a měsíční chipy si pravidlo dřív rozhodovaly každá sama
+// a rozešly se (údržba měla v jednom pohledu oranžový okraj a ve druhém ne).
+// Chování samo měří `barvaKlubu.test.ts` nad `vzhledRezervace`; tahle brána
+// hlídá jen to, že se na ni oba pohledy opravdu ptají — jinak by se unit test
+// tvářil zeleně nad funkcí, kterou UI přestalo volat.
+describe('Barva v kalendáři: jedno pravidlo pro Týden i Měsíc', () => {
+  const POHLEDY = [
+    ['src/components/reservations/ReservationCalendar.tsx', 'Den/Týden'],
+    ['src/pages/Calendar.tsx', 'Měsíc'],
+  ] as const;
+
+  for (const [soubor, popis] of POHLEDY) {
+    it(`${popis} bere barvu z vzhledRezervace`, () => {
+      expect(cti(soubor),
+        `pohled ${popis} nevolá vzhledRezervace — pravidlo si počítá sám a může se rozejít`,
+      ).toMatch(/vzhledRezervace\(/);
+    });
+
+    it(`${popis} si podklad nemíchá sám`, () => {
+      // `podkladKlubu` je stavební kámen `vzhledRezervace`. Když se objeví
+      // přímo v pohledu, znamená to, že si ten pohled staví vlastní větev
+      // vedle společného pravidla — přesně ta cesta, kterou se to rozešlo.
+      expect(cti(soubor),
+        `pohled ${popis} volá podkladKlubu přímo; barva patří do vzhledRezervace`,
+      ).not.toMatch(/podkladKlubu\(/);
+    });
+  }
+
+  it('roztažený blok leží NAD podkladem další dráhy', () => {
+    // Sloupce drah jsou sourozenci a druhý má `bg-muted/40`. Bez `z` na bloku
+    // se ten průsvitný závoj kreslil PŘES jeho pravou polovinu: #c1121f pod ním
+    // vyjde rgb(212 109 118) a bílý text spadne ze 6,2 : 1 na 3,4 : 1, tedy pod
+    // WCAG AA. U bledě modrého klubu to nebylo vidět, u červené ano.
+    const zdroj = cti('src/components/reservations/ReservationCalendar.tsx');
+    // Vyžaduje se KLADNÉ `z`, ne jakékoli. `z-0` vypadá jako oprava, ale není:
+    // sloupec dráhy je `position: relative` se `z-index: auto`, takže nevytváří
+    // stacking context — blok s `z-0` spadne do téže vrstvy jako pozdější
+    // sourozenec a pořadí v DOM rozhodne proti němu. Změřeno v prohlížeči na
+    // repru té struktury: u `z-0` i bez `z` je v pravé polovině bloku nahoře
+    // podklad dráhy, u `z-10` blok sám. (Nález brány bezpečnost, 11. 9. 2026.)
+    const z = zdroj.match(/roztazeniDrah > 1 && 'z-(\d+)'/);
+    expect(z, 'roztažený blok nemá z-index — podklad druhé dráhy mu zesvětlí pravou půlku')
+      .not.toBeNull();
+    expect(Number(z![1]),
+      `roztažený blok má z-${z![1]}, což ho nad podklad druhé dráhy nezvedne`,
+    ).toBeGreaterThan(0);
+    // A zároveň nesmí přerůst tažený blok (`z-20`), jinak by se přetahovaná
+    // rezervace schovala pod ten, přes který ji uživatel táhne.
+    expect(Number(z![1]), 'roztažený blok přerostl tažený blok (z-20)').toBeLessThan(20);
+  });
+
+  // BÍLÝ TEXT NA ČERVENÉ NEHLÍDALO NIC.
+  //
+  // `barvaKlubu.test.ts` měří, že `vzhledRezervace` vrátí `bilyText: true` —
+  // ale ne, jestli si toho někdo ve vykreslení všimne. Změřeno mutací (brána
+  // code review, 11. 9. 2026): smazání jediného řádku `komercni && 'text-white'`
+  // nechalo celou sadu 523/523 zelenou, přitom hlavní popisek na plné červené
+  // spadne na tmavý foreground, tedy ~2,5 : 1 — hluboko pod WCAG AA.
+  //
+  // POZOR NA ROZSAH: tohle měří, že ta VAZBA je v kódu napsaná, ne že ji React
+  // vykreslil. Render test by byl silnější, ale repo nemá jsdom ani
+  // testing-library a kvůli jedné třídě se nová závislost netahá.
+  it('blok v mřížce váže bílý text na komerční vzhled', () => {
+    const zdroj = cti('src/components/reservations/ReservationCalendar.tsx');
+    expect(zdroj,
+      'blok nepřepíná text na bílý podle vzhledu — tmavý popisek na plné červené je pod AA',
+    ).toMatch(/komercni && 'text-white'/);
+    expect(zdroj, '`komercni` se přestalo brát z vzhledRezervace')
+      .toMatch(/const komercni = vzhled\.bilyText/);
+  });
+
+  it('chip v Měsíci váže bílý text na komerční vzhled', () => {
+    const zdroj = cti('src/pages/Calendar.tsx');
+    expect(zdroj,
+      'chip nepřepíná text na bílý podle `bilyText` — tmavý text na plné červené je pod AA',
+    ).toMatch(/bilyText \? 'text-white'/);
+  });
+
+  // Potomci bloku mají VLASTNÍ `text-*` třídy, takže bílá na rodiči je nepřebije
+  // a každý se musí přepnout zvlášť. Bez tohohle by stačilo zapomenout jeden
+  // a zůstal by šedý čas nebo jantarové hodiny na sytě červené.
+  it('potomci bloku se na červené přepínají taky', () => {
+    const zdroj = cti('src/components/reservations/ReservationCalendar.tsx');
+    for (const [co, vzor] of [
+      ['čas a částka', /komercni \? 'text-white\/85'/],
+      ['ikona spojených drah', /komercni \? 'text-white' : 'text-primary'/],
+      ['hodiny „čeká na potvrzení"', /komercni \? 'text-amber-200'/],
+      // `ring-primary/40` má na #c1121f kontrast 1,88 : 1 — u komerce přes dvě
+      // dráhy, kde ten rám nese nejvíc informace, by nebyl vidět.
+      ['rám u akce přes víc drah', /komercni \? 'ring-1 ring-inset ring-white\/70'/],
+    ] as const) {
+      expect(zdroj, `na červené se nepřepíná: ${co}`).toMatch(vzor);
+    }
+  });
+
+  it('legenda pojmenovává komerční akci a bere její barvu z konstanty', () => {
+    const zdroj = cti('src/components/reservations/ReservationCalendar.tsx');
+    expect(zdroj, 'v legendě chybí položka „Komerční akce"').toContain('Komerční akce');
+    // Tečka musí brát TU SAMOU hodnotu jako podklad bloku, ne vlastní pole
+    // se stejnou barvou — to se rozejde, jakmile se změní jen jedna strana.
+    expect(zdroj,
+      'tečka v legendě nebere barvu z BARVA_KOMERCE.podklad — rozejde se s bloky',
+    ).toMatch(/backgroundColor:\s*BARVA_KOMERCE\.podklad/);
+  });
+
+  it('šedá položka legendy nevyjmenovává, co do ní spadá', () => {
+    // Dokud byla komerce neutrální, stálo v legendě „Bez barvy klubu
+    // (komerce, údržba)" — po zčervenání komerce by ta věta lhala. Náhrada
+    // „(údržba, rezervace bez klubu)" lhala jinak: vydávala klub bez použitelné
+    // barvy za rezervaci bez klubu. Do šedé spadají TŘI různé věci a žádný
+    // výčet se sem zatím nevešel správně, tak se nevyjmenovává nic.
+    const zdroj = cti('src/components/reservations/ReservationCalendar.tsx');
+    // Kotví se na ŠEDOU TEČKU v JSX, ne na text popisku: tentýž text stojí
+    // i v komentáři pár řádků výš a `indexOf` by našel jeho. (Na tomhle mi
+    // tahle brána napoprvé spadla — což je lepší, než kdyby měřila komentář.)
+    const tecka = zdroj.indexOf('rounded-full border bg-slate-300" />');
+    expect(tecka, 'šedá položka legendy zmizela').toBeGreaterThan(-1);
+    // Řez končí na konci toho textového uzlu, ne po pevném počtu znaků —
+    // delší popisek by se jinak z měření vysunul.
+    const od = tecka + 'rounded-full border bg-slate-300" />'.length;
+    const popisek = zdroj.slice(od, zdroj.indexOf('<', od));
+    expect(popisek.trim(),
+      'šedá položka legendy zase něco vyjmenovává — každý dosavadní výčet ' +
+      'jeden z těch tří případů vynechal nebo popsal špatně',
+    ).toBe('Bez barvy klubu');
+  });
+});

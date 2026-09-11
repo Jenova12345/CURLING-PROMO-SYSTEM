@@ -19,7 +19,7 @@ import { useRateLimit } from '@/hooks/useRateLimit';
 import { useReservations, type CalendarReservation } from '@/hooks/useReservations';
 import { hoursForDay, openingHoursEnvelope } from '@/lib/openingHours';
 import { fmtHodin, fmtKc, fmtSazba } from '@/lib/money';
-import { podkladKlubu, barvaProRezervaci } from '@/lib/barvaKlubu';
+import { vzhledRezervace } from '@/lib/barvaKlubu';
 import { ReservationCalendar } from '@/components/reservations/ReservationCalendar';
 import { ReservationDialog } from '@/components/reservations/ReservationDialog';
 import { ObsazeniDetail } from '@/components/reservations/ObsazeniDetail';
@@ -36,21 +36,33 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   maintenance: 'Údržba ledu',
 };
 
-// Chip v měsíčním pohledu. Barvu nese KLUB (stejně jako bloky v mřížce);
-// co klub nemá — komerce, údržba, rezervace bez subjektu — zůstává neutrální.
+// Chip v měsíčním pohledu. Pravidla jsou TÁŽ jako u bloků v mřížce a berou
+// se ze stejného modulu — dvě kopie by se rozešly a uživatel by měl v Týdnu
+// a v Měsíci jinou barvu téže akce. (Přesně tím si ty dva pohledy jednou
+// odporovaly u údržby, proto je tenhle komentář tady.)
+//
+// Pořadí: KOMERCE > klub > neutrální. Komerční akce je sytě červená s bílým
+// textem i tehdy, když je jejím subjektem klub.
 //
 // Údržba drží oranžový okraj stejně jako blok v mřížce: není to „akce klubu",
-// ale stav ledu, a splynutí s komerční akcí by v provozu mátlo. Bez tohohle
-// řádku si týdenní a měsíční pohled odporovaly.
+// ale stav ledu, a splynutí s komerční akcí by v provozu mátlo.
+// Chip je menší než blok v mřížce, tak snese o kousek víc barvy (0,18 → 0,22).
+// Konstanta je jedna: `chipClass` a `chipStyle` se na tomtéž chipu MUSÍ ptát
+// stejně, jinak by text počítal s jiným podkladem, než jaký se vykreslí.
+const CHIP_PODIL = 0.22;
+
 function chipClass(r: CalendarReservation): string {
-  const zaklad = barvaProRezervaci(r) ? 'text-slate-900' : 'bg-slate-100 text-slate-800';
+  const { podklad, bilyText } = vzhledRezervace(r, CHIP_PODIL);
+  const zaklad = bilyText ? 'text-white'
+    : podklad ? 'text-slate-900'
+    : 'bg-slate-100 text-slate-800';
   return r.event_type === 'maintenance' ? `${zaklad} border-l-2 border-l-orange-500` : zaklad;
 }
 
-// Podklad chipu pro klubovou rezervaci. Vrací undefined, když klub barvu nemá,
-// a chip si nechá třídu z `chipClass`.
+// Podklad chipu. Vrací undefined jen u neutrální rezervace — ta si nechá
+// třídu `bg-slate-100` z `chipClass`.
 function chipStyle(r: CalendarReservation): { backgroundColor: string } | undefined {
-  const podklad = podkladKlubu(barvaProRezervaci(r), 0.22);
+  const { podklad } = vzhledRezervace(r, CHIP_PODIL);
   return podklad ? { backgroundColor: podklad } : undefined;
 }
 
