@@ -100,9 +100,34 @@ nové tabulky/moduly navrhneme pořádně od začátku, ale napojíme je na exis
 Praktický dopad: baseline migrace = skutečný (i „nehezký") stav produkce; opravy schématu
 jdou jako další migrace nad baseline, ne přepisem historie.
 
+## Kalibrace úsilí podle rizika
+
+**Rozsah kontrol odpovídá RIZIKOVÉ PLOŠE změny, ne tématu.**
+
+- **Změna s reálnou plochou** — migrace, RLS a oprávnění, ceny / fakturace /
+  peníze, auth. **Beze změny proti tomu, co je níž: všechny brány GREEN,
+  mutační testy, ověření na produkci.** Tady se nešetří.
+- **Čistě kosmetická / frontend-only změna** bez DB, migrace, oprávnění
+  a peněz (barvy, texty hlášek, popisky) → **lehká cesta:** `npm run typecheck`,
+  build, **jedno** ověření (hash bundlu nebo proklik), commit, push.
+  **Nespouštět vícekolové adversariální brány.**
+- **Když si nejsi jistý kategorií, ber změnu jako rizikovou.**
+
+Cíl: neutopit hodinu v branách nad jednořádkovou změnou barvy.
+
+Proč to tu je: 11. 9. 2026 spolkla změna barvy komerčních akcí (CSS třída
+a jeden hex) přes hodinu na třech kolech adversariálních bran, které si mezi
+sebou navíc přepisovaly pracovní strom. Nálezy byly věcné a některé i cenné,
+ale cena neodpovídala ploše — žádná migrace, žádná práva, žádné peníze. Brány
+tu jsou proto, aby chytily drahé chyby, ne aby zdražily levné.
+
+**Platí to i obráceně:** „je to jen jeden řádek" NENÍ důvod zkrátit kontroly
+u migrace, RLS ani u fakturace. Viz kapitola o Etapě 2 níž — u peněz „malá
+změna" neexistuje.
+
 ## Pracovní postup (povinný pro každou změnu)
 1. Plánuj první. U každého netriviálního úkolu nejdřív připrav plán a nech si ho schválit, než začneš měnit kód nebo databázi.
-2. Agenti jako kontrolní brány. Před dokončením každé změny ji nech zkontrolovat příslušnými specializovanými agenty. Povinné brány: (a) Bezpečnost/RLS u čehokoli kolem přístupů, auth, RLS a klíčů; (b) Databáze/migrace u každé migrace (bezpečná, vratná, bez ztráty dat); (c) Code review u implementace před commitem.
+2. Agenti jako kontrolní brány. Před dokončením každé změny ji nech zkontrolovat příslušnými specializovanými agenty. Povinné brány: (a) Bezpečnost/RLS u čehokoli kolem přístupů, auth, RLS a klíčů; (b) Databáze/migrace u každé migrace (bezpečná, vratná, bez ztráty dat); (c) Code review u implementace před commitem. **Kolik kol jich pustit, řídí kapitola „Kalibrace úsilí podle rizika" výš** — u čistě kosmetické frontendové změny se adversariální kola nespouštějí.
 3. Záloha před zásahem do produkce. Nikdy neaplikuj změnu na produkční DB bez čerstvé
    zálohy a odsouhlasení PM. Na obojí je **`scripts/safe-deploy.sh <popisek>`** — udělá dump,
    ověří, že není useknutý, vypíše, na který projekt míří, a teprve pak pustí `db push`.
