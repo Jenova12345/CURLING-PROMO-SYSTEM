@@ -89,6 +89,75 @@ describe('ReservationDialog: změna firmy u komerční akce', () => {
   });
 });
 
+describe('Přejmenování série: dvě větve, které se musí lišit', () => {
+  const zdroj = cti('src/components/reservations/ReservationDialog.tsx');
+
+  // Kdyby se výchozí hodnota překlopila na 'serie', hromadná změna by se dala
+  // udělat omylem — uživatel otevře termín, opraví překlep a přepíše jím celou
+  // sérii, aniž by o to požádal.
+  it('výchozí rozsah je „jen tato akce", ne celá série', () => {
+    const stav = zdroj.match(/useState<'tato' \| 'serie'>\('(\w+)'\)/);
+    expect(stav, 'stav rozsahNazvu v dialogu zmizel').not.toBeNull();
+    expect(stav![1],
+      'výchozí rozsah je „serie" — hromadné přejmenování se musí zvolit vědomě.',
+    ).toBe('tato');
+  });
+
+  // Volba se smí nabídnout jen tam, kde ji server umí splnit.
+  it('volba rozsahu se ukazuje jen u akce, která do série patří', () => {
+    const podminka = zdroj.match(/const jeSerie = Boolean\(([\s\S]{0,160}?)\);/);
+    expect(podminka, 'podmínka jeSerie v dialogu zmizela').not.toBeNull();
+    expect(podminka![1], 'jeSerie nekontroluje, že jde o úpravu').toContain('isEdit');
+    expect(podminka![1],
+      'jeSerie nekontroluje series_id — volba by se nabídla i u akce bez série ' +
+      'a server by ji odmítl hláškou „není součástí opakované série".',
+    ).toContain('series_id');
+  });
+
+  // TOHLE JE TA BRÁNA, KVŮLI KTERÉ TENHLE BLOK EXISTUJE.
+  //
+  // `update_booking` sáhne na JEDNU akci. Kdyby se u rozsahu „celá série"
+  // poslal název i tudy, zapsal by se nejdřív na ten jeden termín a hromadná
+  // změna by ho pak přepsala — což dnes vyjde stejně, ale je to náhoda: stačí,
+  // aby se pořadí volání obrátilo, a série skončí se dvěma názvy.
+  it('u rozsahu „celá série" se název ani poznámka neposílají přes updateBooking', () => {
+    const volani = zdroj.match(/api\.updateBooking\(\{([\s\S]{0,900}?)\}\)/);
+    expect(volani, 'volání api.updateBooking v dialogu zmizelo').not.toBeNull();
+    expect(volani![1], 'updateBooking posílá název bez ohledu na zvolený rozsah')
+      .toMatch(/title:\s*rozsahSerie \?/);
+    expect(volani![1], 'updateBooking posílá poznámku bez ohledu na zvolený rozsah')
+      .toMatch(/note:\s*rozsahSerie \?/);
+  });
+
+  // Hromadná změna platí JEN na název a poznámku. Čas, dráhy, sazba ani
+  // odběratel se hromadně měnit nemají a server to neumí — kdyby se sem
+  // připletly, slibovalo by UI něco, co neproběhne.
+  it('volání série posílá jen název a poznámku, nic o čase, drahách ani ceně', () => {
+    const volani = zdroj.match(/api\.prejmenujSerii\(\{([\s\S]{0,240}?)\}\)/);
+    expect(volani, 'volání api.prejmenujSerii v dialogu zmizelo').not.toBeNull();
+    expect(volani![1]).toContain('title');
+    expect(volani![1]).toContain('note');
+    expect(volani![1],
+      'do hromadného přejmenování se přimíchal čas, dráha nebo cena — ' +
+      'hromadný přesun série se vědomě nestaví.',
+    ).not.toMatch(/start|end|sheet|rate|sazba|amount|subject/i);
+  });
+
+  // `''` je na serveru „smaž poznámku". Kdyby se posílalo vždycky, stačilo by
+  // otevřít termín s prázdnou poznámkou, opravit překlep v názvu a zvolit
+  // „celá série" — a poznámky by zmizely všem ostatním budoucím termínům.
+  it('nezměněná poznámka se u série NEPOSÍLÁ (jinak by ji smazala všem)', () => {
+    const volani = zdroj.match(/api\.prejmenujSerii\(\{([\s\S]{0,240}?)\}\)/);
+    expect(volani, 'volání api.prejmenujSerii v dialogu zmizelo').not.toBeNull();
+    expect(volani![1],
+      'poznámka se posílá bezpodmínečně — u termínu s prázdnou poznámkou by se ' +
+      'poslalo „" a server by ji smazal celé sérii.',
+    ).toMatch(/poznamkaZmenena \?/);
+    expect(zdroj, 'chybí porovnání poznámky proti uloženému stavu')
+      .toMatch(/poznamkaZmenena = [\s\S]{0,80}?editing\.note/);
+  });
+});
+
 describe('Přihlášení: nenačtený profil = zavřeno', () => {
   const auth = cti('src/contexts/AuthContext.tsx');
 

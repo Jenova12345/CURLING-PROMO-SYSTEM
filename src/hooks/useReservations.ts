@@ -312,6 +312,28 @@ export const useReservations = (range: DateRange | null) => {
     onSuccess: invalidate,
   });
 
+  // PŘEJMENOVÁNÍ CELÉ SÉRIE — název a poznámka na všech BUDOUCÍCH termínech.
+  //
+  // Jde přes vlastní RPC, ne přes `update_booking`: ta sáhne na jednu akci, což
+  // je právě to, co znamená volba „jen tato akce". Obě větve tedy vedou jinam
+  // schválně a `supabase/tests/prejmenuj_serii_test.sql` hlídá, že se nezačnou
+  // chovat stejně. Minulé termíny si název nechávají (je na dokladu) a práva
+  // jsou fail-closed: kdo nesmí na jeden termín, nepřejmenuje žádný.
+  const prejmenujSerii = useMutation({
+    // note: '' smaže poznámku, undefined/null ji nechá být — týž kontrakt jako
+    // u `update_booking`, ať se to nechová na dvou místech jinak.
+    mutationFn: async (args: { id: string; title?: string; note?: string | null }) => {
+      const { data, error } = await supabase.rpc('prejmenuj_serii', {
+        _reservation_id: args.id,
+        _title: args.title ?? undefined,
+        _note: args.note ?? undefined,
+      });
+      if (error) throw rpcError(error, 'Sérii se nepodařilo přejmenovat.');
+      return (data ?? {}) as { zmena?: boolean; terminu?: number; akci?: number };
+    },
+    onSuccess: invalidate,
+  });
+
   // Přesun v kalendáři (drag & drop). Akce na obou drahách se posune celá.
   const moveBooking = useMutation({
     mutationFn: async (args: { id: string; start_at: string; end_at: string; sheet_id?: string }) => {
@@ -617,6 +639,7 @@ export const useReservations = (range: DateRange | null) => {
     upravDrahyAkce: upravDrahyAkce.mutateAsync,
     zmenTypAkce: zmenTypAkce.mutateAsync,
     zmenFirmuAkce: zmenFirmuAkce.mutateAsync,
+    prejmenujSerii: prejmenujSerii.mutateAsync,
     moveBooking: moveBooking.mutateAsync,
     cancelBooking: cancelBooking.mutateAsync,
     approveReservation: approveReservation.mutateAsync,

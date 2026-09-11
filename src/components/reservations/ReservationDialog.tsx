@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Switch } from '@/components/ui/switch';
 import { Minus, Plus } from 'lucide-react';
 import {
@@ -60,6 +61,9 @@ export interface ReservationApi {
   /** Změna odběratele (firmy) na všech drahách komerční akce — jen admin. */
   zmenFirmuAkce: (args: { event_id: string; subject_id: string })
     => Promise<{ schvaleni_prerazeno?: boolean; drah?: number; firma?: string }>;
+  /** Název a poznámka na VŠECH BUDOUCÍCH termínech opakované série. */
+  prejmenujSerii: (args: { id: string; title?: string; note?: string | null })
+    => Promise<{ zmena?: boolean; terminu?: number; akci?: number }>;
   moveBooking: (args: { id: string; start_at: string; end_at: string; sheet_id?: string }) => Promise<unknown>;
   checkConflicts: (args: { sheet_ids: string[]; start_at: string; end_at: string; kind: BookingKind; ignore_event?: string }) => Promise<Conflict[]>;
   nahledCeny: (args: { subject_id: string | null; kind: BookingKind; start_at: string; end_at: string; drah: number }) => Promise<NahledCeny | null>;
@@ -104,6 +108,11 @@ export function ReservationDialog({
 }: Props) {
   const { toast } = useToast();
   const isEdit = !!editing;
+  // ROZSAH PŘEJMENOVÁNÍ u akce, která je součástí opakované série.
+  // Výchozí je 'tato' — hromadná změna se musí zvolit vědomě, ne se stát omylem.
+  const [rozsahNazvu, setRozsahNazvu] = useState<'tato' | 'serie'>('tato');
+  // Volba se ukazuje jen tam, kde dává smysl: úprava akce, která do série patří.
+  const jeSerie = Boolean(isEdit && editing?.series_id);
 
   const clubs = useMemo(() => subjects.filter((s) => s.type === 'club'), [subjects]);
   const commercials = useMemo(() => subjects.filter((s) => s.type === 'commercial'), [subjects]);
@@ -206,6 +215,7 @@ export function ReservationDialog({
       setPuvodniRate(rateZDb);
       setPraniTrenera(editing.preferovany_trener ?? '');
       setRepeat(false);
+      setRozsahNazvu('tato');
     } else {
       const start = defaultStart ?? new Date();
       const sh = Math.max(openHour, Math.min(start.getHours(), closeHour - 1));
@@ -715,15 +725,41 @@ export function ReservationDialog({
         // sáhne na všechny dráhy atomicky.
         const meniSazbu = isAdmin && rateNum !== undefined
           && rateNum !== (editing.rate_per_hour ?? undefined);
+        const rozsahSerie = jeSerie && rozsahNazvu === 'serie';
 
         await api.updateBooking({
           id: editing.id!,
-          title: sanitizeText(title),
+          // U ROZSAHU „CELÁ SÉRIE" se název ani poznámka přes `update_booking`
+          // neposílají — sáhla by na tenhle jeden termín a hromadná změna níž
+          // by pak jen přepisovala, co tahle zapsala. Sazba, čas a dráhy jdou
+          // touhle cestou dál, ty se hromadně neměnní (a nemají).
+          title: rozsahSerie ? undefined : sanitizeText(title),
           // prázdný řetězec = „smaž poznámku" (null by znamenalo „neměň")
-          note: note ? sanitizeText(note) : '',
+          note: rozsahSerie ? undefined : (note ? sanitizeText(note) : ''),
           // U akce se sazba pošle zvlášť (níž), aby se propsala na všechny dráhy.
           rate_per_hour: meniSazbu && !editing.event_id ? rateNum : undefined,
         });
+
+        // PŘEJMENOVÁNÍ CELÉ SÉRIE — jen když si to uživatel vybral.
+        // Server si práva ověří sám a je fail-closed: kdo nesmí na jediný
+        // budoucí termín, nepřejmenuje žádný.
+        let zmenaSerie: { terminu?: number } | null = null;
+        let poznamkaZmenena = false;
+        if (rozsahSerie) {
+          // POZNÁMKA SE POSÍLÁ, JEN KDYŽ SE OPRAVDU ZMĚNILA.
+          //
+          // `''` znamená na serveru „smaž poznámku". Kdyby se posílala vždycky,
+          // stačilo by otevřít termín s prázdnou poznámkou, opravit překlep
+          // v názvu a zvolit „celá série" — a poznámky by zmizely VŠEM ostatním
+          // budoucím termínům, aniž by o tom kdokoli věděl. `undefined` je
+          // „neměň". (Nález brány code review, 11. 9. 2026.)
+          poznamkaZmenena = sanitizeText(note) !== (editing.note ?? '');
+          zmenaSerie = await api.prejmenujSerii({
+            id: editing.id!,
+            title: sanitizeText(title),
+            note: poznamkaZmenena ? (note ? sanitizeText(note) : '') : undefined,
+          });
+        }
 
         // ZMĚNA TYPU AKCE (C) JDE PRVNÍ, protože přepočítá cenu podle nového
         // typu — a ručně zadaná sazba níž pak platí NAD ním.
@@ -785,7 +821,17 @@ export function ReservationDialog({
                 ? `${drah}Cena zůstala beze změny a potvrzení akce je nově podepsané vámi.`
                 : `${drah}Cena zůstala beze změny.`,
             }
-          : { title: 'Rezervace upravena' });
+          : zmenaSerie
+            ? {
+                title: 'Série přejmenována',
+                // Hláška říká JEN TO, CO SE OPRAVDU POSLALO: poznámka se
+                // u nezměněného textu vůbec neposílá, a tvrdit, že se propsala,
+                // by bylo nepravdivé. (Nález brány code review, 11. 9. 2026.)
+                description: `${poznamkaZmenena ? 'Název i poznámka se propsaly' : 'Název se propsal'}`
+                  + ` na ${zmenaSerie.terminu ?? 0} budoucích termínů.`
+                  + ' Minulé termíny si nechaly původní název.',
+              }
+            : { title: 'Rezervace upravena' });
         onOpenChange(false);
         return;
       }
@@ -899,6 +945,35 @@ export function ReservationDialog({
                 placeholder={kind === 'training' ? 'Např. Trénink A-tým' : kind === 'tournament' ? 'Např. Podzimní turnaj' : 'Např. Teambuilding'}
                 onChange={(e) => { setTitle(e.target.value); setTitleTouched(true); }}
               />
+
+              {/* ROZSAH U OPAKOVANÉ SÉRIE — platí JEN na název a poznámku.
+                  Čas, dráhy ani cena se hromadně měnit nedají a nabízet to tu
+                  by slibovalo něco, co server neumí (a schválně neumí: kolize
+                  a ceník se u každého termínu řeší zvlášť). */}
+              {jeSerie && (
+                <div className="space-y-2 rounded-md border bg-muted/40 p-3">
+                  <Label className="text-sm">Název a poznámku změnit u</Label>
+                  <RadioGroup
+                    value={rozsahNazvu}
+                    onValueChange={(v) => setRozsahNazvu(v as 'tato' | 'serie')}
+                    className="gap-2"
+                  >
+                    <label className="flex items-center gap-2 text-sm">
+                      <RadioGroupItem value="tato" id="rozsah-tato" />
+                      jen této akce
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <RadioGroupItem value="serie" id="rozsah-serie" />
+                      celé série (budoucí termíny)
+                    </label>
+                  </RadioGroup>
+                  <p className="text-xs text-muted-foreground">
+                    Změna se u série propíše jen na termíny, které ještě nebyly —
+                    minulé si název nechávají, protože je na dokladech. Čas, dráhy
+                    ani cena se hromadně nemění.
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* dráhy */}

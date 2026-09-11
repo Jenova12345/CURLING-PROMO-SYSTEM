@@ -3249,6 +3249,10 @@ export type Database = {
         Returns: Json
       }
       v_okne_48h: { Args: { _start: string }; Returns: boolean }
+      prejmenuj_serii: {
+        Args: { _reservation_id: string; _title?: string; _note?: string }
+        Returns: Json
+      }
       zmen_firmu_akce: {
         Args: { _event_id: string; _subject_id: string }
         Returns: Json

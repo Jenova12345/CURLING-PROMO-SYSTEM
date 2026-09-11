@@ -410,6 +410,7 @@ const Calendar = () => {
           upravDrahyAkce: api.upravDrahyAkce,
           zmenTypAkce: api.zmenTypAkce,
           zmenFirmuAkce: api.zmenFirmuAkce,
+          prejmenujSerii: api.prejmenujSerii,
           moveBooking: api.moveBooking,
           checkConflicts: api.checkConflicts,
           nahledCeny: api.nahledCeny,
