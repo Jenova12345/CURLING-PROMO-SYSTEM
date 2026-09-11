@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/select';
 import { useToast } from '@/components/ui/use-toast';
 import { sanitizeText, VALIDATION_LIMITS } from '@/lib/validation';
-import { nadpisSerie, souhrnSerie } from '@/lib/serie';
+import { nadpisSerie, pocetTerminu, souhrnSerie } from '@/lib/serie';
 import { hoursForDay } from '@/lib/openingHours';
 import { parseCelkovouCenu, parseSazba } from '@/lib/money';
 import type {
@@ -743,7 +743,13 @@ export function ReservationDialog({
         // PŘEJMENOVÁNÍ CELÉ SÉRIE — jen když si to uživatel vybral.
         // Server si práva ověří sám a je fail-closed: kdo nesmí na jediný
         // budoucí termín, nepřejmenuje žádný.
-        let zmenaSerie: { terminu?: number } | null = null;
+        // Typ se ODVOZUJE z kontraktu `ReservationApi`, ne opisuje. Vlastní
+        // anotace by chybějící volitelné pole tiše spolkla (volitelná
+        // vlastnost je přiřaditelná i když chybí), takže by `akci` zmizelo
+        // z hooku a TypeScript by mlčel. (Nález brány code review,
+        // 11. 9. 2026 — změřeno mutací: bez tohohle odvození typecheck
+        // prošel i po odebrání `akci` z useReservations.)
+        let zmenaSerie: Awaited<ReturnType<ReservationApi['prejmenujSerii']>> | null = null;
         let poznamkaZmenena = false;
         if (rozsahSerie) {
           // POZNÁMKA SE POSÍLÁ, JEN KDYŽ SE OPRAVDU ZMĚNILA.
@@ -821,14 +827,31 @@ export function ReservationDialog({
                 ? `${drah}Cena zůstala beze změny a potvrzení akce je nově podepsané vámi.`
                 : `${drah}Cena zůstala beze změny.`,
             }
-          : zmenaSerie
+          : zmenaSerie?.akci
             ? {
                 title: 'Série přejmenována',
                 // Hláška říká JEN TO, CO SE OPRAVDU POSLALO: poznámka se
                 // u nezměněného textu vůbec neposílá, a tvrdit, že se propsala,
                 // by bylo nepravdivé. (Nález brány code review, 11. 9. 2026.)
+                // POČET SE BERE Z `akci`, NE Z `terminu` — znamenají různé věci.
+                //   `akci`    = kolik AKCÍ dostalo nový název; akce = jeden
+                //               termín tak, jak ho uživatel vidí v kalendáři
+                //               (blok „jedna akce přes 2 dráhy" je jeden).
+                //   `terminu` = kolik REZERVACÍ se změna týkala, tedy řádků
+                //               na drahách — termín na dvou drahách jsou dvě.
+                // Dokud se sem posílalo `terminu`, hlásila série o 27 termínech
+                // na dvou drahách „54 budoucích termínů", tedy dvojnásobek
+                // toho, co je v kalendáři vidět. (Změřeno v prohlížeči
+                // 11. 9. 2026 na sérii „MBL mix boomer liga": 27 akcí,
+                // 54 rezervací.)
+                // Podmínka výš je `zmenaSerie?.akci`, ne `zmenaSerie`, právě
+                // kvůli nule: `akci = 0` znamená, že UPDATE nad `events`
+                // nepřepsal ANI JEDEN řádek — tedy název se nepropsal nikam.
+                // Tvrdit v té větvi „Název se propsal" by byla lež nad nulou
+                // zápisů, tak spadne na neutrální „Rezervace upravena".
+                // (Nález brány code review, 11. 9. 2026.)
                 description: `${poznamkaZmenena ? 'Název i poznámka se propsaly' : 'Název se propsal'}`
-                  + ` na ${zmenaSerie.terminu ?? 0} budoucích termínů.`
+                  + ` na ${pocetTerminu(zmenaSerie.akci)} této série.`
                   + ' Minulé termíny si nechaly původní název.',
               }
             : { title: 'Rezervace upravena' });

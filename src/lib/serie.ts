@@ -23,8 +23,13 @@ const MAX_DNU = 8;
 /** Kolik dat ještě smí do souhrnu. Sdílí se mezi všemi důvody. */
 type Rozpocet = { zbyva: number };
 
-/** „3 termíny" — české skloňování, ať se klientovi neukazuje „3 termínů". */
-function pocetTerminu(n: number): string {
+/**
+ * „3 termíny" — české skloňování, ať se klientovi neukazuje „3 termínů".
+ *
+ * Exportuje se schválně: touž větu potřebuje i hláška o přejmenování série
+ * v `ReservationDialog`. Dvě kopie skloňování by se rozešly.
+ */
+export function pocetTerminu(n: number): string {
   if (n === 1) return '1 termín';
   if (n >= 2 && n <= 4) return `${n} termíny`;
   return `${n} termínů`;

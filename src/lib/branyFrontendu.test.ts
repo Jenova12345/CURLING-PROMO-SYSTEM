@@ -156,6 +156,48 @@ describe('Přejmenování série: dvě větve, které se musí lišit', () => {
     expect(zdroj, 'chybí porovnání poznámky proti uloženému stavu')
       .toMatch(/poznamkaZmenena = [\s\S]{0,80}?editing\.note/);
   });
+
+  // POČET V HLÁŠCE MUSÍ BÝT `akci`, NE `terminu`.
+  //
+  // `terminu` počítá REZERVACE (řádky na drahách), `akci` počítá AKCE — tedy
+  // termíny tak, jak je uživatel vidí v kalendáři. U série o 27 termínech na
+  // dvou drahách je to 54 proti 27. Dokud se do hlášky posílalo `terminu`,
+  // tvrdila po přejmenování dvojnásobek toho, co je vidět (změřeno
+  // v prohlížeči 11. 9. 2026 na sérii „MBL mix boomer liga").
+  it('hláška o přejmenování série počítá akce, ne rezervace', () => {
+    // Řez se ohraničuje AŽ PO kontrole obou kotev. `indexOf` vrací -1, takže
+    // `slice(start, -1)` by po zmizení druhé kotvy mlčky vzal zbytek souboru
+    // a brána by zůstala zelená z nepravého důvodu.
+    const od = zdroj.indexOf("title: 'Série přejmenována'");
+    const do_ = zdroj.indexOf("{ title: 'Rezervace upravena' }", od);
+    expect(od, "větev s hláškou „Série přejmenována\" v dialogu zmizela").toBeGreaterThan(-1);
+    expect(do_, 'konec větve s hláškou v dialogu zmizel — řez by vzal zbytek souboru')
+      .toBeGreaterThan(od);
+    const hlaska = zdroj.slice(od, do_);
+    expect(hlaska,
+      'hláška bere počet z `terminu`, což jsou rezervace — u termínu na dvou ' +
+      'drahách ukáže dvojnásobek toho, co má uživatel v kalendáři.',
+    ).not.toMatch(/zmenaSerie[?!]?\.terminu/);
+    // Tvrdí se POZITIVNĚ to, co se opravdu vypisuje: samotné `zmenaSerie.akci`
+    // kdekoli v řezu by uspokojila i podmínka ternárního výrazu, která by pak
+    // vypsala `terminu`. Zároveň to fixuje skloňování přes `pocetTerminu`.
+    expect(hlaska,
+      'hláška nevypisuje `pocetTerminu(zmenaSerie.akci)` — buď nebere počet ' +
+      'z akcí, nebo obchází české skloňování.',
+    ).toMatch(/pocetTerminu\(\s*zmenaSerie\.akci\s*\)/);
+  });
+
+  // Hláška počítá hodnotu, kterou do dialogu posílá hook — ta se musí měřit
+  // na obou koncích zvlášť. TypeScript hlídá jen konec v dialogu (anotace
+  // `zmenaSerie` je odvozená z `ReservationApi`); kdyby `akci` zmizelo z hooku,
+  // typecheck by mlčel (volitelná vlastnost, která chybí, je přiřaditelná) —
+  // a uživatel by místo počtu termínů dostal `undefined`. Tohle je ten druhý
+  // konec. (Změřeno mutací, brána code review 11. 9. 2026.)
+  it('useReservations vrací z prejmenujSerii i počet akcí', () => {
+    expect(cti('src/hooks/useReservations.ts'),
+      'návratový typ prejmenujSerii nezná `akci` — hláška by neměla z čeho počítat termíny.',
+    ).toMatch(/prejmenuj_serii[\s\S]{0,400}?akci\?: number/);
+  });
 });
 
 describe('Přihlášení: nenačtený profil = zavřeno', () => {

@@ -365,6 +365,93 @@ BEGIN
 END $$;
 
 -- -----------------------------------------------------------------------------
+-- 2g) TERMÍN NA DVOU DRAHÁCH = JEDNA AKCE, DVĚ REZERVACE
+--
+-- `terminu` a `akci` nejsou dvě jména pro totéž číslo a celá hláška ve
+-- frontendu stojí na tom rozdílu: uživatel v kalendáři počítá AKCE (blok
+-- „jedna akce přes dvě dráhy" je jeden), ne řádky na drahách. Dokud se do
+-- hlášky posílalo `terminu`, tvrdila série o 27 termínech na dvou drahách
+-- „54 budoucích termínů" — dvojnásobek toho, co je vidět (změřeno
+-- v prohlížeči 11. 9. 2026 na sérii „MBL mix boomer liga").
+--
+-- Bez téhle kapitoly ten význam neměří NIC: jediné dosavadní tvrzení o `akci`
+-- je `akci = 0` ve větvi bez názvu, a frontendová brána hlídá jen JMÉNO pole.
+-- Kdyby se `akci` začalo počítat nad rezervacemi, obě brány zůstanou zelené
+-- a uživatel zase uvidí dvojnásobek. (Nález brány code review, 11. 9. 2026.)
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE _rez public.reservations%ROWTYPE; _druha_draha uuid; _nazev_pred text;
+        _v jsonb; _terminu int; _akci int; _rezervaci int; _dvojcat int := 0;
+BEGIN
+  PERFORM pg_temp.prihlas(pg_temp.admin());
+
+  -- Název se ČTE, ne píše natvrdo. Kapitola 3 níž počítá termíny podle názvu,
+  -- který nastavila kapitola 2e — kdyby si ho úklid pamatoval jako literál,
+  -- rozbil by ji každý, kdo přejmenuje 2e. (Bezpečné je to tady jen proto, že
+  -- 2e nechává všechny budoucí termíny pojmenované stejně.)
+  SELECT e.title INTO _nazev_pred
+    FROM public.reservations r JOIN public.events e ON e.id = r.event_id
+   WHERE r.id = pg_temp.prvni_budouci();
+  PERFORM pg_temp.tvrd(_nazev_pred IS NOT NULL, 'příprava: původní název série se přečetl');
+
+  -- DVĚ dvojčata, ne jedno. S jedním jsou „počítej akce" a „odečti jedničku"
+  -- nerozlišitelné a mutace `_akci := _terminu - 1` projde zeleně (změřeno).
+  -- Se dvěma ta třída mutantů padne a tvrzení měří vztah, ne konstantu.
+  FOR _rez IN
+    SELECT r.* FROM public.reservations r
+     WHERE r.series_id = pg_temp.serie() AND r.deleted_at IS NULL
+       AND r.start_at >= now() ORDER BY r.start_at LIMIT 2
+  LOOP
+    SELECT CASE WHEN pg_temp.draha(1) = _rez.sheet_id THEN pg_temp.draha(2)
+                ELSE pg_temp.draha(1) END INTO _druha_draha;
+    PERFORM pg_temp.tvrd(_druha_draha IS DISTINCT FROM _rez.sheet_id,
+      'příprava: druhá dráha je opravdu jiná než ta, na které termín stojí');
+
+    -- Tentýž `event_id` i `series_id` schválně — přesně to zakládá
+    -- `create_booking` u dvoudráhové rezervace série (jedna akce, dva řádky).
+    PERFORM set_config('app.trusted_booking', 'on', true);
+    INSERT INTO public.reservations (sheet_id, subject_id, event_id, series_id,
+                                     start_at, end_at, rate_per_hour, amount, cena_bez_dph)
+    VALUES (_druha_draha, _rez.subject_id, _rez.event_id, _rez.series_id,
+            _rez.start_at, _rez.end_at, _rez.rate_per_hour, _rez.amount, _rez.cena_bez_dph);
+    PERFORM set_config('app.trusted_booking', 'off', true);
+    _dvojcat := _dvojcat + 1;
+  END LOOP;
+
+  PERFORM pg_temp.tvrd(_dvojcat = 2,
+    format('příprava: série má DVA dvoudráhové termíny (vyrobeno %s)', _dvojcat));
+
+  _rezervaci := pg_temp.budoucich();
+  _v := public.prejmenuj_serii(pg_temp.prvni_budouci(), 'DVĚ DRÁHY JEDNA AKCE');
+  _terminu := (_v ->> 'terminu')::int;
+  _akci    := (_v ->> 'akci')::int;
+
+  PERFORM pg_temp.tvrd(_terminu = _rezervaci,
+    format('`terminu` počítá REZERVACE — řádky na drahách (%s)', _terminu));
+  PERFORM pg_temp.tvrd(_akci = _rezervaci - _dvojcat,
+    format('`akci` počítá AKCE — každý dvoudráhový termín je JEDNA (%s akcí proti %s rezervacím)',
+           _akci, _terminu));
+  PERFORM pg_temp.tvrd(_akci < _terminu,
+    'u termínů na dvou drahách je akcí MÍŇ než rezervací — to je celý ten rozdíl, '
+    'na kterém stojí hláška ve frontendu');
+  -- A obě dráhy opravdu nesou nový název, ať se „míň akcí" nedá splnit tím,
+  -- že by se jedna dráha přejmenovat zapomněla.
+  PERFORM pg_temp.tvrd(
+    (SELECT count(*) FROM public.reservations r JOIN public.events e ON e.id = r.event_id
+      WHERE r.deleted_at IS NULL AND e.title = 'DVĚ DRÁHY JEDNA AKCE'
+        AND r.event_id IN (SELECT r2.event_id FROM public.reservations r2
+                            WHERE r2.series_id = pg_temp.serie() AND r2.deleted_at IS NULL
+                              AND r2.start_at >= now()
+                            GROUP BY r2.event_id HAVING count(*) = 2)) = 2 * _dvojcat,
+    '… a přejmenovaly se OBĚ dráhy každé takové akce (jeden zápis, dva viditelné řádky)');
+
+  -- ÚKLID: název zpátky na ten, se kterým počítá kapitola 3. Dvoudráhové
+  -- termíny se schválně NEMAŽOU — zůstávají jako fixtura i pro kapitoly níž,
+  -- ať se práva a fail-closed měří i nad akcí přes dvě dráhy.
+  PERFORM public.prejmenuj_serii(pg_temp.prvni_budouci(), _nazev_pred);
+END $$;
+
+-- -----------------------------------------------------------------------------
 -- 3) PRÁVA: FAIL-CLOSED NA CELOU SÉRII
 --
 -- Rozhodnutí zákazníka 11. 9. 2026: kdo nesmí na jediný termín, nepřejmenuje
