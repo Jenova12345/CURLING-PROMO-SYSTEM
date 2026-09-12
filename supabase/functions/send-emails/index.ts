@@ -1,24 +1,47 @@
 // Supabase Edge Function: send-emails
 // ---------------------------------------------------------------------------
-// Odešle e-maily z fronty public.email_outbox (stav 'pending').
+// Odešle e-maily z fronty public.email_outbox přes Resend.
 //
-// ⚠️ ZATÍM NEAKTIVNÍ — vědomé rozhodnutí (viz zadání klienta):
-//   1) Fronta se ani neplní, dokud admin nezapne settings.email_notifications_enabled.
-//   2) Tahle funkce bez proměnné RESEND_API_KEY nic neodešle a jen to oznámí.
-// Až bude vybraný poskytovatel (Resend / SMTP) a doména, stačí:
-//   supabase secrets set RESEND_API_KEY=… EMAIL_FROM="Curling Promo Ostrava <rezervace@…>"
+// STAV (11. 9. 2026): NENASAZENO. Funkce je hotová, ale fronta se ani neplní,
+// dokud admin nezapne `settings.email_notifications_enabled` (na produkci je
+// dnes `false` a fronta má 0 řádků), a bez RESEND_API_KEY se neodesílá nic.
+//
+// SECRETY (jména jsou závazná, čtou se přesně takhle):
+//   RESEND_API_KEY      klíč z Resendu. Dokud chybí, běží funkce v režimu náhledu.
+//   EMAIL_FROM          nepovinné; výchozí je odesílatel níž.
+//   EMAIL_MOCK_ENABLED  nepovinné, JEN na lokále a demu. "true" povolí režim
+//                       nanečisto. Na produkci se NENASTAVUJE.
+//
+//   supabase secrets set RESEND_API_KEY=re_xxx
+//   supabase secrets set EMAIL_FROM="Curling Promo Ostrava <noreply@mail.curlingpromoostrava.cz>"
 //   supabase functions deploy send-emails
-// a naplánovat pravidelné volání (pg_cron / Supabase Scheduler, např. každých 5 minut).
+// a naplánovat pravidelné volání (pg_cron / Supabase Scheduler, např. po 5 minutách).
 //
-// Volá se servisním klíčem (service_role) — RLS na email_outbox pouští jen admina.
+// TŘI REŽIMY:
+//   * ostrý      — má klíč, volá Resend, přepisuje stavy.
+//   * náhled     — `{"dryRun": true}` nebo chybějící klíč. NIC nezapisuje,
+//                  jen vrátí, co by odešlo (příjemce, předmět, tělo). Tímhle
+//                  se dají zkontrolovat šablony ještě před získáním klíče.
+//   * nanečisto  — `{"mock": true}`. Projde CELOU cestu včetně zamykání fronty,
+//                  ale místo Resendu nevolá nic a řádky označí `skipped`.
+//                  Schválně NE `sent`: řádek nesmí tvrdit, že e-mail odešel.
+//
+//                  ⚠️ `skipped` je TERMINÁLNÍ stav, nic ho nevrací do fronty.
+//                  Jedno volání proti ostré frontě by tedy nevratně zahodilo
+//                  čekající poštu, tiše a bez chyby. Proto se mock nespouští
+//                  na slovo z těla požadavku: musí být nastavené
+//                  EMAIL_MOCK_ENABLED=true A ZÁROVEŇ nesmí být RESEND_API_KEY.
+//                  Jakmile klíč existuje, mock nemá důvod a odmítá se.
+//
+// POJISTKA PROTI DVOJÍMU ODESLÁNÍ je v databázi, ne tady:
+//   `email_outbox_prevzit()` si dávku zamkne (FOR UPDATE SKIP LOCKED) a hned
+//   přepíše na `sending`, takže souběžný běh týž řádek neuvidí. Dřív se tu
+//   četlo prosté `status='pending'` a dva běhy poslaly každý svůj e-mail.
 //
 // ⚠️ VOLAJÍCÍ SE OVĚŘUJE, A TO ZDE. Platformní `verify_jwt` propustí i
-// PUBLISHABLE klíč, který jede v každém prohlížeči — takže „přihlášený
+// PUBLISHABLE klíč, který jede v každém prohlížeči, takže „přihlášený
 // uživatel" tu není žádná závora. Bez téhle kontroly by frontu mohl vyprázdnit
-// kdokoli: pošta by odešla z domény haly a e-maily, které při odesílání
-// selžou, se po pěti pokusech (`attempts >= 5`) trvale odloží. Dnes je funkce
-// neškodná jen proto, že RESEND_API_KEY není nastavený — až bude, byla by to
-// otevřená brána. Vzor je vedle: `invoice-pdf/index.ts`.
+// kdokoli. Vzor je vedle: `invoice-pdf/index.ts`.
 // ---------------------------------------------------------------------------
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
@@ -37,12 +60,56 @@ const json = (body: unknown, status = 200) =>
   });
 
 const BATCH = 50;
+// ⚠️ Musí odpovídat rozpočtu pokusů v `email_outbox_prevzit` (`attempts < 5`
+// ve výběru, `attempts >= 5` v úklidu). Změna jen tady znamená, že se běžná
+// chyba vzdá jinde než chyba uvíznutá.
+const MAX_POKUSU = 5;
+
+// Resend má ve výchozím nastavení limit 2 požadavky/s. Padesát sekvenčních
+// fetchů bez prodlevy ho spolehlivě překročí a část dávky by shořela na 429.
+const PAUZA_MS = 550;
+
+/**
+ * Chyby, které se NETÝKAJÍ jednoho řádku, ale celé dávky: špatný nebo chybějící
+ * klíč, neověřená doména, překročený limit, výpadek Resendu.
+ *
+ * Rozdíl je zásadní. Kdyby se braly jako chyba řádku, ubere každý běh cronu
+ * jeden pokus a po pěti tiknutích (~25 minut) je první várka reálných
+ * notifikací trvale `failed` — a po opravě klíče nebo ověření domény ji už
+ * nic nepošle. Proto se při nich dávka PŘERUŠÍ a zbytek se vrátí do fronty
+ * BEZ započteného pokusu.
+ */
+const CHYBA_DAVKY = new Set([401, 403, 408, 429, 500, 502, 503, 504]);
+
+const pauza = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const VYCHOZI_ODESILATEL =
+  "Curling Promo Ostrava <noreply@mail.curlingpromoostrava.cz>";
+
+/**
+ * Táž hrubá kontrola jako `public.email_je_platny` v databázi. Je tu podruhé
+ * schválně: do fronty mohl řádek přibýt dřív, než kontrola v SQL vznikla,
+ * a Resend by takovou adresu odmítal pětkrát po sobě jako by šlo o poruchu.
+ */
+const adresaJePlatna = (email: string | null | undefined): boolean =>
+  !!email &&
+  email.length >= 6 &&
+  email.length <= 254 &&
+  /^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$/.test(email);
+
+interface RadekFronty {
+  id: string;
+  email: string;
+  subject: string;
+  body: string;
+  attempts: number;
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   const apiKey = Deno.env.get("RESEND_API_KEY");
-  const from = Deno.env.get("EMAIL_FROM") ?? "Curling Promo Ostrava <onboarding@resend.dev>";
+  const from = Deno.env.get("EMAIL_FROM") ?? VYCHOZI_ODESILATEL;
 
   const url = Deno.env.get("SUPABASE_URL");
   const servisniKlic = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -51,40 +118,162 @@ Deno.serve(async (req) => {
   }
 
   // Servisní klíč obchází RLS, takže tahle funkce nesmí být volatelná zvenčí
-  // bez něj. `verify_jwt` na to nestačí — vyhoví mu i publishable klíč
-  // z bundlu. Táž závora jako v `invoice-pdf/index.ts`.
+  // bez něj. `verify_jwt` na to nestačí, vyhoví mu i publishable klíč z bundlu.
   const auth = req.headers.get("Authorization") ?? "";
   if (!auth.includes(servisniKlic)) {
     return json({ error: "Frontu e-mailů obsluhuje jen server." }, 401);
   }
 
+  let volba: { dryRun?: boolean; mock?: boolean; limit?: number } = {};
+  try {
+    if (req.headers.get("content-type")?.includes("application/json")) {
+      volba = await req.json();
+    }
+  } catch {
+    // prázdné nebo nečitelné tělo = výchozí chování, ne chyba
+  }
+
+  const limit = Math.min(Math.max(Number(volba.limit) || BATCH, 1), 200);
+
+  // Mock zahazuje frontu do terminálního `skipped`, takže ho nesmí spustit
+  // pouhé slovo v těle požadavku. Dvě nezávislé podmínky:
+  //   1) prostředí si o něj výslovně řeklo (na produkci se ta proměnná nenastaví),
+  //   2) neexistuje klíč — jakmile umíme odesílat doopravdy, mock nemá důvod.
+  const mockPovolen = Deno.env.get("EMAIL_MOCK_ENABLED") === "true" && !apiKey;
+  if (volba.mock === true && !mockPovolen) {
+    return json({
+      error: "Režim nanečisto není v tomhle prostředí povolený.",
+      duvod: apiKey
+        ? "RESEND_API_KEY je nastavený, takže se dá testovat naostro."
+        : "Chybí EMAIL_MOCK_ENABLED=true.",
+    }, 400);
+  }
+  const nanecisto = volba.mock === true;
+
+  // Bez klíče se nikdy neodesílá. Místo dřívějšího „nic nedělám" vrátíme
+  // rovnou náhled, ať se dají šablony zkontrolovat před získáním klíče.
+  // `mock` má přednost, jinak by ho náhled spolkl právě tehdy, kdy je
+  // nejvíc potřeba, tedy dokud klíč ještě nemáme.
+  const nahled = volba.dryRun === true || (!apiKey && !nanecisto);
+
   const supabase = createClient(url, servisniKlic, { auth: { persistSession: false } });
 
-  const { data: queue, error } = await supabase
-    .from("email_outbox")
-    .select("id, email, subject, body, attempts")
-    .eq("status", "pending")
-    .order("created_at", { ascending: true })
-    .limit(BATCH);
+  // ---- Náhled: jen čte, nic nezamyká a nic nepřepisuje ---------------------
+  if (nahled) {
+    const { data, error } = await supabase
+      .from("email_outbox")
+      .select("id, email, subject, body, attempts, status")
+      .eq("status", "pending")
+      .order("created_at", { ascending: true })
+      .limit(limit);
 
-  if (error) return json({ error: "Frontu se nepodařilo načíst.", detail: error.message }, 500);
-  if (!queue?.length) return json({ sent: 0, skipped: 0, note: "Fronta je prázdná." });
+    if (error) {
+      return json({ error: "Frontu se nepodařilo načíst.", detail: error.message }, 500);
+    }
 
-  // Bez klíče nic neodesíláme — ale ani frontu nezahazujeme, jen to řekneme nahlas.
-  if (!apiKey) {
     return json({
-      sent: 0,
-      pending: queue.length,
-      note: "RESEND_API_KEY není nastavený — odesílání e-mailů je vypnuté. Fronta zůstává beze změny.",
+      rezim: "nahled",
+      duvod: apiKey ? "vyzadano parametrem dryRun" : "RESEND_API_KEY neni nastaveny",
+      odesilatel: from,
+      ceka: data?.length ?? 0,
+      // Fronta zůstává beze změny, tohle je jen ukázka.
+      nahledy: (data ?? []).map((m) => ({
+        id: m.id,
+        prijemce: m.email,
+        adresaPlatna: adresaJePlatna(m.email),
+        predmet: m.subject,
+        telo: m.body,
+      })),
     });
   }
 
-  let sent = 0;
-  let failed = 0;
+  // ---- Ostrý i nanečisto: dávku si zamkneme přes RPC ----------------------
+  const { data: davka, error: chybaPrevzeti } = await supabase
+    .rpc("email_outbox_prevzit", { _limit: limit });
 
-  for (const mail of queue) {
+  if (chybaPrevzeti) {
+    return json(
+      { error: "Dávku se nepodařilo převzít.", detail: chybaPrevzeti.message },
+      500,
+    );
+  }
+
+  const fronta = (davka ?? []) as RadekFronty[];
+  if (!fronta.length) {
+    return json({ rezim: nanecisto ? "nanecisto" : "ostry", odeslano: 0, note: "Fronta je prázdná." });
+  }
+
+  let odeslano = 0;
+  let preskoceno = 0;
+  let selhalo = 0;
+  let vraceno = 0;
+  let zapisSelhal = 0;
+  let preskoceno422 = 0;
+  let potiz: string | null = null;
+
+  /**
+   * Dopíše výsledek jednoho řádku. Vrací `false`, když se zápis nepovedl.
+   *
+   * Tohle NENÍ kosmetika. supabase-js chybu nehází, vrací ji v `{ error }` —
+   * kdyby se ignorovala, zůstal by úspěšně odeslaný řádek ve stavu `sending`,
+   * po deseti minutách by ho úklid vrátil do fronty a e-mail by odešel PODRUHÉ.
+   */
+  const dokonci = async (id: string, zmeny: Record<string, unknown>): Promise<boolean> => {
+    const { error } = await supabase.from("email_outbox").update(zmeny).eq("id", id);
+    if (error) {
+      zapisSelhal++;
+      potiz ??= `Stav řádku se nepodařilo zapsat: ${error.message}`;
+      return false;
+    }
+    return true;
+  };
+
+  /** Vrátí řádek do fronty BEZ započteného pokusu (chyba nebyla jeho vina). */
+  const vratDoFronty = async (mail: RadekFronty, duvod: string) => {
+    await dokonci(mail.id, {
+      status: "pending",
+      // Pokus se odečítá zpět: rozpočet pěti pokusů je na chyby TOHOTO řádku,
+      // ne na výpadek Resendu nebo špatně nastavený klíč.
+      attempts: Math.max(mail.attempts - 1, 0),
+      claimed_at: null,
+      last_error: duvod.slice(0, 500),
+    });
+    vraceno++;
+  };
+
+  for (let i = 0; i < fronta.length; i++) {
+    const mail = fronta[i];
+
+    // Dávku přerušila chyba, která se netýká řádků: zbytek vracíme netknutý.
+    if (potiz !== null && !nanecisto) {
+      await vratDoFronty(mail, potiz);
+      continue;
+    }
+
+    // Neplatná adresa se tiše přeskočí. Není to porucha odesílání, opakování
+    // by nepomohlo a `failed` by v přehledu vypadalo jako výpadek pošty.
+    if (!adresaJePlatna(mail.email)) {
+      await dokonci(mail.id, {
+        status: "skipped",
+        last_error: "Neplatná adresa příjemce, e-mail se neodesílal.",
+      });
+      preskoceno++;
+      continue;
+    }
+
+    if (nanecisto) {
+      await dokonci(mail.id, {
+        status: "skipped",
+        last_error: "MOCK: běh nanečisto, e-mail se neodesílal.",
+      });
+      preskoceno++;
+      continue;
+    }
+
+    let resp: Response;
     try {
-      const resp = await fetch("https://api.resend.com/emails", {
+      if (i > 0) await pauza(PAUZA_MS);
+      resp = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -94,37 +283,89 @@ Deno.serve(async (req) => {
           text: mail.body,
         }),
       });
-
-      if (resp.ok) {
-        await supabase.from("email_outbox")
-          .update({ status: "sent", sent_at: new Date().toISOString(), attempts: mail.attempts + 1 })
-          .eq("id", mail.id);
-        sent++;
-      } else {
-        const detail = await resp.text();
-        const attempts = mail.attempts + 1;
-        await supabase.from("email_outbox")
-          .update({
-            // po 5 pokusech to vzdáme, ať fronta nebobtná donekonečna
-            status: attempts >= 5 ? "failed" : "pending",
-            attempts,
-            last_error: detail.slice(0, 500),
-          })
-          .eq("id", mail.id);
-        failed++;
-      }
     } catch (e) {
-      const attempts = mail.attempts + 1;
-      await supabase.from("email_outbox")
-        .update({
-          status: attempts >= 5 ? "failed" : "pending",
-          attempts,
-          last_error: String(e).slice(0, 500),
-        })
-        .eq("id", mail.id);
-      failed++;
+      // Síť selhala, e-mail tedy s jistotou neodešel. Tady se pokus počítá:
+      // je to normální přechodná chyba, na kterou je rozpočet pěti pokusů.
+      await dokonci(mail.id, {
+        status: mail.attempts >= MAX_POKUSU ? "failed" : "pending",
+        claimed_at: null,
+        last_error: String(e).slice(0, 500),
+      });
+      selhalo++;
+      continue;
     }
+
+    if (resp.ok) {
+      // ⚠️ Zápis „odesláno" je SCHVÁLNĚ MIMO try/catch kolem fetche.
+      // Kdyby byl uvnitř a selhal, spadlo by to do větve pro NEODESLANÝ
+      // e-mail, řádek by se vrátil do fronty a Resend by ho poslal podruhé.
+      //
+      // Když se zápis nepovede, e-mail přesto odešel, takže se počítá jako
+      // odeslaný. Ale je to tichá cesta k druhému odeslání (úklid takový
+      // řádek za deset minut vrátí do fronty), proto to `dokonci` započítá
+      // do `zapisSelhal` a odpověď skončí chybou, ať to není vidět jen v logu.
+      await dokonci(mail.id, {
+        status: "sent",
+        sent_at: new Date().toISOString(),
+        last_error: null,
+      });
+      odeslano++;
+      continue;
+    }
+
+    const detail = (await resp.text()).slice(0, 500);
+
+    // Chyba celé dávky: špatný klíč, neověřená doména, limit, výpadek.
+    // Přerušit, zbytek vrátit bez započteného pokusu, nahlásit.
+    if (CHYBA_DAVKY.has(resp.status)) {
+      potiz = `Resend odmítl dávku (HTTP ${resp.status}): ${detail}`;
+      await vratDoFronty(mail, potiz);
+      continue;
+    }
+
+    // 422 je `validation_error`. U JEDNOHO řádku to znamená adresu, kterou
+    // opakování nespraví, takže se tiše odloží. Kdyby ho ale vracel každý
+    // řádek, není to adresami: typicky je špatně `EMAIL_FROM`, a zahodit
+    // kvůli tomu celou frontu (a zapsat k tomu „Resend adresu odmítl") by
+    // bylo horší než chyba, protože to ukazuje vinu na klienta.
+    if (resp.status === 422) {
+      if (preskoceno422 >= 2 && odeslano === 0) {
+        potiz = `Resend odmítá dávku jako neplatnou, pravděpodobně EMAIL_FROM: ${detail}`;
+        await vratDoFronty(mail, potiz);
+        continue;
+      }
+      await dokonci(mail.id, {
+        status: "skipped",
+        last_error: `Resend adresu odmítl: ${detail}`,
+      });
+      preskoceno++;
+      preskoceno422++;
+      continue;
+    }
+
+    // Zbytek (typicky 4xx na konkrétním řádku): počítá se jako pokus.
+    // `attempts` už zvýšilo převzetí, takže se tu jen rozhoduje, jestli se
+    // řádek vrátí do fronty, nebo to vzdáme.
+    await dokonci(mail.id, {
+      status: mail.attempts >= MAX_POKUSU ? "failed" : "pending",
+      claimed_at: null,
+      last_error: detail,
+    });
+    selhalo++;
   }
 
-  return json({ sent, failed });
+  return json({
+    rezim: nanecisto ? "nanecisto" : "ostry",
+    odesilatel: from,
+    prevzato: fronta.length,
+    odeslano,
+    preskoceno,
+    selhalo,
+    // Vrácené do fronty bez započteného pokusu (chyba dávky, ne řádku).
+    vraceno,
+    // Řádky, u kterých se nepovedlo zapsat výsledek. Nenulová hodnota znamená
+    // riziko dvojího odeslání, protože úklid je za 10 minut vrátí do fronty.
+    zapisSelhal,
+    potiz,
+  }, potiz === null && zapisSelhal === 0 ? 200 : 500);
 });

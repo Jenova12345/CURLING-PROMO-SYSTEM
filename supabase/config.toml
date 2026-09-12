@@ -427,3 +427,9 @@ verify_jwt = true
 # a funkce si nezávisle na tomhle nastavení ověřuje ještě roli admina, protože
 # spoléhat u fakturace na jedinou kontrolu mimo repo se nevyplácí.
 verify_jwt = true
+
+[functions.send-emails]
+# Vyprazdňuje frontu e-mailů servisním klíčem. `verify_jwt` tu je jen vnější
+# vrstva — sama funkce si navíc ověřuje, že v Authorization je SERVICE_ROLE_KEY,
+# protože `verify_jwt` propustí i publishable klíč z prohlížeče.
+verify_jwt = true
