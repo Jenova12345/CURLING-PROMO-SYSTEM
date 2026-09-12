@@ -38,8 +38,9 @@
 -- MUTAČNÍ ZKOUŠKA: viz `supabase/tests/serie_a_strop_test.sql`, hlavička.
 --
 -- VRATNOST, A ZÁLEŽÍ NA POŘADÍ:
---   1) vrátit předchozí těla `email_outbox_prevzit` a `notify_reservation_changed`
---      z historie migrací,
+--   1) vrátit předchozí těla `email_outbox_prevzit`, `notify_reservation_changed`
+--      A `email_sablona` z historie migrací (na `email_sablona` se snadno
+--      zapomene, mění ji oddíl 4 níž),
 --   2) TEPRVE POTOM smět sáhnout na sloupec
 --      (`ALTER TABLE public.settings DROP COLUMN email_max_za_hodinu;`).
 --
@@ -88,19 +89,22 @@ COMMENT ON COLUMN public.settings.email_max_za_hodinu IS
 -- ani jedno není (ověřeno spuštěním).
 GRANT SELECT (email_max_za_hodinu) ON public.settings TO authenticated;
 
--- Strop se ptá dvakrát: „kolik už tomuhle člověku za hodinu odešlo"
--- (`user_id` + `claimed_at`) a „v jakém pořadí má co čekat" (`user_id`
--- + `created_at`). Na frontě na to nebyl žádný index (jsou tam jen částečné
--- na `created_at` podle stavu), takže by každý běh dělal seqscan přes celou
--- frontu — a právě při náporu, proti kterému strop stojí, tabulka roste,
--- takže by se obrana stala zesilovačem (O(N²)).
--- Tabulka má dnes 0 řádků, oba indexy stojí nula.
+-- Strop se ptá „kolik už tomuhle člověku za poslední hodinu odešlo",
+-- tedy `user_id` + `claimed_at`. Na to na frontě index nebyl.
+--
+-- ZMĚŘENO (ne odhadnuto), 100 000 dávno odeslaných řádků + 50 v okně, což je
+-- tvar ustáleného provozu:
+--     s indexem   1,3 ms   Index Only Scan
+--     bez indexu  5,5 ms   Seq Scan přes celou frontu
+-- Při 100 000 řádcích PŘÍMO V OKNĚ (patologie) si plánovač správně vybere
+-- seqscan sám a index nepřekáží.
+--
+-- ⚠️ Druhý index, na výběr kandidátů podle (user_id, created_at), tu chvíli
+-- byl a je zase pryč: změřeno 0,68 ms s ním a 0,69 ms bez něj, protože
+-- stávající částečný `idx_email_outbox_k_odeslani` tu práci odvede. Index,
+-- který si v měření nic nezasloužil, je jen zápisová režie navíc.
 CREATE INDEX IF NOT EXISTS idx_email_outbox_user_claimed
   ON public.email_outbox (user_id, claimed_at DESC);
-CREATE INDEX IF NOT EXISTS idx_email_outbox_user_created
-  ON public.email_outbox (user_id, created_at DESC);
-
-RESET lock_timeout;
 
 -- -----------------------------------------------------------------------------
 -- 2) Strop odchozí pošty: na STRANĚ ODESÍLÁNÍ, ne při zakládání zprávy
@@ -170,6 +174,29 @@ BEGIN
      SET status = 'failed',
          last_error = COALESCE(o.last_error, 'Odesílání se nedokončilo a vyčerpalo pokusy.')
     FROM k_zavreni z
+   WHERE o.id = z.id;
+
+  -- ---- DRUHÁ MEZ: fronta nesmí růst donekonečna ----------------------------
+  -- Odložení samo o sobě nechrání to, kvůli čemu strop vznikl: když se nic
+  -- nezahazuje, odejde nakonec všechno, jen pomaleji, a kvóta Resendu se
+  -- vyčerpá stejně. Našla to brána code review 12. 9. 2026 a má pravdu.
+  --
+  -- Po agregaci série i přebití (migrace 20260912160000 a 20260912200000) je
+  -- špička o řád menší a normální provoz se sem nikdy nedostane: při stropu
+  -- 100/h by to znamenalo přes 2 400 čekajících zpráv JEDNOMU člověku.
+  -- Kdyby se to přesto stalo, je to porucha — a pak je lepší ji VIDĚT
+  -- než tiše rozesílat den starou poštu.
+  WITH prosle AS (
+    SELECT o.id
+      FROM public.email_outbox o
+     WHERE o.status = 'pending'
+       AND o.created_at < now() - interval '24 hours'
+     FOR UPDATE SKIP LOCKED
+  )
+  UPDATE public.email_outbox o
+     SET status = 'failed',
+         last_error = 'Čekalo ve frontě přes 24 hodin (strop odchozí pošty). Neodesláno, upozornění zůstalo v aplikaci.'
+    FROM prosle z
    WHERE o.id = z.id;
 
   RETURN QUERY
@@ -390,6 +417,11 @@ END;
 $function$;
 
 
+-- `lock_timeout` platil kvůli ALTER TABLE výš. Náhrady funkcí (`CREATE OR
+-- REPLACE`) berou zámek jen na řádek v `pg_proc`, ale krátký timeout jim
+-- neuškodí — proto se pouští až tady, ne uprostřed.
+RESET lock_timeout;
+
 -- -----------------------------------------------------------------------------
 -- Sebekontrola
 -- -----------------------------------------------------------------------------
@@ -413,6 +445,14 @@ BEGIN
   END IF;
   IF _zdroj NOT LIKE '%attempts < 5%' THEN
     RAISE EXCEPTION 'Zmizel rozpočet pokusů, přepsalo se to ze staré verze.';
+  END IF;
+  IF _zdroj NOT LIKE '%24 hours%' THEN
+    RAISE EXCEPTION 'Zmizela druhá mez, fronta by mohla růst donekonečna.';
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_indexes
+                  WHERE tablename='email_outbox' AND indexname='idx_email_outbox_user_claimed') THEN
+    RAISE EXCEPTION 'Chybí index pro okno stropu, dotaz by četl celou frontu.';
   END IF;
 
   -- `notify_user` tahle migrace ZÁMĚRNĚ nemění. Kdyby ho přesto někdo zase
@@ -451,6 +491,11 @@ BEGIN
   RAISE NOTICE 'Série posílá jednu zprávu každému autorovi a strop brzdí odesílání, nezahazuje.';
 END $kontrola$;
 
+
+-- Trigger funkci volá Postgres sám, EXECUTE pro PUBLIC k ničemu nepotřebuje.
+-- Zneužít to dnes nejde (bez `NEW`/`OLD` se z API zavolat nedá), ale výchozí
+-- grant pro PUBLIC tu nemá co dělat.
+REVOKE ALL ON FUNCTION public.notify_reservation_changed() FROM public, anon, authenticated;
 
 -- -----------------------------------------------------------------------------
 -- 4) Šablona pro zrušenou sérii

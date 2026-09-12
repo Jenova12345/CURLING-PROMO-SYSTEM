@@ -3,9 +3,11 @@
 -- Migrace 20260912180000_cron_fronty_emailu.sql
 -- =============================================================================
 -- Nejcennější tvrzení tu NENÍ „job existuje", ale dvě jiná:
---   * `posli_frontu_emailu()` čte servisní klíč, takže se k ní z API nesmí
---     dostat nikdo. Kdyby šla zavolat přihlášeným uživatelem, je to sice
---     jen spuštění fronty, ale funkce běží jako `postgres` a čte Vault.
+--   * `posli_frontu_emailu()` čte VAULT, takže se k ní z API nesmí dostat
+--     nikdo — ani `service_role`. Běží jako `postgres` a sahá na tajemství.
+--     (Dřív tu stálo „čte servisní klíč". To byl zbytek po starším návrhu
+--     a byl to opak pravdy: celý smysl téhle migrace je, že se servisní klíč
+--     z databáze NEPOSÍLÁ. Našla to brána code review 12. 9. 2026.)
 --   * Bez tajemství ve Vaultu NESMÍ volat nic. Tohle drží lokál a demo mimo
 --     produkci — kdyby se URL zadrátovala do migrace, `supabase db reset`
 --     na lokále by zavolal ostrou produkci.
@@ -212,6 +214,53 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN _odmitnuto := true;
   END;
   PERFORM pg_temp.tvrd(NOT _odmitnuto, 'JÁDRO: legacy JWT s rolí anon projde (test rozlišuje)');
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 5c) JÁDRO: úklidové joby existují a selhání cronu NEZAMETAJÍ
+-- -----------------------------------------------------------------------------
+-- Brána migrací 12. 9. 2026 tenhle soubor přistihla, že úklidové joby nehlídá
+-- vůbec (mutace je odstranila a test zůstal zelený). A brána code review
+-- ukázala proč na tom záleží: když se `EMAIL_CRON_TOKEN` rozejde s Vaultem,
+-- vrací funkce 401 každých 5 minut donekonečna, `posli_frontu_emailu`
+-- odpověď nečte, `cron.job_run_details` vidí úspěch (požadavek se přece
+-- zařadil) — a jediná stopa se mazala dřív, než se na ni kdokoli podíval.
+DO $$
+DECLARE _uspech text; _chyby text; _fronta text;
+BEGIN
+  SELECT command INTO _uspech FROM cron.job WHERE jobname = 'uklid-odpovedi-pg-net';
+  SELECT command INTO _chyby  FROM cron.job WHERE jobname = 'uklid-chybnych-odpovedi-pg-net';
+  SELECT command INTO _fronta FROM cron.job WHERE jobname = 'uklid-fronty-emailu';
+
+  PERFORM pg_temp.tvrd(_uspech IS NOT NULL, 'úklid odpovědí pg_net je naplánovaný');
+  PERFORM pg_temp.tvrd(_chyby  IS NOT NULL, 'úklid CHYBNÝCH odpovědí je naplánovaný');
+  PERFORM pg_temp.tvrd(_fronta IS NOT NULL, 'retence fronty e-mailů je naplánovaná');
+
+  -- Tohle je to jádro: rychlý úklid se smí dotknout JEN úspěšných odpovědí.
+  PERFORM pg_temp.tvrd(_uspech LIKE '%status_code BETWEEN 200 AND 299%',
+    'JÁDRO: rychlý úklid maže jen úspěšné odpovědi, chyby nechává');
+
+  -- Retence nesmí sáhnout na to, co ještě čeká nebo se odesílá.
+  PERFORM pg_temp.tvrd(_fronta LIKE '%status IN (''sent'', ''failed'', ''skipped'')%',
+    'JÁDRO: retence maže jen dokončené řádky, ne čekající poštu');
+END $$;
+
+-- Tvrzení o chování, ne o textu příkazu: co rychlý úklid opravdu smaže.
+DO $$
+DECLARE _zbylo_ok int; _zbylo_chyb int;
+BEGIN
+  INSERT INTO net._http_response (id, status_code, content, created)
+  VALUES (900001, 200, 'ok',    now() - interval '30 minutes'),
+         (900002, 401, 'chyba', now() - interval '30 minutes');
+
+  EXECUTE (SELECT command FROM cron.job WHERE jobname = 'uklid-odpovedi-pg-net');
+
+  SELECT count(*) INTO _zbylo_ok   FROM net._http_response WHERE id = 900001;
+  SELECT count(*) INTO _zbylo_chyb FROM net._http_response WHERE id = 900002;
+
+  PERFORM pg_temp.tvrd(_zbylo_ok = 0,   'stará ÚSPĚŠNÁ odpověď se uklidila');
+  PERFORM pg_temp.tvrd(_zbylo_chyb = 1,
+    'JÁDRO: stará CHYBOVÁ odpověď ZŮSTALA (jinak je selhání cronu neviditelné)');
 END $$;
 
 -- -----------------------------------------------------------------------------

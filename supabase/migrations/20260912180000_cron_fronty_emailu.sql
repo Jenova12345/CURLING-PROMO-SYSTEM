@@ -56,26 +56,54 @@
 -- tiknutí je jedno HTTP volání i s prázdnou frontou.
 --
 -- MUTAČNÍ ZKOUŠKA: viz `supabase/tests/cron_fronty_test.sql`, hlavička.
--- VRATNOST: `select cron.unschedule('send-emails-kazdych-5-minut');`
---   + `DROP FUNCTION public.posli_frontu_emailu(text, text, text);`. Rozšíření
---   se nechávají (odinstalace pg_net by shodila i jiné případné uživatele).
+-- VRATNOST: odplánovat VŠECHNY ČTYŘI joby, na tři z nich se snadno zapomene:
+--   select cron.unschedule('send-emails-kazdych-5-minut');
+--   select cron.unschedule('uklid-odpovedi-pg-net');
+--   select cron.unschedule('uklid-chybnych-odpovedi-pg-net');
+--   select cron.unschedule('uklid-fronty-emailu');
+--   drop function public.posli_frontu_emailu(text, text, text);
+--   Rozšíření se nechávají (odinstalace pg_net by shodila i jiné případné
+--   uživatele). ⚠️ Pozor: odinstalace `pg_net` granty pro `anon`
+--   a `authenticated` na schématu `net` stejně nevrátí zpátky — viz výš.
 -- =============================================================================
 
 CREATE EXTENSION IF NOT EXISTS pg_cron;
-CREATE EXTENSION IF NOT EXISTS pg_net WITH SCHEMA extensions;
+-- `pg_net` je non-relocatable, takže případné `WITH SCHEMA extensions` se
+-- tiše ignoruje a objekty stejně skončí ve schématu `net`. Nepíše se tu proto
+-- klauzule, která by tvrdila něco jiného, než co se stane — kód níž počítá
+-- s `net.http_post` a `net._http_response`.
+CREATE EXTENSION IF NOT EXISTS pg_net;
 
 -- Pokus o zúžení práv, která rozdal supabasí event trigger. Na spravované
 -- instanci to typicky NEPROJDE (granty udělil `supabase_admin`), proto se
 -- výsledek jen VYPÍŠE a migrace kvůli němu nepadá. Je to obrana do hloubky
 -- navíc, ne ta, na které stojí bezpečnost — tou je vyhrazený token výš.
+-- ⚠️ NEÚSPĚŠNÝ `REVOKE` NEVYHODÍ VÝJIMKU. PostgreSQL vrátí jen
+-- `WARNING: no privileges could be revoked` a příkaz USPĚJE. První verze
+-- tohohle bloku na tom stála: hlásila do výpisu pushe „odebráno", zatímco
+-- `authenticated` měl dál USAGE na `net`, EXECUTE na `net.http_post`
+-- i SELECT na `net._http_response`, a větev s pravdivou hláškou se nikdy
+-- nespustila. Našla to brána migrací 12. 9. 2026 a je to přesně ten vzor,
+-- před kterým varuje CLAUDE.md: hlášení tvrdí zavřené dveře a nikdo se
+-- nepodíval na okno vedle. Proto se výsledek PO revoke ZMĚŘÍ.
 DO $zuzeni$
+DECLARE _ma_dal boolean;
 BEGIN
   BEGIN
     EXECUTE 'REVOKE USAGE ON SCHEMA net FROM anon, authenticated';
-    RAISE NOTICE 'net: USAGE pro anon/authenticated odebráno.';
   EXCEPTION WHEN OTHERS THEN
-    RAISE NOTICE 'net: USAGE odebrat nelze (%). Ochrana stojí na vyhrazeném tokenu a na exposed schemas.', SQLERRM;
+    NULL;  -- na spravované instanci to typicky nejde, viz níž
   END;
+
+  SELECT has_schema_privilege('authenticated', 'net', 'USAGE')
+      OR has_schema_privilege('anon', 'net', 'USAGE')
+    INTO _ma_dal;
+
+  IF _ma_dal THEN
+    RAISE NOTICE 'net: USAGE pro anon/authenticated ODEBRAT NELZE (granty udělil supabase_admin). Ochrana stojí na vyhrazeném tokenu a na tom, že `net` NENÍ v exposed schemas PostgRESTu.';
+  ELSE
+    RAISE NOTICE 'net: USAGE pro anon/authenticated opravdu odebráno (ověřeno dotazem, ne jen úspěchem příkazu).';
+  END IF;
 END $zuzeni$;
 
 -- -----------------------------------------------------------------------------
@@ -206,7 +234,7 @@ COMMENT ON FUNCTION public.posli_frontu_emailu(text, text, text) IS
   'Zavolá edge funkci send-emails vyhrazeným tokenem z Vaultu (NE servisním klíčem). Volá ji jen cron; bez tajemství ve Vaultu nedělá nic.';
 
 -- Čte tajemství, takže se k ní z API nesmí dát dosáhnout vůbec.
--- ⚠️ REVOKE musí mířit na NOVOU signaturu (dva parametry), jinak by na staré
+-- ⚠️ REVOKE musí mířit na NOVOU signaturu (tři parametry), jinak by na starých
 -- zůstal výchozí grant pro PUBLIC.
 DROP FUNCTION IF EXISTS public.posli_frontu_emailu();
 DROP FUNCTION IF EXISTS public.posli_frontu_emailu(text, text);
@@ -229,10 +257,43 @@ SELECT cron.schedule(
 
 -- Odpovědi pg_netu obsahují těla našich odpovědí a drží se ~6 h v tabulce
 -- bez RLS. Nic z nich nečteme, tak ať tam neleží déle, než je nutné.
+--
+-- ⚠️ ÚSPĚCH SE MAŽE HNED, CHYBA SE DRŽÍ. Brána code review 12. 9. 2026
+-- upozornila, že selhání cronu je jinak ÚPLNĚ TICHÉ: když se `EMAIL_CRON_TOKEN`
+-- rozejde s Vaultem, vrací funkce 401 každých 5 minut donekonečna,
+-- `posli_frontu_emailu` odpověď nečte, `cron.job_run_details` vidí úspěch
+-- (požadavek se přece zařadil) — a jediná stopa se smazala dřív, než se na ni
+-- kdokoli podíval. Chybové odpovědi se proto drží den; je jich málo a jsou
+-- to jediné místo, kde je vidět, že cron nefunguje.
+--
+-- Kde se na to podívat:
+--   select created, status_code, content from net._http_response
+--    where status_code is distinct from 200 order by created desc limit 20;
 SELECT cron.schedule(
   'uklid-odpovedi-pg-net',
   '*/15 * * * *',
-  $job$DELETE FROM net._http_response WHERE created < now() - interval '15 minutes'$job$
+  $job$DELETE FROM net._http_response
+        WHERE created < now() - interval '15 minutes'
+          AND status_code BETWEEN 200 AND 299$job$
+);
+
+SELECT cron.schedule(
+  'uklid-chybnych-odpovedi-pg-net',
+  '23 4 * * *',
+  $job$DELETE FROM net._http_response WHERE created < now() - interval '1 day'$job$
+);
+
+-- Retence fronty e-mailů. `email_outbox` je provozní fronta, ne obchodní
+-- záznam — co se stalo, zůstává v `notifications`, kterých se tohle netýká.
+-- Bez úklidu rostla donekonečna a strop by pak řadil desetitisíce dávno
+-- odeslaných řádků (změřeno bránou migrací: řazení na disk).
+-- Devadesát dní je s rezervou nad jakoukoli reklamaci „mně nic nepřišlo".
+SELECT cron.schedule(
+  'uklid-fronty-emailu',
+  '41 3 * * *',
+  $job$DELETE FROM public.email_outbox
+        WHERE status IN ('sent', 'failed', 'skipped')
+          AND COALESCE(sent_at, claimed_at, created_at) < now() - interval '90 days'$job$
 );
 
 -- -----------------------------------------------------------------------------
@@ -249,6 +310,17 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'uklid-odpovedi-pg-net') THEN
     RAISE EXCEPTION 'Úklid odpovědí pg_net nevznikl.';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'uklid-chybnych-odpovedi-pg-net') THEN
+    RAISE EXCEPTION 'Úklid chybných odpovědí nevznikl, selhání cronu by zmizelo beze stopy.';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'uklid-fronty-emailu') THEN
+    RAISE EXCEPTION 'Retence fronty e-mailů nevznikla.';
+  END IF;
+  -- Úspěch se maže po 15 minutách, chyba se musí držet dýl.
+  IF (SELECT command FROM cron.job WHERE jobname = 'uklid-odpovedi-pg-net')
+     NOT LIKE '%status_code BETWEEN 200 AND 299%' THEN
+    RAISE EXCEPTION 'Úklid maže i chybové odpovědi, selhání cronu by nebylo vidět.';
   END IF;
 
   IF has_function_privilege('authenticated', 'public.posli_frontu_emailu(text, text, text)', 'EXECUTE')

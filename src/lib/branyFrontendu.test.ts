@@ -321,6 +321,15 @@ describe('Edge funkce: frontu obsluhuje jen server', () => {
     ).toMatch(/const smiVidetObsah\s*=\s*volba\.dryRun === true && jeSluzba/);
   });
 
+  // Vyprázdnit frontu je změna stavu. `GET` se na rozdíl od `POST` ocitá
+  // v historii prohlížeče, v logu proxy a dá se vyvolat prostým odkazem.
+  it('send-emails přijme jen POST', () => {
+    const zdroj = cti('supabase/functions/send-emails/index.ts');
+    expect(zdroj,
+      'metoda se nekontroluje — GET se správným tokenem frontu odešle stejně jako POST.',
+    ).toMatch(/req\.method !== "POST"/);
+  });
+
   // `invoice-pdf` na produkci nasazená není a starý vzor v ní zůstává vědomě,
   // viz docs/ETAPA3-STAV.md. Až se bude nasazovat, musí projít touž opravou.
   it('invoice-pdf má zatím starý vzor (známý dluh)', () => {

@@ -18,6 +18,7 @@
 --   * ze stropu vypadne vazba na `user_id`               → scénář 4b
 --   * ze stropu vypadne okno jedné hodiny                → scénář 4c
 --   * přes strop se řádek zahodí místo odložení          → scénář 4d
+--   * zmizela druhá mez (24 h)                           → scénář 4e
 --   * `count(*)` místo `count(DISTINCT event_id)`        → scénář 7
 --
 -- ⚠️ CO TU DŘÍV STÁLO A BYLA TO NEPRAVDA: seznam sliboval, že zčervená i mutace
@@ -215,6 +216,46 @@ BEGIN
   _vzato := pg_temp.davka(50);
   PERFORM pg_temp.tvrd(_vzato = 2,
     'JÁDRO: po posunu okna se odložené 2 zprávy odeslaly (vzato ' || _vzato || ')');
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 4e) JÁDRO: druhá mez — fronta nesmí růst donekonečna
+-- -----------------------------------------------------------------------------
+-- Odložení samo o sobě nechrání to, kvůli čemu strop vznikl: když se nic
+-- nezahazuje, odejde nakonec všechno, jen pomaleji, a kvóta Resendu se
+-- vyčerpá stejně. Našla to brána code review 12. 9. 2026.
+--
+-- Normální provoz se sem nedostane: při stropu 100/h by to znamenalo přes
+-- 2 400 čekajících zpráv JEDNOMU člověku. Když se to přesto stane, je to
+-- porucha — a pak je lepší ji VIDĚT než tiše rozesílat den starou poštu.
+DO $$
+DECLARE _kdo uuid := '44444444-4444-4444-4444-444444444444';
+        _stare uuid; _cerstve uuid;
+BEGIN
+  DELETE FROM public.email_outbox;
+  UPDATE public.settings SET email_max_za_hodinu = 100;
+
+  INSERT INTO public.email_outbox (user_id, email, subject, body, status, created_at)
+  VALUES (_kdo, 'stare@test.local', 'Staré', 'Staré', 'pending', now() - interval '25 hours')
+  RETURNING id INTO _stare;
+
+  INSERT INTO public.email_outbox (user_id, email, subject, body, status, created_at)
+  VALUES (_kdo, 'cerstve@test.local', 'Čerstvé', 'Čerstvé', 'pending', now() - interval '23 hours')
+  RETURNING id INTO _cerstve;
+
+  PERFORM pg_temp.davka(50);
+
+  PERFORM pg_temp.tvrd(
+    (SELECT status FROM public.email_outbox WHERE id = _stare) = 'failed',
+    'JÁDRO: co čekalo přes 24 hodin, se uzavře jako `failed`');
+  PERFORM pg_temp.tvrd(
+    (SELECT last_error FROM public.email_outbox WHERE id = _stare) LIKE '%24 hodin%',
+    'JÁDRO: a je u toho VIDĚT důvod, ne tiché zmizení');
+
+  -- ROZLIŠUJÍCÍ PROTIPŘÍKLAD: mez nesmí sebrat poštu, která ještě čekat smí.
+  PERFORM pg_temp.tvrd(
+    (SELECT status FROM public.email_outbox WHERE id = _cerstve) = 'sending',
+    'JÁDRO: mladší pošta se normálně odešle (test rozlišuje)');
 END $$;
 
 -- -----------------------------------------------------------------------------

@@ -2,9 +2,14 @@
 // ---------------------------------------------------------------------------
 // Odešle e-maily z fronty public.email_outbox přes Resend.
 //
-// STAV (11. 9. 2026): NENASAZENO. Funkce je hotová, ale fronta se ani neplní,
-// dokud admin nezapne `settings.email_notifications_enabled` (na produkci je
-// dnes `false` a fronta má 0 řádků), a bez RESEND_API_KEY se neodesílá nic.
+// STAV (12. 9. 2026): NASAZENÁ a jednou ostře ověřená — testovací e-mail přes
+// ni prošel do schránky (viz diagnostika `.trim()` níž). Fronta se ale NEPLNÍ:
+// `settings.email_notifications_enabled` je na produkci `false` a `email_outbox`
+// má 0 řádků. Zapnutí zůstává na adminovi.
+//
+// ⚠️ Dřív tu stálo „NENASAZENO" a o 150 řádků níž „12. 9. se to stalo na
+// produkci při prvním ostrém odeslání". Obojí zároveň platit nemohlo; našla to
+// brána code review.
 //
 // SECRETY (jména jsou závazná, čtou se přesně takhle):
 //   RESEND_API_KEY      klíč z Resendu. Dokud chybí, běží funkce v režimu náhledu.
@@ -68,7 +73,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-token",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -151,6 +156,14 @@ interface RadekFronty {
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+
+  // Vyprázdnit frontu je ZMĚNA STAVU, takže jen POST. Dřív se metoda
+  // nekontrolovala vůbec a `GET` se správným tokenem frontu odeslal stejně
+  // jako `POST` — a `GET` se na rozdíl od `POST` ocitá v historii prohlížeče,
+  // v logu proxy a dá se vyvolat prostým odkazem.
+  if (req.method !== "POST") {
+    return json({ error: "Použijte POST." }, 405);
+  }
 
   // ⚠️ `.trim()` NENÍ kosmetika. Secret vložený z proměnné nebo ze souboru
   // s sebou běžně nese KONCOVÝ NOVÝ ŘÁDEK, a ten v hlavičce `Authorization`

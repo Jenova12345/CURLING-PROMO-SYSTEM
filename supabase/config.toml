@@ -429,7 +429,17 @@ verify_jwt = true
 verify_jwt = true
 
 [functions.send-emails]
-# Vyprazdňuje frontu e-mailů servisním klíčem. `verify_jwt` tu je jen vnější
-# vrstva — sama funkce si navíc ověřuje, že v Authorization je SERVICE_ROLE_KEY,
-# protože `verify_jwt` propustí i publishable klíč z prohlížeče.
+# Vyprazdňuje frontu e-mailů. `verify_jwt` je tu JEN vnější vrstva a sama
+# o sobě nechrání nic: propustí i publishable klíč, který jede v prohlížeči
+# každého návštěvníka. Rozhoduje až kontrola uvnitř funkce.
+#
+# Ta přijme volajícího třemi cestami:
+#   * `x-cron-token` shodný s EMAIL_CRON_TOKEN (tak volá cron; umí JEN odeslat
+#     frontu, ne si ji přečíst),
+#   * SERVICE_ROLE_KEY v Authorization,
+#   * dotaz do databáze na `moje_role()` = 'service_role'.
+#
+# ⚠️ Tenhle komentář dřív tvrdil, že se ověřuje SERVICE_ROLE_KEY v Authorization.
+# Neplatí to od a7b72b9 (od té doby se ptá na ROLI, ne na tvar klíče) a podruhé
+# od zavedení cron tokenu. Našla to brána code review 12. 9. 2026.
 verify_jwt = true
