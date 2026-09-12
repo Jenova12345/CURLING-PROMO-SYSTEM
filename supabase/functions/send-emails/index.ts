@@ -296,6 +296,25 @@ Deno.serve(async (req) => {
   // a celá dávka se vrací do fronty bez započteného pokusu.
   const hlavickaJeCista = (v: string) => /^[\t\x20-\x7e\x80-\xff]*$/.test(v);
 
+  /**
+   * Popíše, CO je s klíčem špatně, aniž by ho vypsala.
+   *
+   * Bez tohohle zní hláška „je tam špatný znak" a nikdo neví který. Pozice
+   * a kódový bod stačí k opravě a nic neprozradí: platný klíč Resendu je
+   * `re_` a dál jen alfanumerické znaky, takže cokoli mimo ASCII do něj
+   * nepatří a není to jeho tajná část.
+   */
+  const popisKlice = (v: string): string => {
+    for (let i = 0; i < v.length; i++) {
+      const kod = v.codePointAt(i) ?? 0;
+      if (!(kod === 9 || (kod >= 0x20 && kod <= 0xff))) {
+        return `délka ${v.length}, prefix ${v.startsWith("re_") ? "re_ (v pořádku)" : "NENÍ re_"}, ` +
+          `první vadný znak na pozici ${i}, kódový bod U+${kod.toString(16).toUpperCase().padStart(4, "0")}`;
+      }
+    }
+    return `délka ${v.length}`;
+  };
+
   let odeslano = 0;
   let preskoceno = 0;
   let selhalo = 0;
@@ -303,8 +322,9 @@ Deno.serve(async (req) => {
   let zapisSelhal = 0;
   let preskoceno422 = 0;
   let potiz: string | null = apiKey && !hlavickaJeCista(apiKey)
-    ? "RESEND_API_KEY obsahuje znak, který nesmí do HTTP hlavičky (typicky " +
-      "koncový nový řádek). Nastav secret znovu, bez bílých znaků na konci."
+    ? "RESEND_API_KEY obsahuje znak, který nesmí do HTTP hlavičky. " +
+      "Nastav secret znovu, bez bílých a neviditelných znaků. " +
+      `Diagnostika bez vyzrazení klíče: ${popisKlice(apiKey)}.`
     : null;
 
   /**
