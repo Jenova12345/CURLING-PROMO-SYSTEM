@@ -41,7 +41,19 @@
 // ⚠️ VOLAJÍCÍ SE OVĚŘUJE, A TO ZDE. Platformní `verify_jwt` propustí i
 // PUBLISHABLE klíč, který jede v každém prohlížeči, takže „přihlášený
 // uživatel" tu není žádná závora. Bez téhle kontroly by frontu mohl vyprázdnit
-// kdokoli. Vzor je vedle: `invoice-pdf/index.ts`.
+// kdokoli.
+//
+// Ověřuje se ROLE, ne tvar klíče. Dřív tu (a pořád v `invoice-pdf`) stálo
+// `auth.includes(SUPABASE_SERVICE_ROLE_KEY)`, což vypadá jako kontrola role,
+// ale je to kontrola jedné konkrétní hodnoty. Produkce mezitím přešla na novou
+// generaci klíčů (`sb_secret_…` místo legacy JWT), takže legitimní volání
+// serveru začalo padat a nasazenou funkci nešlo spustit ani z Dashboardu.
+// Seznam přijímaných tvarů klíče by tentýž problém jen odložil k další
+// generaci nebo k první rotaci.
+//
+// `moje_role()` se místo toho zeptá databáze, KDO volá. PostgREST umí ověřit
+// každou generaci klíčů sám, padělek k němu neprojde, a admin dostane
+// 'authenticated' — admin totiž není servisní role.
 // ---------------------------------------------------------------------------
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
@@ -83,6 +95,31 @@ const CHYBA_DAVKY = new Set([401, 403, 408, 429, 500, 502, 503, 504]);
 
 const pauza = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Porovnání dvou tajemství v konstantním čase.
+ *
+ * `a === b` skončí na prvním odlišném znaku, takže doba odpovědi prozrazuje,
+ * kolik znaků souhlasilo. Přes síť je to nepraktické, ale je to zadarmo
+ * a tohle je právě to místo, kde se porovnává tajemství.
+ */
+const shodaVKonstantnimCase = (a: string, b: string): boolean => {
+  // ⚠️ Prázdné se nerovná NIČEMU, ani druhému prázdnému. Bez tohohle řádku
+  // vrátí funkce pro dvě prázdné hodnoty `true` (cyklus se neprovede, rozdíl
+  // zůstane nula) — tedy táž chyba jako kdysi `auth.includes('')`, jen jinak
+  // zabalená. Stačilo by, aby servisní klíč vyšel prázdný (rotace, překlep
+  // v `secrets set`) a anonym s prázdnou hlavičkou by frontu vyprázdnil.
+  if (a.length === 0 || b.length === 0) return false;
+  if (a.length !== b.length) return false;
+  let rozdil = 0;
+  for (let i = 0; i < a.length; i++) rozdil |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return rozdil === 0;
+};
+
+/** Nejdelší token, který má smysl vůbec zkoumat. */
+const MAX_TOKEN = 8192;
+/** Kolik čekat na databázi při ověřování role, než to vzdáme (a odmítneme). */
+const TIMEOUT_OVERENI_MS = 5000;
+
 const VYCHOZI_ODESILATEL =
   "Curling Promo Ostrava <noreply@mail.curlingpromoostrava.cz>";
 
@@ -119,10 +156,54 @@ Deno.serve(async (req) => {
 
   // Servisní klíč obchází RLS, takže tahle funkce nesmí být volatelná zvenčí
   // bez něj. `verify_jwt` na to nestačí, vyhoví mu i publishable klíč z bundlu.
-  const auth = req.headers.get("Authorization") ?? "";
-  if (!auth.includes(servisniKlic)) {
-    return json({ error: "Frontu e-mailů obsluhuje jen server." }, 401);
+  const odmitnout = () =>
+    json({ error: "Frontu e-mailů obsluhuje jen server." }, 401);
+
+  const token = (req.headers.get("Authorization") ?? "")
+    .replace(/^Bearer\s+/i, "")
+    .trim();
+
+  // Tvar a strop JEŠTĚ PŘED síťovým voláním. Rychlá cesta níž se útočníkovým
+  // tokenem nikdy netrefí, takže by každý anonymní požadavek z internetu
+  // propadl až k dotazu do databáze — jedno spojení na požadavek zadarmo.
+  if (!token || token.length > MAX_TOKEN || !/^[A-Za-z0-9._-]+$/.test(token)) {
+    return odmitnout();
   }
+
+  // Rychlá cesta: volající poslal přesně ten klíč, který má funkce sama.
+  let jeServer = shodaVKonstantnimCase(token, servisniKlic);
+
+  // Jinak se zeptáme databáze, na jakou roli PostgREST volajícího přepnul.
+  // Tohle je ta část, která nezávisí na generaci ani na rotaci klíče.
+  //
+  // `apikey` je publishable klíč projektu (jen říká, KTERÝ projekt), zatímco
+  // `Authorization` nese pověření VOLAJÍCÍHO a rozhoduje o roli. Kdyby se do
+  // obojího dal cizí token, odmítne ho brána dřív a ověření by nikdy nedalo
+  // `service_role` — tedy fail-closed, ale ze špatného důvodu.
+  if (!jeServer) {
+    try {
+      const klientVolajiciho = createClient(url, Deno.env.get("SUPABASE_ANON_KEY") ?? "", {
+        auth: { persistSession: false },
+        global: { headers: { Authorization: `Bearer ${token}` } },
+      });
+      // `.rpc()` nemá výchozí timeout: bez tohohle by ověření viselo na
+      // nedostupné databázi, dokud požadavek nezabije platforma.
+      const { data, error } = await klientVolajiciho
+        .rpc("moje_role")
+        .abortSignal(AbortSignal.timeout(TIMEOUT_OVERENI_MS));
+
+      // Tvrdá kontrola typu, ne truthy test. `anon` sem dorazí jako chyba
+      // 42501 (na `moje_role` nemá EXECUTE) a to je ODMÍTNUTÍ, ne „nevím".
+      // A kdyby se návratový typ funkce někdy změnil na tabulku, přišlo by
+      // pole `['service_role']`, které by `if (data)` propustilo.
+      jeServer = !error && typeof data === "string" && data === "service_role";
+    } catch {
+      // Nedostupná databáze, timeout ani rozbitá hlavička neotevírají dveře.
+      jeServer = false;
+    }
+  }
+
+  if (!jeServer) return odmitnout();
 
   let volba: { dryRun?: boolean; mock?: boolean; limit?: number } = {};
   try {

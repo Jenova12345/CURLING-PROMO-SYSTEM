@@ -275,13 +275,37 @@ describe('Edge funkce: frontu obsluhuje jen server', () => {
   // pod servisním klíčem (a obcházejí tím RLS), si musí volajícího ověřit samy.
   const FUNKCE = ['send-emails', 'invoice-pdf'];
 
-  it.each(FUNKCE)('%s porovnává Authorization se servisním klíčem', (jmeno) => {
+  it.each(FUNKCE)('%s si volajícího ověřuje samo', (jmeno) => {
     const zdroj = cti(`supabase/functions/${jmeno}/index.ts`);
     expect(zdroj, `${jmeno} nečte hlavičku Authorization`).toMatch(/headers\.get\(['"]Authorization['"]\)/);
+  });
+
+  // `send-emails` se od 12. 9. 2026 ptá na ROLI, ne na tvar klíče. Důvod:
+  // produkce přešla na novou generaci klíčů (`sb_secret_…`) a porovnání
+  // řetězce začalo odmítat legitimní volání serveru. Seznam přijímaných
+  // tvarů klíče by tentýž problém jen odložil k další generaci nebo rotaci.
+  it('send-emails ověřuje roli volajícího přes moje_role()', () => {
+    const zdroj = cti('supabase/functions/send-emails/index.ts');
     expect(zdroj,
-      `${jmeno} neporovnává Authorization se servisním klíčem — pak ji zavolá ` +
-      'kdokoli s veřejným klíčem z bundlu.',
-    ).toMatch(/auth\.includes\(/);
+      'send-emails se neptá databáze na roli volajícího — pak závisí na tvaru ' +
+      'klíče a rozbije se při rotaci nebo další generaci.',
+    ).toMatch(/rpc\(['"]moje_role['"]\)/);
+    expect(zdroj,
+      'send-emails nepustí dál jen `service_role` — zkontroluj rozhodovací podmínku.',
+    ).toMatch(/===\s*['"]service_role['"]/);
+    // Ověření MUSÍ jet pod pověřením VOLAJÍCÍHO. Kdyby se zeptalo servisním
+    // klíčem, vrátí `service_role` vždycky a brána propustí kohokoli — tichá,
+    // plně zelená díra.
+    expect(zdroj,
+      'ověření role nejede s hlavičkou volajícího — pak by vrátilo service_role vždy.',
+    ).toMatch(/Authorization:\s*`Bearer \$\{token\}`/);
+  });
+
+  // `invoice-pdf` na produkci nasazená není a starý vzor v ní zůstává vědomě,
+  // viz docs/ETAPA3-STAV.md. Až se bude nasazovat, musí projít touž opravou.
+  it('invoice-pdf má zatím starý vzor (známý dluh)', () => {
+    const zdroj = cti('supabase/functions/invoice-pdf/index.ts');
+    expect(zdroj).toMatch(/auth\.includes\(/);
   });
 });
 

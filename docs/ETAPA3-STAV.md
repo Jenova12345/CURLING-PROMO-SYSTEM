@@ -1064,3 +1064,43 @@ firma základ 14 000 na dokladu, 15 680 v dluhu (12 % DPH).
 **Stav: NENASAZENO.** Migrace `20260909180000_rucni_celkova_cena.sql` čeká na
 `scripts/safe-deploy.sh`. Ověřeno proti produkci (read-only), že ani jeden ze
 416 živých řádků neporuší nové CHECK constrainty.
+
+---
+
+## Známý dluh: `invoice-pdf` ověřuje volajícího podle tvaru klíče (12. 9. 2026)
+
+`supabase/functions/invoice-pdf/index.ts:54` má pořád
+
+```ts
+if (!auth.includes(klic))
+```
+
+což vypadá jako kontrola role, ale je to porovnání s jednou konkrétní hodnotou.
+
+**Proč to je vada, ne jen ošklivost:** produkce (`fcwubbytqxubgptftnru`) přešla
+na novou generaci API klíčů. Ověřeno 12. 9. 2026 přes digesty secrets
+(`supabase secrets list` ukazuje sha256; potvrzeno na `SUPABASE_URL`, kde
+hodnotu známe): `SUPABASE_ANON_KEY` vstřikovaný do edge funkcí je
+`sb_publishable_…`, ne legacy JWT. Legacy `service_role` JWT tedy projde bránou
+platformy, ale tahle kontrola ho odmítne. U `send-emails` to znamenalo, že
+nasazenou funkci nešlo spustit ani z Dashboardu.
+
+**Proč se to tady neopravilo:** `invoice-pdf` na produkci **není nasazená**
+(`supabase functions list` ji neukazuje) a má jiný volací řetězec
+(`invoice-pdf-url` ← `src/hooks/useInvoices.ts:132`), který si zaslouží vlastní
+ověření. Oprava naslepo by se nedala změřit.
+
+**Jak to opravit, až se bude nasazovat:** stejně jako `send-emails` — zeptat se
+databáze na roli přes `public.moje_role()` (migrace
+`20260912140000_overeni_servisni_role.sql`) a pustit dál jen `service_role`.
+Vzor i s ošetřením chyb, timeoutem a stropem na délku tokenu je v
+`supabase/functions/send-emails/index.ts`, bránu na to má
+`supabase/tests/send_emails_auth_zavod.sh`.
+
+**Pozor na past, která tohle jednou propustila:** ověření MUSÍ jet klientem
+s hlavičkou VOLAJÍCÍHO. Kdyby se zeptalo servisním klíčem, vrátí `service_role`
+vždycky a brána propustí kohokoli — tichá, plně zelená díra.
+
+Dokud to platí, drží dvojkolejnost `src/lib/branyFrontendu.test.ts`: jedno
+tvrzení hlídá nový vzor u `send-emails`, druhé starý vzor u `invoice-pdf`.
+Až se `invoice-pdf` opraví, druhé tvrzení se smaže.
