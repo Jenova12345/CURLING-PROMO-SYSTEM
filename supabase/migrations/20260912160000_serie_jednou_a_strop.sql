@@ -226,9 +226,45 @@ BEGIN
      GROUP BY o.user_id
   ),
   kandidati AS (
+    -- ⚠️ NENÍ TO PROSTÉ FIFO, A JE TO ZÁMĚR. Strop se počítá na PŘÍJEMCE,
+    -- takže cizí člověk umí vyrobit provoz na adresu oběti: bezpečnostní brána
+    -- 12. 9. 2026 změřila, že obyčejný člen klubu opakovaným zakládáním
+    -- a rušením rezervace pošle zástupci deset e-mailů a může v tom
+    -- pokračovat. Při striktním FIFO by se obětina SKUTEČNÁ zpráva
+    -- („vaši rezervaci zrušili") zařadila až za tu hromadu a při stropu
+    -- 100/h by se k ní nikdy nedostalo.
+    --
+    -- Přednost proto mají zprávy o tom, co člověk ZTRATIL. Ty přijdou jednou
+    -- za událost a nedají se nasypat: zrušení a přebití zakládá správce haly,
+    -- ne ten, kdo se snaží zahltit. Rutinní „máte rezervaci k potvrzení"
+    -- čeká za nimi. Uvnitř téže priority pořád platí pořadí příchodu.
+    --
+    -- Tím se útok mění z „oběť nedostane nic" na „oběť dostane to podstatné
+    -- a rutinní pošta se zdrží". Samotné zahlcení tím vyřešené NENÍ, to je
+    -- otevřená otázka na PM (viz docs) — tohle jen brání tomu, aby kvůli němu
+    -- zmizely zprávy, na kterých záleží.
     SELECT o.id, o.user_id, o.created_at,
-           row_number() OVER (PARTITION BY o.user_id ORDER BY o.created_at) AS poradi
+           row_number() OVER (
+             -- Řádky bez `user_id` tvoří JEDEN společný kbelík, ne neomezenou
+             -- cestu okolo stropu. Brána změřila obejití: strop 1 → vzato 200.
+             --
+             -- ⚠️ Tu díru dělala PODMÍNKA NÍŽ (`k.user_id IS NULL OR …`), která
+             -- takové řádky pouštěla všechny; ta je pryč. `COALESCE` tady je
+             -- jen srozumitelnost — `PARTITION BY NULL` je svede dohromady
+             -- stejně, takže samo o sobě nic neopravuje (ověřeno mutací:
+             -- vrácení `PARTITION BY o.user_id` chování nezmění).
+             -- `user_id` se přitom vyprázdní i samo, přes `ON DELETE SET NULL`.
+             PARTITION BY COALESCE(o.user_id, '00000000-0000-0000-0000-000000000000'::uuid)
+             ORDER BY CASE n.type
+                        WHEN 'reservation_series_cancelled' THEN 0
+                        WHEN 'reservation_cancelled'        THEN 0
+                        WHEN 'reservation_overridden'       THEN 0
+                        WHEN 'reservation_changed'          THEN 1
+                        ELSE 2
+                      END,
+                      o.created_at) AS poradi
       FROM public.email_outbox o
+      LEFT JOIN public.notifications n ON n.id = o.notification_id
      WHERE o.attempts < 5
        AND (o.status = 'pending'
             OR (o.status = 'sending'
@@ -240,11 +276,10 @@ BEGIN
     -- od příštího běhu — tedy strop + dávka místo stropu.
     SELECT k.id
       FROM kandidati k
-      LEFT JOIN uz_slo_ven u ON u.user_id = k.user_id
-     -- Řádek bez `user_id` (ruční vložení, servisní zpráva) strop neřeší:
-     -- není komu ho účtovat a nesmí kvůli tomu uvíznout.
-     WHERE k.user_id IS NULL
-        OR k.poradi <= greatest(_strop - COALESCE(u.kolik, 0), 0)
+      LEFT JOIN uz_slo_ven u
+             ON u.user_id = COALESCE(k.user_id, '00000000-0000-0000-0000-000000000000'::uuid)
+     -- Strop platí i na společný kbelík bez `user_id` (viz `kandidati` výš).
+     WHERE k.poradi <= greatest(_strop - COALESCE(u.kolik, 0), 0)
   ),
   vybrane AS (
     -- Zámek se bere až tady, nad prostým scanem. `FOR UPDATE` nejde spojit
@@ -462,6 +497,12 @@ BEGIN
   END IF;
   IF _zdroj NOT LIKE '%attempts < 5%' THEN
     RAISE EXCEPTION 'Zmizel rozpočet pokusů, přepsalo se to ze staré verze.';
+  END IF;
+  IF _zdroj NOT LIKE '%reservation_series_cancelled%' THEN
+    RAISE EXCEPTION 'Výběr nedává přednost důležitým typům, zahlcená oběť je nedostane.';
+  END IF;
+  IF _zdroj NOT LIKE '%00000000-0000-0000-0000-000000000000%' THEN
+    RAISE EXCEPTION 'Řádky bez user_id obcházejí strop.';
   END IF;
   IF _zdroj LIKE '%24 hours%' THEN
     RAISE EXCEPTION 'Vrátila se mez na stáří řádku. Ničí poštu při výpadku cronu, viz oddíl 2.';

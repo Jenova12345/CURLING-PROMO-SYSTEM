@@ -230,11 +230,24 @@ DO $$
 DECLARE _uspech text; _chyby text; _fronta text;
 BEGIN
   SELECT command INTO _uspech FROM cron.job WHERE jobname = 'uklid-odpovedi-pg-net';
-  SELECT command INTO _chyby  FROM cron.job WHERE jobname = 'uklid-chybnych-odpovedi-pg-net';
+  SELECT command INTO _chyby  FROM cron.job WHERE jobname = 'uklid-historie-cronu';
   SELECT command INTO _fronta FROM cron.job WHERE jobname = 'uklid-fronty-emailu';
 
   PERFORM pg_temp.tvrd(_uspech IS NOT NULL, 'úklid odpovědí pg_net je naplánovaný');
-  PERFORM pg_temp.tvrd(_chyby  IS NOT NULL, 'úklid CHYBNÝCH odpovědí je naplánovaný');
+  PERFORM pg_temp.tvrd(_chyby  IS NOT NULL, 'úklid historie cronu je naplánovaný');
+
+  -- ⚠️ Chvíli tu vedle stál job, který měl chybové odpovědi držet DEN.
+  -- Bezpečnostní brána 12. 9. 2026 změřila, že neměl co dělat: `pg_net.ttl`
+  -- je 6 hodin, takže si pg_net svoje odpovědi maže sám a déle je nikdo
+  -- neudrží. Job tedy nic nedržel a jen dodával falešnou jistotu.
+  -- Reálné okno na chybu je `pg_net.ttl` (proti 15 minutám předtím).
+  PERFORM pg_temp.tvrd(
+    NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'uklid-chybnych-odpovedi-pg-net'),
+    'JÁDRO: nevrátil se job slibující delší retenci, než pg_net vůbec dovolí');
+  PERFORM pg_temp.tvrd(
+    current_setting('pg_net.ttl', true) IS NOT NULL,
+    'pg_net.ttl je čitelné (na něm to okno doopravdy stojí): '
+      || COALESCE(current_setting('pg_net.ttl', true), '?'));
   PERFORM pg_temp.tvrd(_fronta IS NOT NULL, 'retence fronty e-mailů je naplánovaná');
 
   -- Tohle je to jádro: rychlý úklid se smí dotknout JEN úspěšných odpovědí.
@@ -244,6 +257,8 @@ BEGIN
   -- Retence nesmí sáhnout na to, co ještě čeká nebo se odesílá.
   PERFORM pg_temp.tvrd(_fronta LIKE '%status IN (''sent'', ''failed'', ''skipped'')%',
     'JÁDRO: retence maže jen dokončené řádky, ne čekající poštu');
+  PERFORM pg_temp.tvrd(_chyby LIKE '%cron.job_run_details%',
+    'historie cronu se uklízí (pg_cron ji sám nemaže)');
 END $$;
 
 -- Tvrzení o chování, ne o textu příkazu: co rychlý úklid opravdu smaže.

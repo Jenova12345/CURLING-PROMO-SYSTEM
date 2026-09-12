@@ -20,6 +20,8 @@
 --   * přes strop se řádek zahodí místo odložení          → scénář 4d
 --   * vrácená mez na stáří řádku (ničí poštu při výpadku)  → scénář 4e
 --   * strop přes `CROSS JOIN` (prázdná `settings` zastaví vše) → scénář 4f
+--   * výběr zpět na prosté FIFO (zahlcená oběť nedostane nic) → scénář 4g
+--   * řádky bez `user_id` obcházejí strop                    → scénář 4h
 --   * `count(*)` místo `count(DISTINCT event_id)`        → scénář 7
 --
 -- ⚠️ CO TU DŘÍV STÁLO A BYLA TO NEPRAVDA: seznam sliboval, že zčervená i mutace
@@ -347,6 +349,61 @@ BEGIN
   _vzato := pg_temp.davka(50);
   PERFORM pg_temp.tvrd(_vzato = 0,
     'JÁDRO: táž pošta uvnitř okna strop vyčerpá (test rozlišuje), vzato ' || _vzato);
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 4g) JÁDRO: zahlcená oběť dostane to podstatné, ne až po hromadě spamu
+-- -----------------------------------------------------------------------------
+-- Strop se počítá na PŘÍJEMCE, takže cizí člověk umí vyrobit provoz na adresu
+-- oběti. Bezpečnostní brána 12. 9. 2026 změřila, že obyčejný člen klubu
+-- opakovaným zakládáním a rušením rezervace pošle zástupci deset e-mailů
+-- a může v tom pokračovat. Při striktním FIFO by se obětina SKUTEČNÁ zpráva
+-- („vaši rezervaci zrušili") zařadila až za tu hromadu a při vyčerpaném
+-- stropu by se k ní nikdy nedostalo.
+DO $$
+DECLARE _kdo uuid := '44444444-4444-4444-4444-444444444444';
+        _dulezita uuid;
+BEGIN
+  DELETE FROM public.email_outbox;
+  UPDATE public.settings SET email_max_za_hodinu = 2;
+
+  -- Útočník nasype rutinní poštu. Je STARŠÍ, takže při FIFO by šla první.
+  FOR i IN 1..20 LOOP
+    PERFORM public.notify_user(_kdo, 'reservation_needs_approval',
+      'Máte rezervaci k potvrzení', 'Spam ' || i, '/calendar');
+  END LOOP;
+  UPDATE public.email_outbox SET created_at = now() - interval '30 minutes';
+
+  -- A teprve POTOM přijde to, na čem oběti opravdu záleží.
+  _dulezita := public.notify_user(_kdo, 'reservation_cancelled',
+    'Rezervace byla zrušena', 'Přišli jste o led', '/calendar');
+
+  PERFORM pg_temp.davka(50);
+
+  PERFORM pg_temp.tvrd(
+    (SELECT status FROM public.email_outbox WHERE notification_id = _dulezita) = 'sending',
+    'JÁDRO: zpráva o zrušení se odešle i přes 20 starších rutinních zpráv');
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 4h) JÁDRO: řádky bez `user_id` strop neobcházejí
+-- -----------------------------------------------------------------------------
+-- Bezpečnostní brána změřila obejití: při stropu 1 si dávka vzala 200 řádků
+-- bez `user_id`. Prázdné `user_id` přitom nevzniká jen ručním vložením —
+-- doplní ho i `ON DELETE SET NULL`, když zanikne profil.
+DO $$
+DECLARE _vzato int;
+BEGIN
+  DELETE FROM public.email_outbox;
+  UPDATE public.settings SET email_max_za_hodinu = 3;
+
+  INSERT INTO public.email_outbox (email, subject, body, status)
+  SELECT 'bez-uzivatele@test.local', 'Servisní', 'Servisní', 'pending'
+    FROM generate_series(1, 50);
+
+  _vzato := pg_temp.davka(200);
+  PERFORM pg_temp.tvrd(_vzato = 3,
+    'JÁDRO: i pošta bez `user_id` podléhá stropu (vzato ' || _vzato || ', čekáno 3)');
 END $$;
 
 -- -----------------------------------------------------------------------------

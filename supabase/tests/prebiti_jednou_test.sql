@@ -16,6 +16,7 @@
 --   * vypuštěné `GROUP BY u.user_id`                            → scénář 1
 --   * vypuštěná značka `app.prebiti`                            → scénář 1
 --   * vypuštěné `subject_reps` z LATERAL (okruh příjemců)       → scénář 4
+--   * souhrn slévaný napříč kluby (`GROUP BY` jen u.user_id)     → scénář 5
 --
 -- POZOR NA PAST: každý scénář potřebuje VLASTNÍ den a vlastní akci. Dedup
 -- upozornění na změnu je transakčně lokální a tenhle soubor je jedna
@@ -214,6 +215,52 @@ BEGIN
   PERFORM pg_temp.tvrd(_autor = 1, 'autor rezervace dostal zprávu');
   PERFORM pg_temp.tvrd(_zastupce = 1,
     'JÁDRO: zprávu dostal i ZÁSTUPCE KLUBU, který rezervaci nezaložil');
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 5) JÁDRO: kdo zastupuje dva kluby, dostane zprávu ZA KAŽDÝ zvlášť
+-- -----------------------------------------------------------------------------
+-- Souhrn se dřív slučoval jen podle člověka a `subject_id` se bralo náhodným
+-- `array_agg(...)[1]`, takže jedna zpráva mohla mluvit o obou klubech a odkazovat
+-- na ten, se kterým nemusela mít nic společného. Našla to bezpečnostní brána
+-- 12. 9. 2026. Seed má jen jeden klub s tímhle zástupcem, druhý si přidáme.
+DO $$
+BEGIN
+  INSERT INTO public.subject_reps (subject_id, user_id, level)
+  SELECT s.id, '44444444-4444-4444-4444-444444444444', 'rep'
+    FROM public.subjects s WHERE s.name = 'TJ Poruba'
+  ON CONFLICT DO NOTHING;
+END $$;
+
+SET LOCAL request.jwt.claims = '{"sub":"44444444-4444-4444-4444-444444444444"}';
+DO $$
+BEGIN
+  PERFORM public.create_booking(
+    (SELECT array_agg(id) FROM (SELECT id FROM public.sheets WHERE active ORDER BY name LIMIT 1) q),
+    'training', 'TEST klub A', '2032-08-02 09:00+02','2032-08-02 10:00+02',
+    (SELECT id FROM public.subjects WHERE name = 'CK Ostravské kameny'));
+  PERFORM public.create_booking(
+    (SELECT array_agg(id) FROM (SELECT id FROM public.sheets WHERE active ORDER BY name LIMIT 1) q),
+    'training', 'TEST klub B', '2032-08-02 10:00+02','2032-08-02 11:00+02',
+    (SELECT id FROM public.subjects WHERE name = 'TJ Poruba'));
+END $$;
+
+SET LOCAL request.jwt.claims = '{"sub":"11111111-1111-1111-1111-111111111111"}';
+DO $$
+DECLARE _zprav int; _klubu int;
+BEGIN
+  DELETE FROM public.notifications;
+  PERFORM pg_temp.prebij(DATE '2032-08-02', 9, 11);
+
+  SELECT count(*), count(DISTINCT subject_id) INTO _zprav, _klubu
+    FROM public.notifications
+   WHERE type = 'reservation_overridden'
+     AND user_id = '44444444-4444-4444-4444-444444444444';
+
+  PERFORM pg_temp.tvrd(_zprav = 2,
+    'JÁDRO: dva kluby = dvě zprávy, ne jedna slitá (dostal ' || _zprav || ')');
+  PERFORM pg_temp.tvrd(_klubu = 2,
+    'JÁDRO: každá zpráva odkazuje na svůj klub (různých klubů: ' || _klubu || ')');
 END $$;
 
 DO $$ BEGIN RAISE NOTICE '=== VŠECHNY TESTY PROŠLY ==='; END $$;

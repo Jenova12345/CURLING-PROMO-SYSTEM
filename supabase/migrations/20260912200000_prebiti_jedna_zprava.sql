@@ -279,7 +279,7 @@ BEGIN
              max((z.value->>'end_at')::timestamptz)                     AS do,
              (array_agg(z.value ORDER BY (z.value->>'start_at')::timestamptz))[1] AS prvni,
              (array_agg(rr.id ORDER BY rr.start_at))[1]                 AS rezervace_id,
-             (array_agg(rr.subject_id ORDER BY rr.start_at))[1]         AS subject_id
+             rr.subject_id                                              AS subject_id
         FROM jsonb_array_elements(_cancelled) z
         JOIN public.reservations rr ON rr.id = (z.value->>'reservation_id')::uuid
         CROSS JOIN LATERAL (
@@ -288,7 +288,13 @@ BEGIN
           SELECT rr.created_by
         ) u(user_id)
        WHERE u.user_id IS NOT NULL
-       GROUP BY u.user_id
+       -- ⚠️ SESKUPUJE SE I PODLE KLUBU, ne jen podle člověka. Kdo zastupuje
+       -- dva kluby a přebije se mu led oběma, dostane dvě zprávy, každou za
+       -- svůj klub. Dřív se to slévalo do jedné a `subject_id` se bralo
+       -- náhodným `array_agg(...)[1]`, takže zpráva odkazovala na klub, se
+       -- kterým nemusela mít nic společného. Našla to bezpečnostní brána
+       -- 12. 9. 2026.
+       GROUP BY u.user_id, rr.subject_id
     LOOP
       PERFORM public.notify_user(
         _member.user_id,
@@ -423,6 +429,9 @@ BEGIN
   END IF;
   IF _zdroj NOT LIKE '%count(DISTINCT COALESCE(rr.event_id, rr.id))%' THEN
     RAISE EXCEPTION 'Termíny se počítají po řádcích, dvoudráhový termín se nahlásí dvakrát.';
+  END IF;
+  IF _zdroj NOT LIKE '%GROUP BY u.user_id, rr.subject_id%' THEN
+    RAISE EXCEPTION 'Souhrn přebití se slévá napříč kluby, zpráva odkáže na cizí klub.';
   END IF;
   IF _zdroj NOT LIKE '%app.prebiti%' THEN
     RAISE EXCEPTION 'Trigger u přebitých řádků se neumlčuje, autor dostane dvě vysvětlení téhož.';

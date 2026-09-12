@@ -59,7 +59,7 @@
 -- VRATNOST: odplánovat VŠECHNY ČTYŘI joby, na tři z nich se snadno zapomene:
 --   select cron.unschedule('send-emails-kazdych-5-minut');
 --   select cron.unschedule('uklid-odpovedi-pg-net');
---   select cron.unschedule('uklid-chybnych-odpovedi-pg-net');
+--   select cron.unschedule('uklid-historie-cronu');
 --   select cron.unschedule('uklid-fronty-emailu');
 --   drop function public.posli_frontu_emailu(text, text, text);
 --   Rozšíření se nechávají (odinstalace pg_net by shodila i jiné případné
@@ -258,13 +258,19 @@ SELECT cron.schedule(
 -- Odpovědi pg_netu obsahují těla našich odpovědí a drží se ~6 h v tabulce
 -- bez RLS. Nic z nich nečteme, tak ať tam neleží déle, než je nutné.
 --
--- ⚠️ ÚSPĚCH SE MAŽE HNED, CHYBA SE DRŽÍ. Brána code review 12. 9. 2026
--- upozornila, že selhání cronu je jinak ÚPLNĚ TICHÉ: když se `EMAIL_CRON_TOKEN`
--- rozejde s Vaultem, vrací funkce 401 každých 5 minut donekonečna,
--- `posli_frontu_emailu` odpověď nečte, `cron.job_run_details` vidí úspěch
--- (požadavek se přece zařadil) — a jediná stopa se smazala dřív, než se na ni
--- kdokoli podíval. Chybové odpovědi se proto drží den; je jich málo a jsou
--- to jediné místo, kde je vidět, že cron nefunguje.
+-- ⚠️ ÚSPĚCH SE MAŽE HNED, CHYBA ZŮSTÁVÁ, DOKUD JI NESMAŽE SÁM pg_net.
+-- Brána code review 12. 9. 2026 upozornila, že selhání cronu je jinak ÚPLNĚ
+-- TICHÉ: když se `EMAIL_CRON_TOKEN` rozejde s Vaultem, vrací funkce 401
+-- každých 5 minut donekonečna, `posli_frontu_emailu` odpověď nečte,
+-- `cron.job_run_details` vidí úspěch (požadavek se přece zařadil) — a jediná
+-- stopa se mazala dřív, než se na ni kdokoli podíval.
+--
+-- ⚠️ DRUHÁ OPRAVA: chvíli tu vedle stál ještě job, který měl chyby držet DEN.
+-- Bezpečnostní brána změřila, že neměl co dělat: `pg_net.ttl = 6 hours`,
+-- takže si pg_net svoje odpovědi maže sám a déle je nikdo neudrží. Job tedy
+-- nic nedržel a jen dodával falešnou jistotu. Reálné okno na chybu je 6 hodin
+-- (proti 15 minutám předtím) a je to vidět z hodnoty `pg_net.ttl`, ne z názvu
+-- jobu, který by sliboval víc.
 --
 -- Kde se na to podívat:
 --   select created, status_code, content from net._http_response
@@ -277,10 +283,12 @@ SELECT cron.schedule(
           AND status_code BETWEEN 200 AND 299$job$
 );
 
+-- Historie běhů cronu: pg_cron ji nemaže sám a při čtyřech jobech naroste
+-- řádově o statisíce řádků ročně. Držíme měsíc, což pokryje i zpětné pátrání.
 SELECT cron.schedule(
-  'uklid-chybnych-odpovedi-pg-net',
-  '23 4 * * *',
-  $job$DELETE FROM net._http_response WHERE created < now() - interval '1 day'$job$
+  'uklid-historie-cronu',
+  '52 3 * * *',
+  $job$DELETE FROM cron.job_run_details WHERE end_time < now() - interval '30 days'$job$
 );
 
 -- Retence fronty e-mailů. `email_outbox` je provozní fronta, ne obchodní
@@ -311,8 +319,8 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'uklid-odpovedi-pg-net') THEN
     RAISE EXCEPTION 'Úklid odpovědí pg_net nevznikl.';
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'uklid-chybnych-odpovedi-pg-net') THEN
-    RAISE EXCEPTION 'Úklid chybných odpovědí nevznikl, selhání cronu by zmizelo beze stopy.';
+  IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'uklid-historie-cronu') THEN
+    RAISE EXCEPTION 'Úklid historie cronu nevznikl, cron.job_run_details poroste donekonečna.';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'uklid-fronty-emailu') THEN
     RAISE EXCEPTION 'Retence fronty e-mailů nevznikla.';
