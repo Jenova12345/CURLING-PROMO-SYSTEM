@@ -301,6 +301,26 @@ describe('Edge funkce: frontu obsluhuje jen server', () => {
     ).toMatch(/Authorization:\s*`Bearer \$\{token\}`/);
   });
 
+  // Cron token je uložený v `net.http_request_queue`, což je tabulka bez RLS.
+  // Ospravedlňuje se to tím, že „umí jedinou věc: vyprázdnit frontu". Dokud
+  // s ním šel poslat `{"dryRun":true}`, nebyla to pravda — vracelo to adresy
+  // a plná těla až 200 zpráv, aniž by se fronta hnula. Změřeno bránou
+  // 12. 9. 2026.
+  it('cron token neumí číst frontu, jen ji odeslat', () => {
+    const zdroj = cti('supabase/functions/send-emails/index.ts');
+    expect(zdroj,
+      'chybí rozlišení cron tokenu od servisního pověření (`jenOdeslat`) — ' +
+      'pak token umí víc, než o něm tvrdí migrace i komentáře.',
+    ).toMatch(/const jenOdeslat\s*=\s*jeCron\s*&&\s*!jeSluzba/);
+    expect(zdroj,
+      'náhled se cron tokenu neodmítá — s ním jde přečíst obsah fronty.',
+    ).toMatch(/volba\.dryRun === true && jenOdeslat/);
+    expect(zdroj,
+      'obsah náhledu není podmíněný servisním pověřením — automatický náhled ' +
+      'po výpadku RESEND_API_KEY by sypal adresy a těla do net._http_response.',
+    ).toMatch(/const smiVidetObsah\s*=\s*volba\.dryRun === true && jeSluzba/);
+  });
+
   // `invoice-pdf` na produkci nasazená není a starý vzor v ní zůstává vědomě,
   // viz docs/ETAPA3-STAV.md. Až se bude nasazovat, musí projít touž opravou.
   it('invoice-pdf má zatím starý vzor (známý dluh)', () => {

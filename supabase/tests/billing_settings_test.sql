@@ -376,7 +376,10 @@ DECLARE
   -- jen X". Do `billing_settings` nepatří: nemá co dělat na dokladu.
   _ocekavane text[] := ARRAY['id', 'singleton', 'club_default_rate', 'commercial_default_rate',
                              'opening_hours', 'updated_by', 'updated_at', 'training_rate',
-                             'tournament_rate', 'email_notifications_enabled', 'ledar_jmeno'];
+                             'tournament_rate', 'email_notifications_enabled', 'ledar_jmeno',
+                             -- Strop odchozí pošty (migrace 20260912160000). Přibyl vědomě:
+                             -- je to podmínka pro zapnutí e-mailů, viz serie_a_strop_test.sql.
+                             'email_max_za_hodinu'];
   _skutecne text[];
   _navic    text[];
 BEGIN

@@ -11,6 +11,13 @@
 //   EMAIL_FROM          nepovinné; výchozí je odesílatel níž.
 //   EMAIL_MOCK_ENABLED  nepovinné, JEN na lokále a demu. "true" povolí režim
 //                       nanečisto. Na produkci se NENASTAVUJE.
+//   EMAIL_CRON_TOKEN    vyhrazený token pro cron. TÁŽ hodnota musí být ve Vaultu
+//                       jako `send_emails_cron_token`. Proč vlastní token místo
+//                       servisního klíče: `CREATE EXTENSION pg_net` udělí
+//                       `anon` i `authenticated` přístup do schématu `net`
+//                       a tabulky pg_netu nemají RLS, takže odchozí hlavičky
+//                       jsou odtamtud čitelné. Tenhle token umí jedinou věc,
+//                       vyprázdnit frontu e-mailů, a jde rotovat samostatně.
 //
 //   supabase secrets set RESEND_API_KEY=re_xxx
 //   supabase secrets set EMAIL_FROM="Curling Promo Ostrava <noreply@mail.curlingpromoostrava.cz>"
@@ -61,7 +68,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-token",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -164,19 +171,44 @@ Deno.serve(async (req) => {
   const odmitnout = () =>
     json({ error: "Frontu e-mailů obsluhuje jen server." }, 401);
 
+  // ---- Cesta pro cron: vyhrazený token --------------------------------------
+  // Cron posílá `Authorization` s PUBLISHABLE klíčem (ten není tajný, jede
+  // v každém prohlížeči) jen proto, aby prošel platformní bránou `verify_jwt`.
+  // O vpuštění rozhoduje až `x-cron-token`.
+  //
+  // Proč vlastní token místo servisního klíče: hlavičky odchozích požadavků
+  // pg_netu leží v `net.http_request_queue`, kde není RLS a kam `CREATE
+  // EXTENSION pg_net` pouští `anon` i `authenticated`. Tohle je jediné
+  // pověření, které z databáze odchází — a umí jedinou věc.
+  const cronToken = Deno.env.get("EMAIL_CRON_TOKEN")?.trim();
+  const poslanyCron = (req.headers.get("x-cron-token") ?? "").trim();
+  const jeCron = !!cronToken && !!poslanyCron &&
+    shodaVKonstantnimCase(poslanyCron, cronToken);
+
   const token = (req.headers.get("Authorization") ?? "")
     .replace(/^Bearer\s+/i, "")
     .trim();
 
-  // Tvar a strop JEŠTĚ PŘED síťovým voláním. Rychlá cesta níž se útočníkovým
-  // tokenem nikdy netrefí, takže by každý anonymní požadavek z internetu
-  // propadl až k dotazu do databáze — jedno spojení na požadavek zadarmo.
-  if (!token || token.length > MAX_TOKEN || !/^[A-Za-z0-9._-]+$/.test(token)) {
-    return odmitnout();
-  }
+  let jeServer = jeCron;
+  // Prokázal se volající SERVISNÍ rolí (klíčem nebo dotazem do DB)? Cron token
+  // sem nepatří — ten smí míň, viz `jenOdeslat` níž.
+  //
+  // Kontroluje se i tehdy, když už prošel cron token: kdo pošle obojí, má
+  // servisní pověření a nemá důvod přijít o náhled. Je to jen porovnání
+  // v paměti, žádné volání navíc.
+  let jeSluzba = shodaVKonstantnimCase(token, servisniKlic);
 
-  // Rychlá cesta: volající poslal přesně ten klíč, který má funkce sama.
-  let jeServer = shodaVKonstantnimCase(token, servisniKlic);
+  if (!jeServer) {
+    // Tvar a strop JEŠTĚ PŘED síťovým voláním. Rychlá cesta níž se útočníkovým
+    // tokenem nikdy netrefí, takže by každý anonymní požadavek z internetu
+    // propadl až k dotazu do databáze — jedno spojení na požadavek zadarmo.
+    if (!token || token.length > MAX_TOKEN || !/^[A-Za-z0-9._-]+$/.test(token)) {
+      return odmitnout();
+    }
+
+    // Rychlá cesta: volající poslal přesně ten klíč, který má funkce sama.
+    jeServer = shodaVKonstantnimCase(token, servisniKlic);
+  }
 
   // Jinak se zeptáme databáze, na jakou roli PostgREST volajícího přepnul.
   // Tohle je ta část, která nezávisí na generaci ani na rotaci klíče.
@@ -202,6 +234,7 @@ Deno.serve(async (req) => {
       // A kdyby se návratový typ funkce někdy změnil na tabulku, přišlo by
       // pole `['service_role']`, které by `if (data)` propustilo.
       jeServer = !error && typeof data === "string" && data === "service_role";
+      jeSluzba = jeServer;
     } catch {
       // Nedostupná databáze, timeout ani rozbitá hlavička neotevírají dveře.
       jeServer = false;
@@ -209,6 +242,18 @@ Deno.serve(async (req) => {
   }
 
   if (!jeServer) return odmitnout();
+
+  // ⚠️ CRON TOKEN NENÍ SERVISNÍ KLÍČ A NESMÍ UMĚT TOTÉŽ. Migrace i komentář výš
+  // ospravedlňují uložení tokenu do tabulky bez RLS tím, že „umí jedinou věc:
+  // vyprázdnit frontu". Bezpečnostní brána 12. 9. 2026 změřila, že to nebyla
+  // pravda: s tím tokenem a veřejným publishable klíčem šlo poslat
+  // `{"dryRun":true,"limit":200}` a opakovaně si přečíst až 200 čekajících
+  // zpráv i s adresami a plnými těly, aniž by se fronta hnula. To není
+  // vyprazdňování fronty, to je čtecí přístup k osobním údajům.
+  //
+  // Od téhle chvíle token umí přesně to, co se o něm tvrdí: odeslat frontu.
+  // Náhled a režim nanečisto chtějí servisní pověření.
+  const jenOdeslat = jeCron && !jeSluzba;
 
   let volba: { dryRun?: boolean; mock?: boolean; limit?: number } = {};
   try {
@@ -225,7 +270,7 @@ Deno.serve(async (req) => {
   // pouhé slovo v těle požadavku. Dvě nezávislé podmínky:
   //   1) prostředí si o něj výslovně řeklo (na produkci se ta proměnná nenastaví),
   //   2) neexistuje klíč — jakmile umíme odesílat doopravdy, mock nemá důvod.
-  const mockPovolen = Deno.env.get("EMAIL_MOCK_ENABLED") === "true" && !apiKey;
+  const mockPovolen = Deno.env.get("EMAIL_MOCK_ENABLED") === "true" && !apiKey && !jenOdeslat;
   if (volba.mock === true && !mockPovolen) {
     return json({
       error: "Režim nanečisto není v tomhle prostředí povolený.",
@@ -240,7 +285,21 @@ Deno.serve(async (req) => {
   // rovnou náhled, ať se dají šablony zkontrolovat před získáním klíče.
   // `mock` má přednost, jinak by ho náhled spolkl právě tehdy, kdy je
   // nejvíc potřeba, tedy dokud klíč ještě nemáme.
+  if (volba.dryRun === true && jenOdeslat) {
+    return json({
+      error: "Náhled fronty vyžaduje servisní pověření, cron token na něj nestačí.",
+    }, 403);
+  }
+
   const nahled = volba.dryRun === true || (!apiKey && !nanecisto);
+
+  // Náhled ukazuje OBSAH pošty (adresy, těla) a odpověď téhle funkce končí
+  // v `net._http_response` — tabulce bez RLS, ze které čte `anon`
+  // i `authenticated`. Podrobnosti proto dostane jen ten, kdo si o náhled
+  // výslovně řekl servisním pověřením. Automatický náhled (chybí nebo se
+  // zrotoval RESEND_API_KEY) vrací jen počty: cron posílá `{}`, takže by jinak
+  // každých 5 minut sypal do té tabulky celou frontu. Změřeno bránou.
+  const smiVidetObsah = volba.dryRun === true && jeSluzba;
 
   const supabase = createClient(url, servisniKlic, { auth: { persistSession: false } });
 
@@ -263,13 +322,21 @@ Deno.serve(async (req) => {
       odesilatel: from,
       ceka: data?.length ?? 0,
       // Fronta zůstává beze změny, tohle je jen ukázka.
-      nahledy: (data ?? []).map((m) => ({
-        id: m.id,
-        prijemce: m.email,
-        adresaPlatna: adresaJePlatna(m.email),
-        predmet: m.subject,
-        telo: m.body,
-      })),
+      ...(smiVidetObsah
+        ? {
+          nahledy: (data ?? []).map((m) => ({
+            id: m.id,
+            prijemce: m.email,
+            adresaPlatna: adresaJePlatna(m.email),
+            predmet: m.subject,
+            telo: m.body,
+          })),
+        }
+        : {
+          // Bez obsahu. Aspoň se pozná, že ve frontě neleží nesmyslné adresy.
+          neplatnychAdres: (data ?? []).filter((m) => !adresaJePlatna(m.email)).length,
+          poznamka: "Obsah fronty se vrací jen na vyžádání se servisním pověřením.",
+        }),
     });
   }
 
