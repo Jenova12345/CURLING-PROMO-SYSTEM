@@ -145,8 +145,13 @@ interface RadekFronty {
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
-  const apiKey = Deno.env.get("RESEND_API_KEY");
-  const from = Deno.env.get("EMAIL_FROM") ?? VYCHOZI_ODESILATEL;
+  // ⚠️ `.trim()` NENÍ kosmetika. Secret vložený z proměnné nebo ze souboru
+  // s sebou běžně nese KONCOVÝ NOVÝ ŘÁDEK, a ten v hlavičce `Authorization`
+  // shodí celý `fetch` na
+  //     TypeError: Failed to construct 'Request': 'headers' … not a valid ByteString
+  // Přesně tohle se 12. 9. 2026 stalo na produkci při prvním ostrém odeslání.
+  const apiKey = Deno.env.get("RESEND_API_KEY")?.trim();
+  const from = (Deno.env.get("EMAIL_FROM") ?? VYCHOZI_ODESILATEL).trim();
 
   const url = Deno.env.get("SUPABASE_URL");
   const servisniKlic = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -284,13 +289,23 @@ Deno.serve(async (req) => {
     return json({ rezim: nanecisto ? "nanecisto" : "ostry", odeslano: 0, note: "Fronta je prázdná." });
   }
 
+  // Klíč, který se nevejde do HTTP hlavičky, je vada NASTAVENÍ, ne vada řádku.
+  // Kdyby se to zjišťovalo až uvnitř smyčky, spolkne každý běh cronu jeden
+  // pokus u každého řádku a po pěti tiknutích je celá fronta trvale `failed` —
+  // a po opravě secretu už ji nic nepošle. Proto se to rozhoduje jednou, tady,
+  // a celá dávka se vrací do fronty bez započteného pokusu.
+  const hlavickaJeCista = (v: string) => /^[\t\x20-\x7e\x80-\xff]*$/.test(v);
+
   let odeslano = 0;
   let preskoceno = 0;
   let selhalo = 0;
   let vraceno = 0;
   let zapisSelhal = 0;
   let preskoceno422 = 0;
-  let potiz: string | null = null;
+  let potiz: string | null = apiKey && !hlavickaJeCista(apiKey)
+    ? "RESEND_API_KEY obsahuje znak, který nesmí do HTTP hlavičky (typicky " +
+      "koncový nový řádek). Nastav secret znovu, bez bílých znaků na konci."
+    : null;
 
   /**
    * Dopíše výsledek jednoho řádku. Vrací `false`, když se zápis nepovedl.
