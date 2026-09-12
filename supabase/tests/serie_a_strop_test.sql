@@ -18,7 +18,8 @@
 --   * ze stropu vypadne vazba na `user_id`               → scénář 4b
 --   * ze stropu vypadne okno jedné hodiny                → scénář 4c
 --   * přes strop se řádek zahodí místo odložení          → scénář 4d
---   * zmizela druhá mez (24 h)                           → scénář 4e
+--   * vrácená mez na stáří řádku (ničí poštu při výpadku)  → scénář 4e
+--   * strop přes `CROSS JOIN` (prázdná `settings` zastaví vše) → scénář 4f
 --   * `count(*)` místo `count(DISTINCT event_id)`        → scénář 7
 --
 -- ⚠️ CO TU DŘÍV STÁLO A BYLA TO NEPRAVDA: seznam sliboval, že zčervená i mutace
@@ -219,43 +220,72 @@ BEGIN
 END $$;
 
 -- -----------------------------------------------------------------------------
--- 4e) JÁDRO: druhá mez — fronta nesmí růst donekonečna
+-- 4e) JÁDRO: VÝPADEK CRONU NESMÍ POŠTU ZNIČIT
 -- -----------------------------------------------------------------------------
--- Odložení samo o sobě nechrání to, kvůli čemu strop vznikl: když se nic
--- nezahazuje, odejde nakonec všechno, jen pomaleji, a kvóta Resendu se
--- vyčerpá stejně. Našla to brána code review 12. 9. 2026.
+-- Tohle je regresní test na vlastní chybu. Chvíli tu byla „druhá mez":
+-- `pending` starší než 24 hodin se uzavíralo jako `failed`, aby fronta
+-- nemohla růst donekonečna. Brána code review 12. 9. 2026 změřila, co to
+-- doopravdy dělá: třicetihodinový VÝPADEK CRONU, dvanáct zpráv, strop 100/h
+-- — tedy nikde nic nepřeteklo — a pět zpráv skončilo trvale `failed`
+-- s `attempts = 0`. Nikdy se je nikdo nepokusil odeslat.
 --
--- Normální provoz se sem nedostane: při stropu 100/h by to znamenalo přes
--- 2 400 čekajících zpráv JEDNOMU člověku. Když se to přesto stane, je to
--- porucha — a pak je lepší ji VIDĚT než tiše rozesílat den starou poštu.
+-- Stáří řádku totiž neříká „tenhle přetekl strop", ale „tenhle tu leží",
+-- a při zastaveném cronu tu leží všechno.
 DO $$
 DECLARE _kdo uuid := '44444444-4444-4444-4444-444444444444';
-        _stare uuid; _cerstve uuid;
+        _stare uuid; _vzato int;
 BEGIN
   DELETE FROM public.email_outbox;
   UPDATE public.settings SET email_max_za_hodinu = 100;
 
+  -- Cron stál 30 hodin, fronta se mezitím plnila.
   INSERT INTO public.email_outbox (user_id, email, subject, body, status, created_at)
-  VALUES (_kdo, 'stare@test.local', 'Staré', 'Staré', 'pending', now() - interval '25 hours')
-  RETURNING id INTO _stare;
+  SELECT _kdo, 'vypadek@test.local', 'Z výpadku', 'Z výpadku', 'pending',
+         now() - interval '30 hours' + (i || ' minutes')::interval
+    FROM generate_series(1, 12) i;
 
-  INSERT INTO public.email_outbox (user_id, email, subject, body, status, created_at)
-  VALUES (_kdo, 'cerstve@test.local', 'Čerstvé', 'Čerstvé', 'pending', now() - interval '23 hours')
-  RETURNING id INTO _cerstve;
+  SELECT id INTO _stare FROM public.email_outbox ORDER BY created_at LIMIT 1;
 
-  PERFORM pg_temp.davka(50);
+  _vzato := pg_temp.davka(50);
 
+  PERFORM pg_temp.tvrd(_vzato = 12,
+    'JÁDRO: po výpadku se pošta odešle celá, ne zčásti (vzato ' || _vzato || ')');
   PERFORM pg_temp.tvrd(
-    (SELECT status FROM public.email_outbox WHERE id = _stare) = 'failed',
-    'JÁDRO: co čekalo přes 24 hodin, se uzavře jako `failed`');
+    (SELECT count(*) FROM public.email_outbox WHERE status = 'failed') = 0,
+    'JÁDRO: stáří řádku samo o sobě NIC neuzavře jako `failed`');
   PERFORM pg_temp.tvrd(
-    (SELECT last_error FROM public.email_outbox WHERE id = _stare) LIKE '%24 hodin%',
-    'JÁDRO: a je u toho VIDĚT důvod, ne tiché zmizení');
+    (SELECT attempts FROM public.email_outbox WHERE id = _stare) = 1,
+    'JÁDRO: i nejstarší zpráva dostala svůj pokus');
+END $$;
 
-  -- ROZLIŠUJÍCÍ PROTIPŘÍKLAD: mez nesmí sebrat poštu, která ještě čekat smí.
-  PERFORM pg_temp.tvrd(
-    (SELECT status FROM public.email_outbox WHERE id = _cerstve) = 'sending',
-    'JÁDRO: mladší pošta se normálně odešle (test rozlišuje)');
+-- -----------------------------------------------------------------------------
+-- 4f) JÁDRO: bez řádku v `settings` se strop nezblázní
+-- -----------------------------------------------------------------------------
+-- Komentář u stropu dřív tvrdil, že dvojitý COALESCE ošetří i chybějící řádek
+-- v `settings`. Nebyla to pravda: `CROSS JOIN` s prázdnou stranou nevrátí NULL,
+-- ale NIC, takže by se nevzalo vůbec nic — ani pošta bez `user_id`, o které
+-- týž komentář tvrdil, že strop neřeší. Oba COALESCE byly mrtvý kód.
+-- Našla to brána code review 12. 9. 2026 měřením („vzato 0").
+DO $$
+DECLARE _vzato int;
+BEGIN
+  DELETE FROM public.email_outbox;
+  PERFORM pg_temp.nasyp('33333333-3333-3333-3333-333333333333', 3);
+
+  -- Řádek bez `user_id`: strop nemá komu ho účtovat a nesmí kvůli tomu uvíznout.
+  INSERT INTO public.email_outbox (email, subject, body, status)
+  VALUES ('bez-uzivatele@test.local', 'Servisní', 'Servisní', 'pending');
+
+  -- `settings` se musí vrátit, jinak by o ně přišly další scénáře.
+  CREATE TEMP TABLE _settings_zaloha ON COMMIT DROP AS SELECT * FROM public.settings;
+  DELETE FROM public.settings;
+
+  _vzato := pg_temp.davka(50);
+  PERFORM pg_temp.tvrd(_vzato = 4,
+    'JÁDRO: bez řádku v `settings` se použije výchozí strop a pošta jde ven (vzato ' || _vzato || ')');
+
+  INSERT INTO public.settings SELECT * FROM _settings_zaloha;
+  DROP TABLE _settings_zaloha;
 END $$;
 
 -- -----------------------------------------------------------------------------

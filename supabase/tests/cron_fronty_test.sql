@@ -20,6 +20,7 @@
 --   * kontrola tvaru běží jen nad klíčem, ne nad tokenem → scénář 5d
 --   * vypuštěná kontrola délky tokenu           → scénář 5d
 --   * vypuštěná kontrola cílové URL             → scénář 5d
+--   * holé `RAISE;` nebo SQLERRM v hlášce        → scénář 5e (jen zdroják, viz tam)
 --
 -- ⚠️ SCÉNÁŘ 3 SE DŘÍV SÁM PŘESKAKOVAL. Ptal se, jestli databáze tajemství má,
 -- a když ano, tiše se vynechal — takže přesně na produkci, kde na tom záleží,
@@ -314,6 +315,39 @@ BEGIN
   BEGIN PERFORM public.posli_frontu_emailu(_jt, _ju, _jk);
   EXCEPTION WHEN OTHERS THEN _odmitnuto := true; END;
   PERFORM pg_temp.tvrd(NOT _odmitnuto, 'JÁDRO: správná trojice projde (test rozlišuje)');
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 5e) Chybová hláška nesmí vyzradit token
+-- -----------------------------------------------------------------------------
+-- Postgres k chybě integrity přilepí „DETAIL: Failing row contains (…)" a v tom
+-- řádku je celá hlavička včetně tokenu. Doletělo by to do
+-- `cron.job_run_details.return_message` i do logu. Proto se původní chyba
+-- nepouští ven a hlásí se jen SQLSTATE. Brána code review 12. 9. 2026
+-- upozornila, že to nic nehlídalo: holé `RAISE;` by testem prošlo.
+--
+-- ⚠️ PŘIZNANÉ OMEZENÍ: tenhle scénář měří ZDROJÁK, ne chování, a je to slabší
+-- tvrzení než zbytek souboru. Chování změřit nejde, a není to lenost — obojí
+-- jsem zkusil a obojí naráží na to, že schéma `net` nám nepatří:
+--   * konflikt v `net.http_request_queue`: tabulka nemá ŽÁDNÁ omezení
+--     (ověřeno dotazem na pg_constraint), takže se v ní chyba vyrobit nedá;
+--   * náhrada `net.http_post` stubem, který spadne s hlavičkami v DETAIL:
+--     `ERROR: permission denied for schema net` — `postgres` tam objekty
+--     zakládat nesmí (týž důvod, proč v migraci neprojde REVOKE na `net`).
+-- Kdyby se to někdy uvolnilo, tenhle scénář patří přepsat na chovový.
+DO $$
+DECLARE _zdroj text;
+BEGIN
+  SELECT prosrc INTO _zdroj FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'posli_frontu_emailu';
+
+  PERFORM pg_temp.tvrd(_zdroj LIKE '%SQLSTATE %',
+    'chyba odesílání se hlásí jen SQLSTATEm');
+  -- Holé `RAISE;` pustí původní hlášku i s DETAIL, tedy i s tokenem.
+  PERFORM pg_temp.tvrd(_zdroj !~ '(?n)^\s*RAISE\s*;\s*$',
+    'JÁDRO: nikde není holé `RAISE;`, které by pustilo původní hlášku ven');
+  PERFORM pg_temp.tvrd(_zdroj NOT LIKE '%SQLERRM%',
+    'JÁDRO: hláška nepřebírá SQLERRM (nese DETAIL s hlavičkami)');
 END $$;
 
 -- -----------------------------------------------------------------------------

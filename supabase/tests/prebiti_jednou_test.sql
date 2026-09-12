@@ -14,6 +14,8 @@
 --   * `notify_user` zpět dovnitř smyčky přes kolizní rezervace → scénář 1
 --   * `count(*)` místo `count(DISTINCT COALESCE(event_id, id))` → scénář 3
 --   * vypuštěné `GROUP BY u.user_id`                            → scénář 1
+--   * vypuštěná značka `app.prebiti`                            → scénář 1
+--   * vypuštěné `subject_reps` z LATERAL (okruh příjemců)       → scénář 4
 --
 -- POZOR NA PAST: každý scénář potřebuje VLASTNÍ den a vlastní akci. Dedup
 -- upozornění na změnu je transakčně lokální a tenhle soubor je jedna
@@ -108,6 +110,16 @@ BEGIN
     'JÁDRO: zpráva uvádí POČET zrušených termínů');
   PERFORM pg_temp.tvrd(_telo LIKE '%od 01.03.2032 08:00 do 01.03.2032 16:00%',
     'zpráva uvádí rozsah od–do');
+
+  -- ⚠️ POČÍTAT VŠECHNY ZPRÁVY, NE JEN `reservation_overridden`.
+  -- Brána code review 12. 9. 2026 ukázala, že tvrzení „z 9 zpráv je 1" bylo
+  -- poloviční pravda: trigger `notify_reservation_changed` o přebití nevěděl
+  -- a přidával ke KAŽDÉMU zrušenému řádku ještě „zrušil(a) <admin>" bez
+  -- zmínky o komerční akci. Test se ptal jen na jeden typ, takže to neviděl.
+  SELECT count(*) INTO _zprav FROM public.notifications
+   WHERE user_id = '44444444-4444-4444-4444-444444444444';
+  PERFORM pg_temp.tvrd(_zprav = 1,
+    'JÁDRO: majitel dostal CELKEM 1 zprávu o všech typech, ne ' || _zprav);
 END $$;
 
 -- -----------------------------------------------------------------------------
@@ -167,6 +179,41 @@ BEGIN
      AND user_id = '44444444-4444-4444-4444-444444444444';
   PERFORM pg_temp.tvrd(_telo LIKE '%bylo zrušeno 3 vašich termínů%',
     'JÁDRO: hlásí 3 termíny, ne 6 řádků. Tělo: ' || COALESCE(_telo, '(žádné)'));
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 4) JÁDRO: zprávu dostanou ZÁSTUPCI KLUBU, nejen autor rezervace
+-- -----------------------------------------------------------------------------
+-- Okruh příjemců je `subject_reps` klubu SJEDNOCENÝ s autorem rezervace.
+-- Brána code review 12. 9. 2026 upozornila, že to nic neměřilo: vypuštění
+-- `subject_reps` z LATERAL nechalo tenhle soubor zelený, protože všechny
+-- scénáře zakládaly rezervaci člověkem, který je zároveň zástupce.
+-- Tady rezervuje 55555555 a měří se, že ji dostane i druhý zástupce 44444444.
+SET LOCAL request.jwt.claims = '{"sub":"55555555-5555-5555-5555-555555555555"}';
+DO $$ BEGIN PERFORM pg_temp.rezervuj(DATE '2032-06-14', 14, 15); END $$;
+
+SET LOCAL request.jwt.claims = '{"sub":"11111111-1111-1111-1111-111111111111"}';
+DO $$
+DECLARE _autor int; _zastupce int;
+BEGIN
+  PERFORM pg_temp.tvrd(
+    (SELECT count(*) FROM public.subject_reps sr
+      JOIN public.subjects s ON s.id = sr.subject_id
+     WHERE s.name = 'CK Ostravské kameny'
+       AND sr.user_id = '44444444-4444-4444-4444-444444444444') = 1,
+    'příprava: 44444444 je zástupce klubu, ale rezervaci nezaložil');
+
+  DELETE FROM public.notifications;
+  PERFORM pg_temp.prebij(DATE '2032-06-14', 14, 15);
+
+  SELECT count(*) INTO _autor FROM public.notifications
+   WHERE type='reservation_overridden' AND user_id = '55555555-5555-5555-5555-555555555555';
+  SELECT count(*) INTO _zastupce FROM public.notifications
+   WHERE type='reservation_overridden' AND user_id = '44444444-4444-4444-4444-444444444444';
+
+  PERFORM pg_temp.tvrd(_autor = 1, 'autor rezervace dostal zprávu');
+  PERFORM pg_temp.tvrd(_zastupce = 1,
+    'JÁDRO: zprávu dostal i ZÁSTUPCE KLUBU, který rezervaci nezaložil');
 END $$;
 
 DO $$ BEGIN RAISE NOTICE '=== VŠECHNY TESTY PROŠLY ==='; END $$;

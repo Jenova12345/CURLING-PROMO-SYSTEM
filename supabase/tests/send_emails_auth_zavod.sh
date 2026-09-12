@@ -82,6 +82,79 @@ fi
 # --- 6: vlastni servisni klic musi projit poad (rychla cesta) ----------------
 odmitnuto "$(vol "$SRK")" && spatne "vlastní servisní klíč NEPROŠEL" || ok "vlastní servisní klíč projde"
 
+# =============================================================================
+# 7-10: CO SMÍ CRON TOKEN — a co ne
+# =============================================================================
+# Tohle jsou nálezy bezpečnostní brány a code review z 12. 9. 2026. Jsou tady
+# v SHELLU schválně: `branyFrontendu.test.ts` je jen regex nad zdrojákem
+# a zůstal 48/48 zelený i po čtyřech mutacích, které tu opravu VYPNOU
+# (vypuštěné `return` z obou bran, neužitý `smiVidetObsah`, obalený
+# `jenOdeslat`). Regex vidí, že text v souboru je; nevidí, jestli něco dělá.
+#
+# Běží jen tehdy, když má lokální funkce nastavený EMAIL_CRON_TOKEN.
+if [ -n "${EMAIL_CRON_TOKEN:-}" ]; then
+  volcron() {  # $1 = telo pozadavku, $2 = metoda (vychozi POST)
+    curl -s -X "${2:-POST}" "$URL/functions/v1/send-emails" \
+         -H "Authorization: Bearer $ANON" \
+         -H "x-cron-token: $EMAIL_CRON_TOKEN" \
+         -H "Content-Type: application/json" -d "${1:-{\}}"
+  }
+
+  # 7) Cron token frontu ODESLAT smí.
+  ODP=$(volcron '{}')
+  odmitnuto "$ODP" && spatne "cron token neprošel ani na odeslání fronty" \
+                   || ok "cron token frontu odeslat smí"
+
+  # 8) ROZLIŠUJÍCÍ: náhled s ním NESMÍ. Dokud šel, vracel adresy a plná těla
+  # až 200 zpráv do `net._http_response`, což je tabulka bez RLS.
+  ODP=$(volcron '{"dryRun":true,"limit":200}')
+  if echo "$ODP" | grep -q "servisní pověření"; then
+    ok "ROZLIŠUJÍCÍ: náhled fronty cron token odmítne"
+  else
+    spatne "ROZLIŠUJÍCÍ: cron token si PŘEČETL frontu přes dryRun -> $(echo "$ODP" | head -c 120)"
+  fi
+
+  # 9) A opravdu se nevrátil obsah, ne jen jiná hláška.
+  echo "$ODP" | grep -qE '"(prijemce|telo)"' \
+    && spatne "odpověď na dryRun s cron tokenem OBSAHUJE adresy nebo těla" \
+    || ok "v odpovědi nejsou ani adresy, ani těla zpráv"
+
+  # 10) Vyprázdnit frontu je změna stavu, takže GET ne.
+  echo "$(volcron '{}' GET)" | grep -q "Použijte POST" \
+    && ok "GET se správným cron tokenem neprojde" \
+    || spatne "GET se správným cron tokenem FRONTU ODESLAL"
+
+  # 11) AUTOMATICKÝ NÁHLED nesmí vysypat obsah fronty.
+  # Tohle je jiná cesta než 8-9 a jiný únik: když chybí (nebo se zrotuje)
+  # RESEND_API_KEY, spadne funkce do náhledu SAMA — a cron posílá `{}`, takže
+  # by každých 5 minut sypala adresy a plná těla do `net._http_response`,
+  # tabulky bez RLS. Scénáře 8-9 to nezměří, protože ty končí na 403 dřív.
+  psql_() { docker exec -i supabase_db_ltrazktulfxvzlvkxdsb psql -U postgres -X -q -A -t "$@"; }
+  psql_ -c "INSERT INTO public.email_outbox (email, subject, body, status)
+            VALUES ('zastupce.klubu@test.local','Rezervace byla zrušena',
+                    'Vaši rezervaci za CK Ostravské kameny zrušil správce.','pending');" >/dev/null
+
+  ODP=$(volcron '{}')
+  if echo "$ODP" | grep -qE '"(prijemce|telo)"|zastupce\.klubu@test\.local'; then
+    spatne "AUTOMATICKÝ NÁHLED vrátil adresy nebo těla -> $(echo "$ODP" | head -c 120)"
+  else
+    ok "automatický náhled bez klíče vrací jen počty, ne obsah"
+  fi
+
+  # ROZLIŠUJÍCÍ PROTIPŘÍKLAD: se SERVISNÍM pověřením a výslovným dryRun se
+  # obsah vrátit MÁ. Bez tohohle by testu vyhověla i funkce, která náhled
+  # nevrací nikdy — a přišli bychom o způsob, jak si zkontrolovat šablony.
+  ODP=$(curl -s -X POST "$URL/functions/v1/send-emails" -H "Authorization: Bearer $SRK" \
+        -H "Content-Type: application/json" -d '{"dryRun":true}')
+  echo "$ODP" | grep -q 'zastupce.klubu@test.local' \
+    && ok "ROZLIŠUJÍCÍ: se servisním pověřením náhled obsah vrátí" \
+    || spatne "ROZLIŠUJÍCÍ: ani servisní pověření obsah náhledu nedostane -> $(echo "$ODP" | head -c 120)"
+
+  psql_ -c "DELETE FROM public.email_outbox WHERE email='zastupce.klubu@test.local';" >/dev/null
+else
+  echo "➖ 7-10 přeskočeno: nastav EMAIL_CRON_TOKEN a pusť znovu (jinak se cesta cronu neměří)"
+fi
+
 echo
 [ "$CHYB" -eq 0 ] && { echo "=== BRÁNA PROŠLA ==="; exit 0; }
 echo "=== BRÁNA SELHALA ($CHYB) ==="; exit 1

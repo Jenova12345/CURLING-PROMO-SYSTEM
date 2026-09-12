@@ -22,6 +22,13 @@
 -- Kdo přišel o víc termínů, dostane jednu zprávu s počtem a rozsahem; kdo
 -- o jeden, dostane původní znění i s dráhou a časem.
 --
+-- A ZÁROVEŇ se na těch řádcích umlčí trigger `notify_reservation_changed`.
+-- Ten o přebití nic neví a přidával ke každému zrušenému řádku ještě
+-- „vaši rezervaci zrušil(a) <admin>" bez zmínky o komerční akci. Změřeno
+-- bránou 12. 9. 2026: osm přebitých termínů = 1 shrnutá zpráva + 8 z triggeru,
+-- tedy devět zpráv se dvěma různými vysvětleními téhož. Sloučení jen
+-- `reservation_overridden` by tu druhou polovinu nechalo být.
+--
 -- Tělo je vygenerované z `pg_get_functiondef` ŽIVÉ PRODUKCE (12. 9. 2026,
 -- ověřeno, že se shoduje s lokální replikou) a zasažená je JEN ta jedna
 -- smyčka — CLAUDE.md, pravidlo 7. Všechno ostatní (priority, zámky,
@@ -218,6 +225,16 @@ BEGIN
   PERFORM set_config('app.trusted_booking', 'on', true);
 
   IF p_override AND _is_admin THEN
+    -- ⚠️ UMLČET TRIGGER `notify_reservation_changed` NA TĚCHHLE ŘÁDCÍCH.
+    -- Storno kvůli přebití si zprávu posílá samo, níž, a shrnuté. Trigger
+    -- o přebití nic neví, takže by ke každému zrušenému řádku přidal ještě
+    -- „vaši rezervaci zrušil(a) <admin>" BEZ ZMÍNKY O KOMERČNÍ AKCI. Změřeno
+    -- bránou code review 12. 9. 2026: osm přebitých termínů = 1 shrnutá zpráva
+    -- + 8 zpráv z triggeru, tedy devět zpráv se dvěma různými vysvětleními
+    -- téhož. Značka je transakčně lokální a hned za smyčkou se zase zhasíná,
+    -- aby neumlčela nic jiného v téže transakci.
+    PERFORM set_config('app.prebiti', 'on', true);
+
     FOR _conf IN
       SELECT c.* FROM public.check_booking_conflicts(p_sheet_ids, p_start, p_end, p_kind) c
     LOOP
@@ -298,6 +315,9 @@ BEGIN
         _member.subject_id);
     END LOOP;
   END IF;
+
+  -- Značku zhasnout hned, ať neumlčí pozdější zásahy v téže transakci.
+  PERFORM set_config('app.prebiti', 'off', true);
 
   -- --- akce (kvůli názvu, typu a štábu) ---------------------------------------
   INSERT INTO public.events (title, event_type, start_time, end_time, required_staff, role_reqs, created_by)
@@ -403,6 +423,9 @@ BEGIN
   END IF;
   IF _zdroj NOT LIKE '%count(DISTINCT COALESCE(rr.event_id, rr.id))%' THEN
     RAISE EXCEPTION 'Termíny se počítají po řádcích, dvoudráhový termín se nahlásí dvakrát.';
+  END IF;
+  IF _zdroj NOT LIKE '%app.prebiti%' THEN
+    RAISE EXCEPTION 'Trigger u přebitých řádků se neumlčuje, autor dostane dvě vysvětlení téhož.';
   END IF;
 
   -- Ochrana proti přepsání ze staré verze: tyhle věci v create_booking byly

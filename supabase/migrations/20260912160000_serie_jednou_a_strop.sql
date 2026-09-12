@@ -142,6 +142,8 @@ AS $function$
 -- hláškou o nejednoznačnosti. Tohle říká, že v případě střetu vyhrává SLOUPEC,
 -- aby to nedrželo jen na kázni při kvalifikování.
 #variable_conflict use_column
+DECLARE
+  _strop int;
 BEGIN
   -- ⚠️ ROZPOČET POKUSŮ JE 5 A ŽIJE NA TŘECH MÍSTECH, která si musí odpovídat:
   -- `attempts >= 5` v úklidu níž, `attempts < 5` ve výběru níž a `MAX_POKUSU`
@@ -176,38 +178,44 @@ BEGIN
     FROM k_zavreni z
    WHERE o.id = z.id;
 
-  -- ---- DRUHÁ MEZ: fronta nesmí růst donekonečna ----------------------------
-  -- Odložení samo o sobě nechrání to, kvůli čemu strop vznikl: když se nic
-  -- nezahazuje, odejde nakonec všechno, jen pomaleji, a kvóta Resendu se
-  -- vyčerpá stejně. Našla to brána code review 12. 9. 2026 a má pravdu.
+  -- ---- PROČ TU NENÍ ŽÁDNÁ „DRUHÁ MEZ" NA STÁŘÍ ----------------------------
+  -- Chvíli tu byla: `pending` starší než 24 hodin se uzavíralo jako `failed`,
+  -- aby fronta nemohla růst donekonečna (brána code review správně namítla,
+  -- že samotné odkládání nechrání kvótu Resendu — odejde nakonec všechno,
+  -- jen pomaleji).
   --
-  -- Po agregaci série i přebití (migrace 20260912160000 a 20260912200000) je
-  -- špička o řád menší a normální provoz se sem nikdy nedostane: při stropu
-  -- 100/h by to znamenalo přes 2 400 čekajících zpráv JEDNOMU člověku.
-  -- Kdyby se to přesto stalo, je to porucha — a pak je lepší ji VIDĚT
-  -- než tiše rozesílat den starou poštu.
-  WITH prosle AS (
-    SELECT o.id
-      FROM public.email_outbox o
-     WHERE o.status = 'pending'
-       AND o.created_at < now() - interval '24 hours'
-     FOR UPDATE SKIP LOCKED
-  )
-  UPDATE public.email_outbox o
-     SET status = 'failed',
-         last_error = 'Čekalo ve frontě přes 24 hodin (strop odchozí pošty). Neodesláno, upozornění zůstalo v aplikaci.'
-    FROM prosle z
-   WHERE o.id = z.id;
+  -- ⚠️ JE TO ZASE PRYČ, PROTOŽE TO NIČILO POŠTU Z ÚPLNĚ JINÉHO DŮVODU.
+  -- Změřeno bránou 12. 9. 2026: třicetihodinový VÝPADEK CRONU, dvanáct zpráv,
+  -- strop 100/h — tedy nikdo nikde nepřetekl — a přesto pět zpráv skončilo
+  -- trvale `failed` s `attempts = 0`. Nikdy se je nikdo nepokusil odeslat.
+  -- Stáří řádku totiž neříká „tenhle přetekl strop", ale „tenhle tu leží",
+  -- a při zastaveném cronu tu leží všechno. `failed` je přitom terminální
+  -- stejně jako `skipped` — a je to TÁŽ vada, kvůli které se zahodil první
+  -- návrh stropu. Podruhé už ji sem nepustím.
+  --
+  -- Co tedy drží frontu na uzdě: (1) série i přebití se slučují do jedné
+  -- zprávy (migrace 20260912160000 a 20260912200000), takže špička, kvůli
+  -- které mez vznikla, vůbec nenastane; (2) strop brzdí RYCHLOST odesílání,
+  -- a právě rychlost je to, co spálí kvótu i reputaci domény; (3) retence
+  -- v migraci 20260912180000 maže DOKONČENÉ řádky po 90 dnech.
+  --
+  -- Co zbývá jako vědomé riziko: naskriptovaný nápor tisíců samostatných
+  -- rezervací frontu nafoukne a ta se bude vyprazdňovat dlouho. Je to ale
+  -- VIDĚT ve frontě, dá se to smazat ručně, a žádná zpráva se přitom
+  -- neztratí. To je lepší směr selhání než tichá ztráta.
+
+  -- ⚠️ Strop se bere SKALÁRNÍM PODDOTAZEM, ne `CROSS JOIN`. Dřív tu stál
+  -- `CROSS JOIN strop` s komentářem, že dvojitý COALESCE ošetří i chybějící
+  -- řádek v `settings`. Nebyla to pravda a brána code review to změřila:
+  -- prázdná `settings` nedá NULL, nedá NIC — `CROSS JOIN` s prázdnou stranou
+  -- vyhodí všechny řádky, takže by se nevzalo vůbec nic, včetně pošty bez
+  -- `user_id`, o které týž komentář tvrdil, že strop neřeší. Oba COALESCE
+  -- byly mrtvý kód. Skalární poddotaz vrátí při prázdné tabulce NULL
+  -- a COALESCE ho převede na výchozích 100.
+  _strop := COALESCE((SELECT email_max_za_hodinu FROM public.settings LIMIT 1), 100);
 
   RETURN QUERY
-  WITH strop AS (
-    -- COALESCE dvakrát schválně: jednou na prázdný sloupec, podruhé (níž)
-    -- na CHYBĚJÍCÍ ŘÁDEK v `settings`. Bez druhého by `_strop` vyšlo NULL,
-    -- porovnání by bylo NULL a pošta by šla ven bez omezení — u pojistky
-    -- musí být směr selhání opačný.
-    SELECT COALESCE(email_max_za_hodinu, 100) AS max FROM public.settings LIMIT 1
-  ),
-  uz_slo_ven AS (
+  WITH uz_slo_ven AS (
     -- Kolik se tomuhle člověku za poslední hodinu UŽ POKUSILO odejít.
     -- `claimed_at` je razítko „sáhli jsme po tom, ať to dopadlo jakkoli",
     -- takže pokrývá `sent`, `sending` i `failed` jedním sloupcem.
@@ -232,12 +240,11 @@ BEGIN
     -- od příštího běhu — tedy strop + dávka místo stropu.
     SELECT k.id
       FROM kandidati k
-      CROSS JOIN strop s
       LEFT JOIN uz_slo_ven u ON u.user_id = k.user_id
      -- Řádek bez `user_id` (ruční vložení, servisní zpráva) strop neřeší:
      -- není komu ho účtovat a nesmí kvůli tomu uvíznout.
      WHERE k.user_id IS NULL
-        OR k.poradi <= greatest(COALESCE(s.max, 100) - COALESCE(u.kolik, 0), 0)
+        OR k.poradi <= greatest(_strop - COALESCE(u.kolik, 0), 0)
   ),
   vybrane AS (
     -- Zámek se bere až tady, nad prostým scanem. `FOR UPDATE` nejde spojit
@@ -296,6 +303,16 @@ BEGIN
   -- Ty by jinak při každém hromadném přepočtu vyrobily klubům desítky
   -- upozornění na změnu, kterou nikdo neudělal.
   IF auth.uid() IS NULL THEN RETURN NULL; END IF;
+
+  -- Storno kvůli PŘEBITÍ si zprávu posílá samo, v `create_booking`, a shrnuté
+  -- za celou akci. Tenhle trigger o přebití nic neví, takže by ke každému
+  -- zrušenému řádku přidal ještě „vaši rezervaci zrušil(a) <admin>" bez
+  -- zmínky o komerční akci — změřeno bránou 12. 9. 2026: osm přebitých termínů
+  -- = 1 shrnutá zpráva + 8 z triggeru, devět zpráv se dvěma vysvětleními téhož.
+  --
+  -- Značku zapaluje a zase zhasíná `create_booking` kolem té jediné smyčky,
+  -- je transakčně lokální a `app.*` se z API nedá nastavit (CLAUDE.md, pravidlo 8).
+  IF current_setting('app.prebiti', true) = 'on' THEN RETURN NULL; END IF;
 
   -- ---- O co jde: storno, nebo přesun? --------------------------------------
   IF OLD.status <> 'cancelled' AND NEW.status = 'cancelled' THEN
@@ -446,8 +463,8 @@ BEGIN
   IF _zdroj NOT LIKE '%attempts < 5%' THEN
     RAISE EXCEPTION 'Zmizel rozpočet pokusů, přepsalo se to ze staré verze.';
   END IF;
-  IF _zdroj NOT LIKE '%24 hours%' THEN
-    RAISE EXCEPTION 'Zmizela druhá mez, fronta by mohla růst donekonečna.';
+  IF _zdroj LIKE '%24 hours%' THEN
+    RAISE EXCEPTION 'Vrátila se mez na stáří řádku. Ničí poštu při výpadku cronu, viz oddíl 2.';
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_indexes
@@ -476,6 +493,9 @@ BEGIN
   -- Bez příjemce v klíči umlčí první autor série všechny ostatní.
   IF _zdroj NOT LIKE '%replace(NEW.created_by::text%' THEN
     RAISE EXCEPTION 'Značka dedupu nenese příjemce, druhý autor série nedostane nic.';
+  END IF;
+  IF _zdroj NOT LIKE '%app.prebiti%' THEN
+    RAISE EXCEPTION 'Trigger neumí zmlknout u přebití, autor dostane dvě vysvětlení téhož.';
   END IF;
   IF _zdroj NOT LIKE '%Série rezervací byla zrušena%' THEN
     RAISE EXCEPTION 'Chybí zpráva popisující zrušenou sérii.';
