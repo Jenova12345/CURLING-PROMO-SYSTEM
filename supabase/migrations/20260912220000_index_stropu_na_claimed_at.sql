@@ -67,14 +67,27 @@ CREATE INDEX IF NOT EXISTS idx_email_outbox_claimed
   ON public.email_outbox (claimed_at);
 
 -- Kontrola, ať migrace nelže o tom, co udělala.
+--
+-- ⚠️ KONTROLUJE SE DEFINICE, NE JEN JMÉNO. `CREATE INDEX IF NOT EXISTS` se
+-- rozhoduje podle JMÉNA: kdyby v databázi už ležel index `idx_email_outbox_claimed`
+-- postavený třeba na `(status)`, příkaz ho tiše přeskočí a kontrola na pouhé
+-- jméno by odkývala index, který dotazu stropu nepomůže vůbec. Změřeno:
+-- podvržený index na `(status)` starou kontrolou prošel. Našla brána
+-- code review 13. 9. 2026.
+--
+-- `schemaname='public'` tu je taky schválně: bez něj by shoda jména v jiném
+-- schématu zastavila nasazení na falešný poplach.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_indexes
-                  WHERE tablename='email_outbox' AND indexname='idx_email_outbox_claimed') THEN
-    RAISE EXCEPTION 'Chybí index pro okno stropu, dotaz by četl celou frontu.';
+                  WHERE schemaname='public' AND tablename='email_outbox'
+                    AND indexname='idx_email_outbox_claimed'
+                    AND indexdef LIKE '%btree (claimed_at)%') THEN
+    RAISE EXCEPTION 'Index pro okno stropu chybí nebo nestojí na claimed_at, dotaz by četl celou frontu.';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_indexes
-              WHERE tablename='email_outbox' AND indexname='idx_email_outbox_user_claimed') THEN
+              WHERE schemaname='public' AND tablename='email_outbox'
+                AND indexname='idx_email_outbox_user_claimed') THEN
     RAISE EXCEPTION 'Starý index na (user_id, claimed_at) zůstal, platí se za něj při každém zápisu.';
   END IF;
 END $$;
