@@ -434,8 +434,10 @@ verify_jwt = true
 # každého návštěvníka. Rozhoduje až kontrola uvnitř funkce.
 #
 # Ta přijme volajícího třemi cestami:
-#   * `x-cron-token` shodný s EMAIL_CRON_TOKEN (tak volá cron; umí JEN odeslat
-#     frontu, ne si ji přečíst),
+#   * `x-cron-token` shodný s EMAIL_CRON_TOKEN (umí JEN odeslat frontu, ne si
+#     ji přečíst). ⚠️ Na produkci se ta proměnná NENASTAVUJE, takže je tahle
+#     cesta dnes inertní — plánovač jde zvenčí z Netlify a nese servisní klíč.
+#     Cesta zůstává pro případ, že by se cron vrátil do databáze,
 #   * SERVICE_ROLE_KEY v Authorization,
 #   * dotaz do databáze na `moje_role()` = 'service_role'.
 #

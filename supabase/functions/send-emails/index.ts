@@ -312,12 +312,20 @@ Deno.serve(async (req) => {
 
   const nahled = volba.dryRun === true || (!apiKey && !nanecisto);
 
-  // Náhled ukazuje OBSAH pošty (adresy, těla) a odpověď téhle funkce končí
+  // Náhled ukazuje OBSAH pošty (adresy, těla), a ten nesmí odcházet nikomu,
+  // kdo si o něj výslovně neřekl servisním pověřením.
+  //
+  // ⚠️ DŮVOD SE ZMĚNIL, POJISTKA ZŮSTÁVÁ. Dřív tu stálo, že odpověď končí
   // v `net._http_response` — tabulce bez RLS, ze které čte `anon`
-  // i `authenticated`. Podrobnosti proto dostane jen ten, kdo si o náhled
-  // výslovně řekl servisním pověřením. Automatický náhled (chybí nebo se
-  // zrotoval RESEND_API_KEY) vrací jen počty: cron posílá `{}`, takže by jinak
-  // každých 5 minut sypal do té tabulky celou frontu. Změřeno bránou.
+  // i `authenticated`. To platilo, dokud měl frontu vyprazdňovat `pg_cron`
+  // + `pg_net`. Ten plán padl, `pg_net` se na produkci neinstaluje a plánovač
+  // běží zvenčí z Netlify (`netlify/functions/posli-emaily.mts`).
+  // Odpověď dnes končí v LOGU NETLIFY, kam vidí každý s přístupem k hostingu,
+  // a zůstává v něm dlouho. Sypat tam každých 5 minut adresy a texty zpráv
+  // klientů je pořád špatně, jen z jiného důvodu.
+  // Automatický náhled (chybí nebo se zrotoval RESEND_API_KEY) proto vrací
+  // jen počty. Plánovač posílá `{ limit: N }` bez `dryRun`, takže na obsah
+  // nedosáhne ani omylem.
   const smiVidetObsah = volba.dryRun === true && jeSluzba;
 
   const supabase = createClient(url, servisniKlic, { auth: { persistSession: false } });

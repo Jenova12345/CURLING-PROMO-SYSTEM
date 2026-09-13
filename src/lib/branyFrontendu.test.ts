@@ -301,11 +301,17 @@ describe('Edge funkce: frontu obsluhuje jen server', () => {
     ).toMatch(/Authorization:\s*`Bearer \$\{token\}`/);
   });
 
-  // Cron token je uložený v `net.http_request_queue`, což je tabulka bez RLS.
-  // Ospravedlňuje se to tím, že „umí jedinou věc: vyprázdnit frontu". Dokud
-  // s ním šel poslat `{"dryRun":true}`, nebyla to pravda — vracelo to adresy
-  // a plná těla až 200 zpráv, aniž by se fronta hnula. Změřeno bránou
-  // 12. 9. 2026.
+  // ⚠️ POZOR NA ZDÁNÍ, ŽE JE TAHLE BRÁNA UŽ ZBYTEČNÁ. Vznikla proto, že cron
+  // token ležel v `net.http_request_queue` — tabulce bez RLS. Ta cesta padla:
+  // `pg_net` se na produkci neinstaluje a plánovač běží zvenčí z Netlify,
+  // takže `EMAIL_CRON_TOKEN` dnes na produkci NENÍ nastavený a je inertní.
+  //
+  // Brána tu přesto zůstává, a to schválně. Tvrzení „cron token umí jedinou
+  // věc: vyprázdnit frontu" je pořád vypsané v komentářích i v migraci, takže
+  // ho někdo dřív nebo později znovu použije. První, kdo tu proměnnou nastaví,
+  // musí dostat token, který doopravdy umí jen odeslat — ne takový, kterým
+  // jde poslat `{"dryRun":true}` a přečíst adresy a plná těla až 200 zpráv.
+  // Přesně to bylo možné, než to 12. 9. 2026 změřila brána.
   it('cron token neumí číst frontu, jen ji odeslat', () => {
     const zdroj = cti('supabase/functions/send-emails/index.ts');
     expect(zdroj,
