@@ -58,10 +58,15 @@ export const TIMEOUT_MS = 25_000;
  * Kolik e-mailů si říct za jeden běh.
  *
  * 20 × 550 ms = 11 s prospaných pauz, do třicetisekundového okna se to vejde
- * i s rezervou na síť a na pomalou odpověď Resendu. Při běhu po 5 minutách
- * je to strop 240 e-mailů za hodinu, tedy víc, než kolik jich smí odejít
- * jednomu člověku (`settings.email_max_za_hodinu`, výchozích 100).
- * Hlubší frontu doberou další běhy.
+ * i s rezervou na síť a na pomalou odpověď Resendu. Hlubší frontu doberou
+ * další běhy — při tiknutí po 5 minutách odteče až 240 zpráv za hodinu.
+ *
+ * ⚠️ To číslo je CELKOVÝ odtok fronty, a nemá se s čím poměřovat: strop
+ * `settings.email_max_za_hodinu` (výchozích 100) je na JEDNOHO uživatele,
+ * takže dvě různá čísla o dvou různých věcech. Dřív tu stálo, že 240 je
+ * „víc než 100", jako by z toho něco plynulo — neplyne. Našla brána code
+ * review 13. 9. 2026. Obě meze platí vedle sebe: strop rozhoduje, co se
+ * vůbec smí převzít, tahle dávka jen to, kolik se toho zvládne za jeden běh.
  */
 export const DAVKA = 20;
 

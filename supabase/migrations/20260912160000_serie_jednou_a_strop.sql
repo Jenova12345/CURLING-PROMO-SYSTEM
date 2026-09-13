@@ -89,22 +89,32 @@ COMMENT ON COLUMN public.settings.email_max_za_hodinu IS
 -- ani jedno není (ověřeno spuštěním).
 GRANT SELECT (email_max_za_hodinu) ON public.settings TO authenticated;
 
--- Strop se ptá „kolik už tomuhle člověku za poslední hodinu odešlo",
--- tedy `user_id` + `claimed_at`. Na to na frontě index nebyl.
+-- Strop se ptá „kolik už tomuhle člověku za poslední hodinu odešlo". Zní to
+-- jako index na `(user_id, claimed_at)`, ale to je past: dotaz FILTRUJE podle
+-- `claimed_at` a seskupuje až podle `user_id`. S `user_id` vepředu nemá
+-- plánovač co použít pro rozsah a stejně sáhne po seqscanu.
 --
--- ZMĚŘENO (ne odhadnuto), 100 000 dávno odeslaných řádků + 50 v okně, což je
--- tvar ustáleného provozu:
---     s indexem   1,3 ms   Index Only Scan
---     bez indexu  5,5 ms   Seq Scan přes celou frontu
--- Při 100 000 řádcích PŘÍMO V OKNĚ (patologie) si plánovač správně vybere
--- seqscan sám a index nepřekáží.
+-- ZMĚŘENO (ne odhadnuto) — 100 000 odeslaných řádků + 2 000 čekajících, každá
+-- varianta ve VLASTNÍ transakci, medián z 12 běhů `email_outbox_prevzit(20)`,
+-- a celé to dvakrát v opačném pořadí, ať se vyloučí vliv pořadí:
+--
+--     index                          běh 1      běh 2
+--     žádný                          10,97 ms   6,81 ms
+--     (user_id, claimed_at DESC)      1,82 ms   6,52 ms   ← kolísá, nespolehlivý
+--     (claimed_at)                    1,03 ms   1,08 ms   ← stabilní, zvolený
+--
+-- ⚠️ TENHLE INDEX BYL PŮVODNĚ `(user_id, claimed_at DESC)` a komentář tu tvrdil
+-- „1,3 ms, Index Only Scan". To měření bylo vadné: běželo nad frontou BEZ
+-- čekajících řádků, takže se poddotaz stropu vůbec nevyhodnotil a měřilo se
+-- prázdno. Jakmile ve frontě něco je, ten index si své místo nezaslouží —
+-- v jednom z běhů byl stejně pomalý jako žádný index. Našly brány 13. 9. 2026.
 --
 -- ⚠️ Druhý index, na výběr kandidátů podle (user_id, created_at), tu chvíli
 -- byl a je zase pryč: změřeno 0,68 ms s ním a 0,69 ms bez něj, protože
 -- stávající částečný `idx_email_outbox_k_odeslani` tu práci odvede. Index,
 -- který si v měření nic nezasloužil, je jen zápisová režie navíc.
-CREATE INDEX IF NOT EXISTS idx_email_outbox_user_claimed
-  ON public.email_outbox (user_id, claimed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_email_outbox_claimed
+  ON public.email_outbox (claimed_at);
 
 -- -----------------------------------------------------------------------------
 -- 2) Strop odchozí pošty: na STRANĚ ODESÍLÁNÍ, ne při zakládání zprávy
@@ -207,8 +217,9 @@ BEGIN
   -- Proč se to nedodělalo jinam: (a) bez `pg_cron` není v databázi co by
   -- úklid spouštělo, (b) tvrdé mazání jde proti zásadě „nic nemazat natvrdo"
   -- z CLAUDE.md a po 90 dnech by nešlo doložit, že e-mail odešel, (c) růst
-  -- fronty dnes nic nebolí: změřeno 100 000 řádků → dotaz stropu 1,3 ms
-  -- s indexem `idx_email_outbox_user_claimed`.
+  -- fronty dnes nic nebolí: změřeno na 100 000 odeslaných + 2 000 čekajících
+  -- řádcích, `email_outbox_prevzit(20)` medián 1,03 ms (index
+  -- `idx_email_outbox_claimed`; bez něj 10,97 ms — i tak ne katastrofa).
   -- Kdy to řešit a jak (mazat, archivovat, nebo nechat růst) je otázka na PM,
   -- ne věc, kterou má tahle migrace rozhodnout za něj.
   --
@@ -522,7 +533,7 @@ BEGIN
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_indexes
-                  WHERE tablename='email_outbox' AND indexname='idx_email_outbox_user_claimed') THEN
+                  WHERE tablename='email_outbox' AND indexname='idx_email_outbox_claimed') THEN
     RAISE EXCEPTION 'Chybí index pro okno stropu, dotaz by četl celou frontu.';
   END IF;
 

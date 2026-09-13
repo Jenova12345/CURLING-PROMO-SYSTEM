@@ -97,6 +97,22 @@ describe("vyprazdniFrontu", () => {
   // Naplánovaná funkce Netlify má tvrdý strop 30 s a `send-emails` čeká mezi
   // voláními Resendu 550 ms. Dávka se do okna musí vejít i s naším timeoutem,
   // jinak platforma běh utne uprostřed odesílání.
+  it("JÁDRO: `Content-Type` je nosná hlavička, bez ní se dávka zahodí", async () => {
+    // `send-emails` čte tělo JEN když hlavička sedí:
+    //     if (req.headers.get("content-type")?.includes("application/json"))
+    // Bez ní se `limit` tiše zahodí, funkce si vezme svých BATCH = 50
+    // a 49 × 550 ms = 26,9 s přeteče náš timeout i platformní strop.
+    // Hlídat samotné `body` tedy nestačí. Našla brána code review 13. 9. 2026.
+    const { fn, volani } = spionFetch();
+    await vyprazdniFrontu(
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      fn,
+    );
+    const h = volani[0].init.headers as Record<string, string>;
+    expect(h["Content-Type"], "bez téhle hlavičky send-emails `limit` ignoruje")
+      .toBe("application/json");
+  });
+
   it("JÁDRO: dávka i timeout se vejdou do 30sekundového okna Netlify", () => {
     const STROP_NETLIFY_MS = 30_000;
     const PAUZA_MS = 550; // musí odpovídat send-emails/index.ts
@@ -105,6 +121,43 @@ describe("vyprazdniFrontu", () => {
       .toBeLessThan(STROP_NETLIFY_MS);
     expect(DAVKA * PAUZA_MS, "samotné pauzy mezi e-maily přetečou náš timeout")
       .toBeLessThan(TIMEOUT_MS);
+  });
+
+  it("JÁDRO: ostrý běh se opravdu utne na TIMEOUT_MS, ne na jiné hodnotě", async () => {
+    // Scénář „timeout utne" níž si hodnotu vstřikuje parametrem a scénář
+    // s aritmetikou čte jen konstantu — mezi nimi propadne to hlavní:
+    // že se TIMEOUT_MS doopravdy použije, když parametr nikdo nepředá.
+    // Zahardkódování 60 s zpátky do těla funkce by oběma prošlo.
+    // Našla brána code review 13. 9. 2026.
+    const spion = vi.spyOn(AbortSignal, "timeout");
+    try {
+      const { fn } = spionFetch();
+      await vyprazdniFrontu(
+        { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+        fn,
+      );
+      expect(spion, "timeout se vůbec nenastavil").toHaveBeenCalledTimes(1);
+      expect(spion.mock.calls[0][0], "volání jede na jiné hodnotě než TIMEOUT_MS")
+        .toBe(TIMEOUT_MS);
+    } finally {
+      spion.mockRestore();
+    }
+  });
+
+  it("SUPABASE_URL má přednost před VITE_SUPABASE_URL", async () => {
+    // Bez tohohle by testům vyhověla i záměna pořadí: `VITE_SUPABASE_URL`
+    // je proměnná BUILDU a na produkční Netlify může mířit jinam než ta,
+    // kterou pro plánovač nastavuje správce.
+    const { fn, volani } = spionFetch();
+    await vyprazdniFrontu(
+      {
+        SUPABASE_SERVICE_ROLE_KEY: KLIC,
+        SUPABASE_URL: "https://spravna.supabase.co",
+        VITE_SUPABASE_URL: "https://z-buildu.supabase.co",
+      },
+      fn,
+    );
+    expect(volani[0].url).toBe("https://spravna.supabase.co/functions/v1/send-emails");
   });
 
   it("URL s koncovým lomítkem nevyrobí dvojité", async () => {
