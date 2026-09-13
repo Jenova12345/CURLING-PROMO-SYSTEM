@@ -71,6 +71,23 @@ export const TIMEOUT_MS = 25_000;
 export const DAVKA = 20;
 
 /**
+ * Míří ta adresa opravdu na Supabase, a to šifrovaně?
+ *
+ * Porovnává se HOSTNAME, ne podřetězec: `https://zlo.cz/?x=supabase.co` ani
+ * `https://supabase.co.zlo.cz` takhle neprojdou, zatímco naivní `includes`
+ * by je pustil.
+ */
+function jeToSupabase(url: string): boolean {
+  try {
+    const a = new URL(url);
+    return a.protocol === "https:" &&
+      (a.hostname === "supabase.co" || a.hostname.endsWith(".supabase.co"));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Rozhodne, jestli se má volat, a zavolá.
  *
  * `fetchFn` je parametr schválně: bez něj by se to nedalo otestovat jinak než
@@ -121,6 +138,23 @@ export async function vyprazdniFrontu(
   }
   if (!url) {
     return { odeslano: false, duvod: "Chybí SUPABASE_URL (ani VITE_SUPABASE_URL) v prostředí Netlify." };
+  }
+
+  // ⚠️ KAM SE KLÍČ POSÍLÁ, SE OVĚŘUJE. Bez téhle kontroly stačí přepsat jednu
+  // proměnnou prostředí a servisní klíč produkce odletí na cizí host —
+  // v hlavičce `Authorization`, tedy rovnou k odposlechu. Vyžaduje to sice
+  // přístup do nastavení Netlify (stejná důvěra jako držení klíče), ale
+  // kontrola je levná a chybu z překlepu chytí taky. Našla bezpečnostní
+  // brána 13. 9. 2026.
+  //
+  // Schválně se kontroluje i schéma: `http://` by klíč poslalo v otevřené
+  // podobě. Kdyby projekt někdy jel na vlastní doméně, patří sem ta doména,
+  // ne zrušení kontroly.
+  if (!jeToSupabase(url)) {
+    return {
+      odeslano: false,
+      duvod: "SUPABASE_URL nemíří na https://<projekt>.supabase.co — servisní klíč se nikam neposlal.",
+    };
   }
 
   let odpoved: Response;

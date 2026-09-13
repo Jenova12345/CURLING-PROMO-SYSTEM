@@ -103,6 +103,20 @@ GRANT SELECT (email_max_za_hodinu) ON public.settings TO authenticated;
 --     (user_id, claimed_at DESC)      1,82 ms   6,52 ms   ← kolísá, nespolehlivý
 --     (claimed_at)                    1,03 ms   1,08 ms   ← stabilní, zvolený
 --
+-- ⚠️ PŘEMĚŘENO NA RŮZNÉM ROZLOŽENÍ UŽIVATELŮ. První měření mělo všech 100 000
+-- řádků od JEDNOHO uživatele, což je právě ten tvar, který `(claimed_at)`
+-- nespravedlivě zvýhodňuje — strop se počítá NA UŽIVATELE, takže čím míň
+-- různých `user_id`, tím líp pro něj. Namítla bezpečnostní brána 13. 9. 2026
+-- a byla to správná námitka. Zopakováno se skutečně různými uživateli:
+--
+--     index                        5 uživ.   200 uživ.   2 000 uživ.
+--     žádný                        10,17 ms    8,95 ms      9,12 ms
+--     (user_id, claimed_at DESC)    2,26 ms    3,76 ms      3,65 ms
+--     (claimed_at)                  1,36 ms    2,74 ms      2,79 ms
+--
+-- Náskok se s počtem uživatelů zmenšuje, ale pořadí se nemění v žádném
+-- z tvarů. Volba tedy platí i na realistickém rozložení.
+--
 -- ⚠️ TENHLE INDEX BYL PŮVODNĚ `(user_id, claimed_at DESC)` a komentář tu tvrdil
 -- „1,3 ms, Index Only Scan". To měření bylo vadné: běželo nad frontou BEZ
 -- čekajících řádků, takže se poddotaz stropu vůbec nevyhodnotil a měřilo se

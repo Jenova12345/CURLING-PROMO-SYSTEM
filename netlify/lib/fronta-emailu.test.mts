@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { vyprazdniFrontu, TIMEOUT_MS, DAVKA } from "./fronta-emailu.mts";
 
@@ -14,6 +15,23 @@ import { vyprazdniFrontu, TIMEOUT_MS, DAVKA } from "./fronta-emailu.mts";
 // =============================================================================
 
 const KLIC = "sb_secret_TESTOVACI_KLIC_NEPOUZIVAT";
+
+/**
+ * Vytáhne číselnou konstantu ze zdroje `send-emails`.
+ *
+ * Nechybí tu naschvál fallback: když se konstanta přejmenuje nebo zmizí,
+ * má test SPADNOUT, ne si domyslet starou hodnotu a dál tvrdit, že se
+ * dávka do okna vejde.
+ */
+function cislo(vzor: RegExp, jmeno: string): number {
+  const zdroj = readFileSync(
+    new URL("../../supabase/functions/send-emails/index.ts", import.meta.url),
+    "utf8",
+  );
+  const shoda = zdroj.match(vzor);
+  if (!shoda) throw new Error(`V send-emails/index.ts nejde najít ${jmeno} — přejmenovalo se?`);
+  return Number(shoda[1]);
+}
 
 /** fetch, který nic nevolá a jen zaznamená, s čím byl zavolán. */
 function spionFetch(odpoved: Partial<Response> = {}) {
@@ -115,7 +133,13 @@ describe("vyprazdniFrontu", () => {
 
   it("JÁDRO: dávka i timeout se vejdou do 30sekundového okna Netlify", () => {
     const STROP_NETLIFY_MS = 30_000;
-    const PAUZA_MS = 550; // musí odpovídat send-emails/index.ts
+
+    // ⚠️ PAUZA SE ČTE ZE ZDROJE, NEOPISUJE SE. Stála tu ručně opsaná `550`
+    // s komentářem „musí odpovídat send-emails/index.ts". Kdyby pauzu někdo
+    // v edge funkci zvedl, test zůstane zelený a předpoklad o 30sekundovém
+    // okně se tiše rozejde s realitou — přesně ta třída chyby jako chybějící
+    // `Content-Type` výš. Našla bezpečnostní brána 13. 9. 2026.
+    const PAUZA_MS = cislo(/const PAUZA_MS\s*=\s*(\d+)/, "PAUZA_MS");
 
     expect(TIMEOUT_MS, "vlastní timeout je nad platformním stropem, takže nikdy nenastane")
       .toBeLessThan(STROP_NETLIFY_MS);
@@ -158,6 +182,39 @@ describe("vyprazdniFrontu", () => {
       fn,
     );
     expect(volani[0].url).toBe("https://spravna.supabase.co/functions/v1/send-emails");
+  });
+
+  it("JÁDRO: na cizí host se servisní klíč neposlal", async () => {
+    // Bez téhle kontroly stačí přepsat proměnnou prostředí a klíč produkce
+    // odletí útočníkovi v hlavičce `Authorization`.
+    for (const zly of [
+      "https://zlo.cz",
+      "https://supabase.co.zlo.cz",          // přípona jen naoko
+      "https://zlo.cz/?x=supabase.co",       // naivní `includes` by ji pustil
+      "http://x.supabase.co",                // klíč v otevřené podobě
+      "nesmysl",
+    ]) {
+      const { fn, volani } = spionFetch();
+      const v = await vyprazdniFrontu(
+        { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: zly },
+        fn,
+      );
+      expect(volani, `klíč odešel na ${zly}`).toHaveLength(0);
+      expect(v.odeslano).toBe(false);
+      expect(JSON.stringify(v), "klíč prosákl do výsledku").not.toContain(KLIC);
+    }
+  });
+
+  // ROZLIŠUJÍCÍ PROTIPŘÍKLAD: bez něj by kontrole vyhověla i podmínka,
+  // která nepustí NIKAM.
+  it("na vlastní projekt na supabase.co se volá normálně", async () => {
+    const { fn, volani } = spionFetch();
+    const v = await vyprazdniFrontu(
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" },
+      fn,
+    );
+    expect(volani).toHaveLength(1);
+    expect(v.odeslano).toBe(true);
   });
 
   it("URL s koncovým lomítkem nevyrobí dvojité", async () => {
