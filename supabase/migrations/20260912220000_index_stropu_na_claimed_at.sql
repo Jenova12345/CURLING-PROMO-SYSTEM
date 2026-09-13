@@ -63,6 +63,12 @@
 -- tam být nemusí.
 DROP INDEX IF EXISTS public.idx_email_outbox_user_claimed;
 
+-- ⚠️ ZÁMĚRNĚ BEZ `CONCURRENTLY`, a není to opomenutí. `CREATE INDEX
+-- CONCURRENTLY` se NESMÍ spustit uvnitř transakčního bloku a migrace Supabase
+-- v transakci běží — takže tady to ani nejde. Nevadí to: `email_outbox` má na
+-- produkci dnes 0 řádků, takže se nemá co zamykat. U velké živé tabulky by
+-- tahle úvaha dopadla jinak a index by musel jít mimo migraci. Ptaly se na to
+-- obě brány 13. 9. 2026, tak ať na to příště nikdo nemusí přijít znovu.
 CREATE INDEX IF NOT EXISTS idx_email_outbox_claimed
   ON public.email_outbox (claimed_at);
 
