@@ -54,7 +54,7 @@ function spionFetch(odpoved: Partial<Response> = {}) {
 describe("vyprazdniFrontu", () => {
   it("JÁDRO: bez servisního klíče nevolá vůbec nic", async () => {
     const { fn, volani } = spionFetch();
-    const v = await vyprazdniFrontu({ SUPABASE_URL: "https://x.supabase.co" }, fn);
+    const v = await vyprazdniFrontu({ SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" }, fn);
 
     expect(volani, "bez klíče se přesto někam volalo").toHaveLength(0);
     expect(v.odeslano).toBe(false);
@@ -81,12 +81,12 @@ describe("vyprazdniFrontu", () => {
   it("JÁDRO: v produkci s klíčem zavolá send-emails správným způsobem", async () => {
     const { fn, volani } = spionFetch();
     const v = await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" },
       fn,
     );
 
     expect(volani).toHaveLength(1);
-    expect(volani[0].url).toBe("https://x.supabase.co/functions/v1/send-emails");
+    expect(volani[0].url).toBe("https://fcwubbytqxubgptftnru.supabase.co/functions/v1/send-emails");
     expect(volani[0].init.method).toBe("POST");
     const h = volani[0].init.headers as Record<string, string>;
     // Bez `Authorization` požadavek k funkci vůbec nedojde: platformní brána
@@ -103,7 +103,7 @@ describe("vyprazdniFrontu", () => {
   it("JÁDRO: požadavek si říká o ODESLÁNÍ dávky, ne o náhled", async () => {
     const { fn, volani } = spionFetch();
     await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" },
       fn,
     );
     const telo = JSON.parse(String(volani[0].init.body));
@@ -115,6 +115,19 @@ describe("vyprazdniFrontu", () => {
   // Naplánovaná funkce Netlify má tvrdý strop 30 s a `send-emails` čeká mezi
   // voláními Resendu 550 ms. Dávka se do okna musí vejít i s naším timeoutem,
   // jinak platforma běh utne uprostřed odesílání.
+  it("JÁDRO: přesměrování se nenásleduje (`apikey` ho přežije a nese klíč)", async () => {
+    // Výchozí `"follow"` při přechodu na cizí origin zahodí `Authorization`,
+    // ale vlastní hlavičku `apikey` pošle dál — a ta nese TÝŽ servisní klíč.
+    // Změřeno na dvou lokálních serverech. Bezpečnostní brána 13. 9. 2026.
+    const { fn, volani } = spionFetch();
+    await vyprazdniFrontu(
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" },
+      fn,
+    );
+    expect(volani[0].init.redirect, "plánovač následuje přesměrování, `apikey` by odešla cizímu hostu")
+      .toBe("manual");
+  });
+
   it("JÁDRO: `Content-Type` je nosná hlavička, bez ní se dávka zahodí", async () => {
     // `send-emails` čte tělo JEN když hlavička sedí:
     //     if (req.headers.get("content-type")?.includes("application/json"))
@@ -123,7 +136,7 @@ describe("vyprazdniFrontu", () => {
     // Hlídat samotné `body` tedy nestačí. Našla brána code review 13. 9. 2026.
     const { fn, volani } = spionFetch();
     await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" },
       fn,
     );
     const h = volani[0].init.headers as Record<string, string>;
@@ -157,7 +170,7 @@ describe("vyprazdniFrontu", () => {
     try {
       const { fn } = spionFetch();
       await vyprazdniFrontu(
-        { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+        { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" },
         fn,
       );
       expect(spion, "timeout se vůbec nenastavil").toHaveBeenCalledTimes(1);
@@ -176,12 +189,12 @@ describe("vyprazdniFrontu", () => {
     await vyprazdniFrontu(
       {
         SUPABASE_SERVICE_ROLE_KEY: KLIC,
-        SUPABASE_URL: "https://spravna.supabase.co",
-        VITE_SUPABASE_URL: "https://z-buildu.supabase.co",
+        SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co",
+        VITE_SUPABASE_URL: "https://jiny-projekt.supabase.co",
       },
       fn,
     );
-    expect(volani[0].url).toBe("https://spravna.supabase.co/functions/v1/send-emails");
+    expect(volani[0].url).toBe("https://fcwubbytqxubgptftnru.supabase.co/functions/v1/send-emails");
   });
 
   it("JÁDRO: na cizí host se servisní klíč neposlal", async () => {
@@ -189,6 +202,8 @@ describe("vyprazdniFrontu", () => {
     // odletí útočníkovi v hlavičce `Authorization`.
     for (const zly of [
       "https://zlo.cz",
+      "https://jiny-projekt.supabase.co",    // CIZÍ projekt na supabase.co
+      "https://supabase.co",                 // holá doména
       "https://supabase.co.zlo.cz",          // přípona jen naoko
       "https://zlo.cz/?x=supabase.co",       // naivní `includes` by ji pustil
       "http://x.supabase.co",                // klíč v otevřené podobě
@@ -220,16 +235,16 @@ describe("vyprazdniFrontu", () => {
   it("URL s koncovým lomítkem nevyrobí dvojité", async () => {
     const { fn, volani } = spionFetch();
     await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co/" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co/" },
       fn,
     );
-    expect(volani[0].url).toBe("https://x.supabase.co/functions/v1/send-emails");
+    expect(volani[0].url).toBe("https://fcwubbytqxubgptftnru.supabase.co/functions/v1/send-emails");
   });
 
   it("klíč s koncovým novým řádkem se ořízne (jinak `fetch` spadne na ByteString)", async () => {
     const { fn, volani } = spionFetch();
     await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: `${KLIC}\n`, SUPABASE_URL: "https://x.supabase.co" },
+      { SUPABASE_SERVICE_ROLE_KEY: `${KLIC}\n`, SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" },
       fn,
     );
     const h = volani[0].init.headers as Record<string, string>;
@@ -239,16 +254,16 @@ describe("vyprazdniFrontu", () => {
   it("URL se bere z VITE_SUPABASE_URL, když SUPABASE_URL chybí", async () => {
     const { fn, volani } = spionFetch();
     await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, VITE_SUPABASE_URL: "https://z.supabase.co" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, VITE_SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" },
       fn,
     );
-    expect(volani[0].url).toBe("https://z.supabase.co/functions/v1/send-emails");
+    expect(volani[0].url).toBe("https://fcwubbytqxubgptftnru.supabase.co/functions/v1/send-emails");
   });
 
   it("JÁDRO: neúspěch se hlásí jako neúspěch, ne jako tichý běh", async () => {
     const { fn } = spionFetch({ ok: false, status: 401, text: async () => "Frontu obsluhuje jen server." });
     const v = await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" },
       fn,
     );
     expect(v.odeslano).toBe(false);
@@ -263,7 +278,7 @@ describe("vyprazdniFrontu", () => {
     }) as unknown as typeof fetch;
 
     const v = await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" },
       fn,
     );
     expect(v.odeslano).toBe(false);
@@ -274,7 +289,7 @@ describe("vyprazdniFrontu", () => {
     const dlouhe = "x".repeat(5000);
     const { fn } = spionFetch({ text: async () => dlouhe });
     const v = await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" },
       fn,
     );
     expect(v.telo!.length).toBeLessThanOrEqual(300);
@@ -292,7 +307,7 @@ describe("vyprazdniFrontu", () => {
 
     const zacatek = Date.now();
     const v = await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" },
       nikdyNeodpovi,
       30, // krátký timeout jen pro test; ostrá hodnota je TIMEOUT_MS
     );
@@ -319,7 +334,7 @@ describe("vyprazdniFrontu", () => {
   it("JÁDRO: režim náhledu (chybí RESEND_API_KEY) je NEÚSPĚCH, i když vrátí 200", async () => {
     const { fn } = spionFetch(telo({ rezim: "nahled", duvod: "RESEND_API_KEY neni nastaveny", ceka: 12 }));
     const v = await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" },
       fn,
     );
 
@@ -331,7 +346,7 @@ describe("vyprazdniFrontu", () => {
   it("JÁDRO: selhalá odeslání jsou NEÚSPĚCH, i když vrátí 200", async () => {
     const { fn } = spionFetch(telo({ rezim: "ostry", odeslano: 0, selhalo: 20, zapisSelhal: 0 }));
     const v = await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" },
       fn,
     );
 
@@ -345,7 +360,7 @@ describe("vyprazdniFrontu", () => {
     // neví, takže ho úklid za 10 minut pošle znovu. Musí to být vidět.
     const { fn } = spionFetch(telo({ rezim: "ostry", odeslano: 5, selhalo: 0, zapisSelhal: 1 }));
     const v = await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" },
       fn,
     );
     expect(v.odeslano).toBe(false);
@@ -354,7 +369,7 @@ describe("vyprazdniFrontu", () => {
   it("režim nanečisto je taky NEÚSPĚCH (fronta se zahodí, nic neodejde)", async () => {
     const { fn } = spionFetch(telo({ rezim: "nanecisto", odeslano: 0, preskoceno: 20 }));
     const v = await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" },
       fn,
     );
     expect(v.odeslano).toBe(false);
@@ -364,7 +379,7 @@ describe("vyprazdniFrontu", () => {
   it("nerozpoznaná odpověď je NEÚSPĚCH, ne pád", async () => {
     const { fn } = spionFetch({ text: async () => "<html>502 Bad Gateway</html>" });
     const v = await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" },
       fn,
     );
     expect(v.odeslano).toBe(false);
@@ -376,7 +391,7 @@ describe("vyprazdniFrontu", () => {
   it("JÁDRO: povedený ostrý běh je úspěch a nese počet odeslaných", async () => {
     const { fn } = spionFetch(telo({ rezim: "ostry", odeslano: 7, selhalo: 0, zapisSelhal: 0 }));
     const v = await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" },
       fn,
     );
     expect(v.odeslano).toBe(true);
@@ -391,7 +406,7 @@ describe("vyprazdniFrontu", () => {
     // Našla bezpečnostní brána 13. 9. 2026.
     const { fn } = spionFetch(telo({ rezim: "ostry", odeslano: 0, note: "Fronta je prázdná." }));
     const v = await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" },
       fn,
     );
     expect(v.odeslano, "prázdná fronta se hlásí jako porucha").toBe(true);
@@ -427,7 +442,7 @@ describe("vyprazdniFrontu", () => {
       zapisSelhal: 0,
     }));
     const v = await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://fcwubbytqxubgptftnru.supabase.co" },
       fn,
     );
     expect(v.odeslano, "rozhodovalo se z oříznutého těla").toBe(true);

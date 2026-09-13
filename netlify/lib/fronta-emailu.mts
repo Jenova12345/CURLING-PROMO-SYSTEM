@@ -71,17 +71,34 @@ export const TIMEOUT_MS = 25_000;
 export const DAVKA = 20;
 
 /**
- * Míří ta adresa opravdu na Supabase, a to šifrovaně?
+ * Ref produkčního projektu (curling-promo-prod). Není to tajemství — stejný
+ * řetězec je v `docs/EMAILY-PROVOZ.md`, v CLAUDE.md i ve veřejné adrese,
+ * na kterou se ptá prohlížeč každého návštěvníka.
  *
- * Porovnává se HOSTNAME, ne podřetězec: `https://zlo.cz/?x=supabase.co` ani
- * `https://supabase.co.zlo.cz` takhle neprojdou, zatímco naivní `includes`
- * by je pustil.
+ * ⚠️ Je připnutý SCHVÁLNĚ a je to jediná adresa, na kterou tenhle plánovač
+ * kdy sáhne. Kdyby se projekt někdy stěhoval, změní se tenhle řádek — to je
+ * záměr, ne opomenutí.
  */
-function jeToSupabase(url: string): boolean {
+const PROJEKT = "fcwubbytqxubgptftnru";
+
+/**
+ * Míří ta adresa na NÁŠ projekt, a to šifrovaně?
+ *
+ * Porovnává se celý HOSTNAME, ne podřetězec: `https://zlo.cz/?x=supabase.co`
+ * ani `https://supabase.co.zlo.cz` takhle neprojdou, zatímco naivní
+ * `includes` by je pustil.
+ *
+ * ⚠️ KONTROLUJE SE KONKRÉTNÍ PROJEKT, NE JEN „NĚCO NA SUPABASE". Chvíli tu
+ * stálo `hostname.endsWith(".supabase.co")` a bezpečnostní brána 13. 9. 2026
+ * ukázala, že to hrozbu, kterou si komentář vytkl, nezavírá: útočník
+ * s přístupem do nastavení Netlify nemusí shánět vlastní doménu, stačí mu
+ * nasměrovat plánovač na VLASTNÍ projekt na supabase.co a servisní klíč
+ * produkce mu přistane v logu jeho edge funkce.
+ */
+function jeToNasProjekt(url: string): boolean {
   try {
     const a = new URL(url);
-    return a.protocol === "https:" &&
-      (a.hostname === "supabase.co" || a.hostname.endsWith(".supabase.co"));
+    return a.protocol === "https:" && a.hostname === `${PROJEKT}.supabase.co`;
   } catch {
     return false;
   }
@@ -150,10 +167,10 @@ export async function vyprazdniFrontu(
   // Schválně se kontroluje i schéma: `http://` by klíč poslalo v otevřené
   // podobě. Kdyby projekt někdy jel na vlastní doméně, patří sem ta doména,
   // ne zrušení kontroly.
-  if (!jeToSupabase(url)) {
+  if (!jeToNasProjekt(url)) {
     return {
       odeslano: false,
-      duvod: "SUPABASE_URL nemíří na https://<projekt>.supabase.co — servisní klíč se nikam neposlal.",
+      duvod: `SUPABASE_URL nemíří na https://${PROJEKT}.supabase.co — servisní klíč se nikam neposlal.`,
     };
   }
 
@@ -173,6 +190,13 @@ export async function vyprazdniFrontu(
       // Netlify (viz `DAVKA` výš). Bez něj si `send-emails` vezme svých 50
       // a běh by platforma uťala uprostřed odesílání.
       body: JSON.stringify({ limit: DAVKA }),
+      // ⚠️ ŽÁDNÉ NÁSLEDOVÁNÍ PŘESMĚROVÁNÍ. Výchozí `"follow"` při přechodu na
+      // cizí origin sice zahodí `Authorization` (tak to má spec), ale vlastní
+      // hlavičku `apikey` — která nese TÝŽ servisní klíč — pošle dál.
+      // Změřeno na dvou lokálních serverech: s `"follow"` cizí server dostal
+      // `apikey`, s `"manual"` nedostal nic. Tenhle endpoint přesměrovávat
+      // nemá nikdy, takže je to čistá výhra. Bezpečnostní brána 13. 9. 2026.
+      redirect: "manual",
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (e) {

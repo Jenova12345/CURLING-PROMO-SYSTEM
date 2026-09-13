@@ -105,6 +105,12 @@ select indexname from pg_indexes where tablename = 'email_outbox'
 | `SUPABASE_SERVICE_ROLE_KEY` | servisní klíč projektu `fcwubbytqxubgptftnru` | **ano** |
 | `SUPABASE_URL` | `https://fcwubbytqxubgptftnru.supabase.co` | ne, jinak se vezme `VITE_SUPABASE_URL` |
 
+⚠️ Na jinou adresu než `https://fcwubbytqxubgptftnru.supabase.co` plánovač
+servisní klíč **neodešle** — ref produkčního projektu je připnutý přímo v kódu
+(`netlify/lib/fronta-emailu.mts`). Je to schválně: kdo umí přepsat proměnnou
+v Netlify, jinak přesměruje klíč na vlastní projekt na `supabase.co` a přečte
+si ho. Kdyby se projekt někdy stěhoval, mění se i ten řádek v kódu.
+
 * Scope nastav **Functions only** a zaškrtni **„Contains secret values"**.
   Scope „All" by ten klíč dal i do prostředí `vite build`, kde nemá co dělat.
 * Jména se čtou doslova. Překlep = funkce se spustí, **nic nezavolá**
