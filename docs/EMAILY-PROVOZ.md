@@ -14,6 +14,7 @@ v tabulce níž je **změřený dotazem**, ne odhadnutý (13. 9. 2026).
 | `pg_net` | **není** | Plánovač v databázi neběží a nebude, viz níž. |
 | `pg_cron` | **není** | Totéž. |
 | poslední migrace | `20260912140000` | Migrace `…160000` a `…200000` NEJSOU nasazené. |
+| strop `email_max_za_hodinu` | **na produkci není** | Sloupec neexistuje a `email_outbox_prevzit` o stropu neví. Přináší ho krok 0. |
 
 ---
 
@@ -33,6 +34,9 @@ v tabulce níž je **změřený dotazem**, ne odhadnutý (13. 9. 2026).
    Po 5 neúspěšných pokusech řádek končí jako `failed`.
 
 ### Dvě pojistky proti záplavě
+
+⚠️ **Obě přinášejí nenasazené migrace, viz krok 0 níž.** Na dnešní produkci
+ani jedna neplatí.
 
 * **Série a přebití jdou jako JEDNA zpráva**, ne jako N. Migrace
   `20260912160000` a `20260912200000`. Bez nich by zrušení celé sezóny
@@ -63,6 +67,34 @@ hlavičky odchozích požadavků včetně tokenu a odpovědi včetně obsahu po�
 
 ## Co musí kdo nastavit, než se zapne
 
+> ⚠️ **POŘADÍ NENÍ LIBOVOLNÉ A KROK 0 SE NESMÍ PŘESKOČIT.** Kdo dnes provede
+> jen kroky 1–3 a přeskočí nulu, zapne rozesílání **bez obou pojistek proti záplavě** — na
+> produkci dnes strop `email_max_za_hodinu` neexistuje (ověřeno: sloupec tam
+> není a nasazená verze `email_outbox_prevzit` o stropu nic neví) a zrušení
+> série pošle jeden e-mail za každý termín. Přesně ten scénář, kvůli kterému
+> obě pojistky vznikly. Našla bezpečnostní brána 13. 9. 2026.
+
+### 0) Nasadit obě migrace — PRVNÍ, ne až potom
+
+Produkce je na `20260912140000`. Nenasazené a potřebné jsou:
+
+| Migrace | Co přináší |
+|---|---|
+| `20260912160000_serie_jednou_a_strop.sql` | strop `email_max_za_hodinu`, přednost důležitých zpráv, série jako jedna zpráva, index `idx_email_outbox_claimed` |
+| `20260912200000_prebiti_jedna_zprava.sql` | přebití termínů komerční akcí jako jedna zpráva místo N |
+
+Nasazuje se **jedna po druhé** přes `scripts/safe-deploy.sh <popisek>` — udělá
+čerstvý dump, ověří ho a teprve pak pustí `db push`. Ruční `supabase db push`
+znamená, že jsi zálohu obešel.
+
+Po nasazení zkontroluj, že strop opravdu existuje:
+
+```sql
+select email_max_za_hodinu from public.settings;          -- má vrátit 100
+select pg_get_functiondef('public.email_outbox_prevzit(int)'::regprocedure)
+       like '%max_za_hodinu%';                            -- má vrátit true
+```
+
 ### 1) Netlify → Site configuration → Environment variables
 
 | Proměnná | Hodnota | Povinná |
@@ -89,6 +121,10 @@ neexistuje. Bez ní je ta cesta inertní.
 
 `settings.email_notifications_enabled = true`. Dřív ne: dokud je `false`,
 fronta se nenaplňuje a celý zbytek může běžet naprázdno libovolně dlouho.
+
+⚠️ Než to přepneš, projdi si ještě jednou kontrolu z kroku 0. Přepnout tenhle
+přepínač bez nasazeného stropu je ta nejdražší chyba, která se v tomhle
+postupu dá udělat — poznáš ji až podle reputace domény.
 
 ---
 
