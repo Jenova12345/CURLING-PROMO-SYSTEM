@@ -80,8 +80,9 @@ Produkce je na `20260912140000`. Nenasazené a potřebné jsou:
 
 | Migrace | Co přináší |
 |---|---|
-| `20260912160000_serie_jednou_a_strop.sql` | strop `email_max_za_hodinu`, přednost důležitých zpráv, série jako jedna zpráva, index `idx_email_outbox_claimed` |
+| `20260912160000_serie_jednou_a_strop.sql` | strop `email_max_za_hodinu`, přednost důležitých zpráv, série jako jedna zpráva |
 | `20260912200000_prebiti_jedna_zprava.sql` | přebití termínů komerční akcí jako jedna zpráva místo N |
+| `20260912220000_index_stropu_na_claimed_at.sql` | index `idx_email_outbox_claimed`, aby dotaz stropu nečetl celou frontu |
 
 Nasazuje se **jedna po druhé** přes `scripts/safe-deploy.sh <popisek>` — udělá
 čerstvý dump, ověří ho a teprve pak pustí `db push`. Ruční `supabase db push`
@@ -93,6 +94,8 @@ Po nasazení zkontroluj, že strop opravdu existuje:
 select email_max_za_hodinu from public.settings;          -- má vrátit 100
 select pg_get_functiondef('public.email_outbox_prevzit(int)'::regprocedure)
        like '%max_za_hodinu%';                            -- má vrátit true
+select indexname from pg_indexes where tablename = 'email_outbox'
+   and indexname like '%claimed%';         -- má vrátit jen idx_email_outbox_claimed
 ```
 
 ### 1) Netlify → Site configuration → Environment variables

@@ -383,6 +383,39 @@ describe("vyprazdniFrontu", () => {
     expect(v.duvod, "log neřekne, kolik jich odešlo").toContain("7");
   });
 
+  it("JÁDRO: prázdná fronta je ÚSPĚCH — je to jediná odpověď, kterou dnes uvidí", async () => {
+    // Dokud je `email_notifications_enabled = false`, fronta se nenaplňuje
+    // a plánovač dostane každých 5 minut přesně tohle. Kdyby to hlásil jako
+    // poruchu, svítí Netlify červeně pořád a nikdo si toho pak nevšimne,
+    // až se něco doopravdy rozbije. Tvar je bez polí `selhalo`/`zapisSelhal`.
+    // Našla bezpečnostní brána 13. 9. 2026.
+    const { fn } = spionFetch(telo({ rezim: "ostry", odeslano: 0, note: "Fronta je prázdná." }));
+    const v = await vyprazdniFrontu(
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      fn,
+    );
+    expect(v.odeslano, "prázdná fronta se hlásí jako porucha").toBe(true);
+  });
+
+  it("JÁDRO: `send-emails` ta pole opravdu posílá (jinak modul čte undefined)", async () => {
+    // Modul se rozhoduje podle `rezim`, `selhalo` a `zapisSelhal`. Ta jména
+    // drží jen na jeho straně — kdyby je někdo v edge funkci přejmenoval,
+    // přečte se `undefined ?? 0`, vyjde nula a neúspěch se ohlásí jako úspěch.
+    // Tichá, plně zelená díra. Stejná třída jako ručně opsaná `PAUZA_MS`
+    // a jako chybějící `Content-Type`. Našla bezpečnostní brána 13. 9. 2026.
+    const zdroj = readFileSync(
+      new URL("../../supabase/functions/send-emails/index.ts", import.meta.url),
+      "utf8",
+    );
+    for (const pole of ["rezim", "selhalo", "zapisSelhal"]) {
+      expect(zdroj, `send-emails už neposílá pole \`${pole}\` — modul podle něj soudí úspěch`)
+        .toMatch(new RegExp(`^\\s*${pole}[,:]`, "m"));
+    }
+    // A ta jediná hodnota `rezim`, kterou modul bere jako úspěch.
+    expect(zdroj, "zmizela hodnota `ostry`, modul by hlásil neúspěch vždycky")
+      .toContain('"ostry"');
+  });
+
   it("rozhoduje CELÉ tělo, ne jen ořezaný začátek pro log", async () => {
     // Kdyby se parsoval `telo` (oříznutý na 300 znaků), JSON by tu nedal
     // parsovat a povedený běh by se hlásil jako porucha.
