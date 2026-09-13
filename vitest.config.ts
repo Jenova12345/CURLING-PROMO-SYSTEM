@@ -18,7 +18,11 @@ export default defineConfig({
     // FAKTUROID_CLIENT_SECRET nesmí mít ani teoretickou cestu do prohlížeče.
     // Bez téhle druhé položky by se testy fakturační vrstvy tiše nespouštěly —
     // ne červeně, ale vůbec, což je horší.
-    include: ['src/**/*.test.{ts,tsx}', 'billing/**/*.test.ts'],
+    // `netlify/` je tu ze stejného důvodu jako `billing/`: je to serverová
+    // vrstva mimo `src/` (do `src/` sahá Vite bundle a servisní klíč tam nesmí
+    // mít ani teoretickou cestu). Bez téhle položky by se testy naplánované
+    // funkce tiše nespouštěly — ne červeně, ale vůbec.
+    include: ['src/**/*.test.{ts,tsx}', 'billing/**/*.test.ts', 'netlify/**/*.test.mts'],
 
     // INTEGRAČNÍ TESTY SE DO BĚŽNÉHO BĚHU NEPOČÍTAJÍ.
     //

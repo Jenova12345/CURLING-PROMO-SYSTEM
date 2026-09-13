@@ -16,18 +16,24 @@
 //   EMAIL_FROM          nepovinné; výchozí je odesílatel níž.
 //   EMAIL_MOCK_ENABLED  nepovinné, JEN na lokále a demu. "true" povolí režim
 //                       nanečisto. Na produkci se NENASTAVUJE.
-//   EMAIL_CRON_TOKEN    vyhrazený token pro cron. TÁŽ hodnota musí být ve Vaultu
-//                       jako `send_emails_cron_token`. Proč vlastní token místo
-//                       servisního klíče: `CREATE EXTENSION pg_net` udělí
-//                       `anon` i `authenticated` přístup do schématu `net`
-//                       a tabulky pg_netu nemají RLS, takže odchozí hlavičky
-//                       jsou odtamtud čitelné. Tenhle token umí jedinou věc,
-//                       vyprázdnit frontu e-mailů, a jde rotovat samostatně.
+//   EMAIL_CRON_TOKEN    NEPOVINNÉ a na produkci SE NENASTAVUJE. Vznikl pro
+//                       plánování z databáze (pg_cron + pg_net), od kterého
+//                       se ustoupilo: `CREATE EXTENSION pg_net` udělí `anon`
+//                       i `authenticated` přístup do schématu `net`, tabulky
+//                       pg_netu nemají RLS, a ty granty nejdou odebrat.
+//                       Rozhodnutí PM (14. 9. 2026): časovač jde ZVENČÍ,
+//                       z naplánované funkce Netlify se servisním klíčem
+//                       (`netlify/functions/posli-emaily.mts`).
+//                       Cesta s tokenem v kódu zůstává jako alternativa
+//                       s menším oprávněním — bez téhle proměnné je INERTNÍ
+//                       (`jeCron` bez ní nikdy nevyjde) a hlídá ji
+//                       `supabase/tests/send_emails_auth_zavod.sh`.
 //
 //   supabase secrets set RESEND_API_KEY=re_xxx
 //   supabase secrets set EMAIL_FROM="Curling Promo Ostrava <noreply@mail.curlingpromoostrava.cz>"
 //   supabase functions deploy send-emails
-// a naplánovat pravidelné volání (pg_cron / Supabase Scheduler, např. po 5 minutách).
+// Pravidelné volání obstarává naplánovaná funkce Netlify po 5 minutách,
+// viz `netlify/functions/posli-emaily.mts`. V databázi žádný plánovač není.
 //
 // TŘI REŽIMY:
 //   * ostrý      — má klíč, volá Resend, přepisuje stavy.
@@ -184,15 +190,15 @@ Deno.serve(async (req) => {
   const odmitnout = () =>
     json({ error: "Frontu e-mailů obsluhuje jen server." }, 401);
 
-  // ---- Cesta pro cron: vyhrazený token --------------------------------------
-  // Cron posílá `Authorization` s PUBLISHABLE klíčem (ten není tajný, jede
-  // v každém prohlížeči) jen proto, aby prošel platformní bránou `verify_jwt`.
-  // O vpuštění rozhoduje až `x-cron-token`.
+  // ---- Nepovinná cesta: vyhrazený token -------------------------------------
+  // ⚠️ NA PRODUKCI JE TAHLE CESTA INERTNÍ. `EMAIL_CRON_TOKEN` se tam
+  // nenastavuje, takže `jeCron` nikdy nevyjde. Časovač jde zvenčí, z Netlify,
+  // a prokazuje se servisním klíčem (viz hlavička souboru).
   //
-  // Proč vlastní token místo servisního klíče: hlavičky odchozích požadavků
-  // pg_netu leží v `net.http_request_queue`, kde není RLS a kam `CREATE
-  // EXTENSION pg_net` pouští `anon` i `authenticated`. Tohle je jediné
-  // pověření, které z databáze odchází — a umí jedinou věc.
+  // Zůstává tu proto, že je to pověření s MENŠÍM oprávněním než servisní klíč:
+  // umí jedinou věc, odeslat frontu (náhled ani režim nanečisto s ním nejdou,
+  // viz `jenOdeslat` níž). Kdyby se plánování někdy vrátilo do databáze nebo
+  // k volajícímu, kterému nechceme dát servisní klíč, je připravená a hlídaná.
   const cronToken = Deno.env.get("EMAIL_CRON_TOKEN")?.trim();
   const poslanyCron = (req.headers.get("x-cron-token") ?? "").trim();
   const jeCron = !!cronToken && !!poslanyCron &&

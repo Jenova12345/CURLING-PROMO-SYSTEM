@@ -1,3 +1,9 @@
+# Naplánovaná funkce `posli-emaily` vyprazdňuje frontu e-mailů po 5 minutách.
+# Rozvrh si Netlify čte z exportu `config` v tom souboru, ne odsud.
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
