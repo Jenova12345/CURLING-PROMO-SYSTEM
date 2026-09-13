@@ -196,8 +196,21 @@ BEGIN
   -- Co tedy drží frontu na uzdě: (1) série i přebití se slučují do jedné
   -- zprávy (migrace 20260912160000 a 20260912200000), takže špička, kvůli
   -- které mez vznikla, vůbec nenastane; (2) strop brzdí RYCHLOST odesílání,
-  -- a právě rychlost je to, co spálí kvótu i reputaci domény; (3) retence
-  -- v migraci 20260912180000 maže DOKONČENÉ řádky po 90 dnech.
+  -- a právě rychlost je to, co spálí kvótu i reputaci domény.
+  --
+  -- ⚠️ RETENCE FRONTY NENÍ ŽÁDNÁ, A JE TO VĚDOMÉ. Tenhle komentář chvíli
+  -- odkazoval na úklidový job v migraci 20260912180000. Ta migrace byla
+  -- zrušena (plánovač šel z databáze ven, `pg_net` se na produkci
+  -- neinstaluje), takže odkaz mířil na neexistující soubor a tvrdil úklid,
+  -- který nikdo nedělá. Našla to brána code review 13. 9. 2026.
+  --
+  -- Proč se to nedodělalo jinam: (a) bez `pg_cron` není v databázi co by
+  -- úklid spouštělo, (b) tvrdé mazání jde proti zásadě „nic nemazat natvrdo"
+  -- z CLAUDE.md a po 90 dnech by nešlo doložit, že e-mail odešel, (c) růst
+  -- fronty dnes nic nebolí: změřeno 100 000 řádků → dotaz stropu 1,3 ms
+  -- s indexem `idx_email_outbox_user_claimed`.
+  -- Kdy to řešit a jak (mazat, archivovat, nebo nechat růst) je otázka na PM,
+  -- ne věc, kterou má tahle migrace rozhodnout za něj.
   --
   -- Co zbývá jako vědomé riziko: naskriptovaný nápor tisíců samostatných
   -- rezervací frontu nafoukne a ta se bude vyprazdňovat dlouho. Je to ale

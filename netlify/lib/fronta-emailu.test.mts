@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { vyprazdniFrontu, TIMEOUT_MS } from "./fronta-emailu.mts";
+import { vyprazdniFrontu, TIMEOUT_MS, DAVKA } from "./fronta-emailu.mts";
 
 // =============================================================================
 // TESTY: naplánované vyprazdňování fronty e-mailů zvenčí (Netlify)
@@ -47,25 +47,18 @@ describe("vyprazdniFrontu", () => {
     expect(v.duvod).toContain("SUPABASE_URL");
   });
 
-  it("JÁDRO: mimo produkční kontext nevolá nic (netlify dev by jinak sáhl na produkci)", async () => {
-    const { fn, volani } = spionFetch();
-    for (const kontext of ["dev", "deploy-preview", "branch-deploy"]) {
-      const v = await vyprazdniFrontu(
-        { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co", CONTEXT: kontext },
-        fn,
-      );
-      expect(v.odeslano, `kontext ${kontext} prošel`).toBe(false);
-      expect(v.duvod).toContain(kontext);
-    }
-    expect(volani, "mimo produkci se volalo").toHaveLength(0);
-  });
+  // ⚠️ SCÉNÁŘ NA `CONTEXT` TU BYL A JE PRYČ. Tvrdil, že mimo produkci se
+  // nevolá nic, ale `CONTEXT` ve funkcích Netlify za běhu VŮBEC NEEXISTUJE
+  // (dokumentace: dostupné jsou jen `URL`, `SITE_NAME`, `SITE_ID`). Test si ho
+  // dosazoval ručně, takže měřil vlastní výmysl — zelený a bezcenný. Brána
+  // code review 13. 9. 2026.
 
   // ROZLIŠUJÍCÍ PROTIPŘÍKLAD: bez něj by testu vyhověla i funkce, která
   // nevolá NIKDY — tedy naplánovaná úloha, co tiše nedělá nic.
   it("JÁDRO: v produkci s klíčem zavolá send-emails správným způsobem", async () => {
     const { fn, volani } = spionFetch();
     const v = await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co", CONTEXT: "production" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
       fn,
     );
 
@@ -80,10 +73,39 @@ describe("vyprazdniFrontu", () => {
     expect(v.odeslano).toBe(true);
   });
 
+  // ⚠️ TĚLO POŽADAVKU NIKDO NEHLÍDAL. Brána code review 13. 9. 2026 změřila,
+  // že záměna `{"limit":20}` za `{"dryRun":true}` nechá všechna ostatní
+  // tvrzení zelená — a systém by přitom neodeslal nikdy nic a hlásil
+  // „Fronta zpracována."
+  it("JÁDRO: požadavek si říká o ODESLÁNÍ dávky, ne o náhled", async () => {
+    const { fn, volani } = spionFetch();
+    await vyprazdniFrontu(
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      fn,
+    );
+    const telo = JSON.parse(String(volani[0].init.body));
+    expect(telo.limit, "dávka se neposílá, send-emails si vezme svých 50").toBe(DAVKA);
+    expect(telo.dryRun, "posílá se náhled místo odeslání — nic by neodešlo").toBeUndefined();
+    expect(telo.mock, "posílá se režim nanečisto — fronta by se zahodila").toBeUndefined();
+  });
+
+  // Naplánovaná funkce Netlify má tvrdý strop 30 s a `send-emails` čeká mezi
+  // voláními Resendu 550 ms. Dávka se do okna musí vejít i s naším timeoutem,
+  // jinak platforma běh utne uprostřed odesílání.
+  it("JÁDRO: dávka i timeout se vejdou do 30sekundového okna Netlify", () => {
+    const STROP_NETLIFY_MS = 30_000;
+    const PAUZA_MS = 550; // musí odpovídat send-emails/index.ts
+
+    expect(TIMEOUT_MS, "vlastní timeout je nad platformním stropem, takže nikdy nenastane")
+      .toBeLessThan(STROP_NETLIFY_MS);
+    expect(DAVKA * PAUZA_MS, "samotné pauzy mezi e-maily přetečou náš timeout")
+      .toBeLessThan(TIMEOUT_MS);
+  });
+
   it("URL s koncovým lomítkem nevyrobí dvojité", async () => {
     const { fn, volani } = spionFetch();
     await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co/", CONTEXT: "production" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co/" },
       fn,
     );
     expect(volani[0].url).toBe("https://x.supabase.co/functions/v1/send-emails");
@@ -92,7 +114,7 @@ describe("vyprazdniFrontu", () => {
   it("klíč s koncovým novým řádkem se ořízne (jinak `fetch` spadne na ByteString)", async () => {
     const { fn, volani } = spionFetch();
     await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: `${KLIC}\n`, SUPABASE_URL: "https://x.supabase.co", CONTEXT: "production" },
+      { SUPABASE_SERVICE_ROLE_KEY: `${KLIC}\n`, SUPABASE_URL: "https://x.supabase.co" },
       fn,
     );
     const h = volani[0].init.headers as Record<string, string>;
@@ -102,7 +124,7 @@ describe("vyprazdniFrontu", () => {
   it("URL se bere z VITE_SUPABASE_URL, když SUPABASE_URL chybí", async () => {
     const { fn, volani } = spionFetch();
     await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, VITE_SUPABASE_URL: "https://z.supabase.co", CONTEXT: "production" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, VITE_SUPABASE_URL: "https://z.supabase.co" },
       fn,
     );
     expect(volani[0].url).toBe("https://z.supabase.co/functions/v1/send-emails");
@@ -111,7 +133,7 @@ describe("vyprazdniFrontu", () => {
   it("JÁDRO: neúspěch se hlásí jako neúspěch, ne jako tichý běh", async () => {
     const { fn } = spionFetch({ ok: false, status: 401, text: async () => "Frontu obsluhuje jen server." });
     const v = await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co", CONTEXT: "production" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
       fn,
     );
     expect(v.odeslano).toBe(false);
@@ -126,7 +148,7 @@ describe("vyprazdniFrontu", () => {
     }) as unknown as typeof fetch;
 
     const v = await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co", CONTEXT: "production" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
       fn,
     );
     expect(v.odeslano).toBe(false);
@@ -137,19 +159,33 @@ describe("vyprazdniFrontu", () => {
     const dlouhe = "x".repeat(5000);
     const { fn } = spionFetch({ text: async () => dlouhe });
     const v = await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co", CONTEXT: "production" },
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
       fn,
     );
     expect(v.telo!.length).toBeLessThanOrEqual(300);
   });
 
-  it("timeout je nastavený (bez něj by běh visel na nedostupné funkci)", async () => {
-    const { fn, volani } = spionFetch();
-    await vyprazdniFrontu(
-      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co", CONTEXT: "production" },
-      fn,
+  // ⚠️ Dřív tu stálo jen „signal je definovaný a TIMEOUT_MS > 0". To projde
+  // i pro `AbortSignal.timeout(1)`, tedy pro funkci, která se utne dřív, než
+  // stihne cokoli. Brána code review 13. 9. 2026. Měří se proto SKUTEČNÉ
+  // přerušení: `fetch`, který nikdy neodpoví, musí na timeoutu spadnout.
+  it("JÁDRO: timeout požadavek opravdu utne, ne jen visí", async () => {
+    const nikdyNeodpovi = ((_url: string, init?: RequestInit) =>
+      new Promise<Response>((_vyres, zamitni) => {
+        init?.signal?.addEventListener("abort", () => zamitni(new DOMException("Aborted", "TimeoutError")));
+      })) as unknown as typeof fetch;
+
+    const zacatek = Date.now();
+    const v = await vyprazdniFrontu(
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      nikdyNeodpovi,
+      30, // krátký timeout jen pro test; ostrá hodnota je TIMEOUT_MS
     );
-    expect(volani[0].init.signal).toBeDefined();
-    expect(TIMEOUT_MS).toBeGreaterThan(0);
+    const trvalo = Date.now() - zacatek;
+
+    expect(v.odeslano, "nedostupná funkce se tváří jako úspěch").toBe(false);
+    expect(trvalo, "požadavek nevisel na timeoutu, skončil jinak").toBeGreaterThanOrEqual(25);
+    expect(trvalo, "timeout se neuplatnil, běželo to dál").toBeLessThan(5_000);
+    expect(JSON.stringify(v), "klíč prosákl do výsledku").not.toContain(KLIC);
   });
 });

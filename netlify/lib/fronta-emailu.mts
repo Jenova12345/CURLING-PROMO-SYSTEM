@@ -16,8 +16,6 @@ export interface Prostredi {
   /** URL projektu. Když chybí, zkusí se `VITE_SUPABASE_URL` z buildu. */
   SUPABASE_URL?: string;
   VITE_SUPABASE_URL?: string;
-  /** Netlify: 'production' | 'deploy-preview' | 'branch-deploy' | 'dev'. */
-  CONTEXT?: string;
 }
 
 export interface Vysledek {
@@ -27,9 +25,32 @@ export interface Vysledek {
   telo?: string;
 }
 
-/** Kolik čekat na edge funkci, než to vzdáme. Dávka 50 e-mailů s pauzami
- *  mezi voláními Resendu se vejde do půl minuty s velkou rezervou. */
-export const TIMEOUT_MS = 60_000;
+/**
+ * ⚠️ NAPLÁNOVANÁ FUNKCE NETLIFY MÁ TVRDÝ STROP 30 SEKUND.
+ * Dokumentace: „Scheduled functions have a 30 second execution limit."
+ *
+ * Dřív tu stálo 60 000 s komentářem o „velké rezervě". Byla to nepravda
+ * v obou směrech a našla ji brána code review 13. 9. 2026: strop je poloviční,
+ * a hlavně se do něj plná dávka nevejde. `send-emails` čeká mezi voláními
+ * Resendu `PAUZA_MS = 550` (Resend má limit 2 požadavky/s), takže dávka 50
+ * e-mailů prospí 27,5 s ještě než započítáme síť — Netlify by běh uťalo
+ * uprostřed odesílání.
+ *
+ * Vlastní timeout je proto POD platformním stropem: ať se v logu objeví naše
+ * hláška, ne tiché zabití platformou.
+ */
+export const TIMEOUT_MS = 25_000;
+
+/**
+ * Kolik e-mailů si říct za jeden běh.
+ *
+ * 20 × 550 ms = 11 s prospaných pauz, do třicetisekundového okna se to vejde
+ * i s rezervou na síť a na pomalou odpověď Resendu. Při běhu po 5 minutách
+ * je to strop 240 e-mailů za hodinu, tedy víc, než kolik jich smí odejít
+ * jednomu člověku (`settings.email_max_za_hodinu`, výchozích 100).
+ * Hlubší frontu doberou další běhy.
+ */
+export const DAVKA = 20;
 
 /**
  * Rozhodne, jestli se má volat, a zavolá.
@@ -40,14 +61,33 @@ export const TIMEOUT_MS = 60_000;
 export async function vyprazdniFrontu(
   env: Prostredi,
   fetchFn: typeof fetch = fetch,
+  // Timeout je parametr jen proto, aby šel OTESTOVAT. `AbortSignal.timeout()`
+  // nejde zkoumat zvenčí (nedá se z něj přečíst, na kolik je nastavený)
+  // a nepodléhá ani falešným časovačům vitestu — test s ním tedy neuměl
+  // rozeznat 25 sekund od jedné milisekundy. Brána code review 13. 9. 2026.
+  timeoutMs: number = TIMEOUT_MS,
 ): Promise<Vysledek> {
-  // ⚠️ JEN PRODUKČNÍ NASAZENÍ. Naplánované funkce sice Netlify pouští jen
-  // v produkci, ale `netlify dev` na lokále má tytéž proměnné — a kdyby si je
-  // někdo načetl, volal by ostrou produkci z notebooku. Když `CONTEXT` chybí
-  // (test, cizí prostředí), nerozhoduje se podle něj.
-  if (env.CONTEXT && env.CONTEXT !== "production") {
-    return { odeslano: false, duvod: `Kontext '${env.CONTEXT}' není produkce, nevolám nic.` };
-  }
+  // ⚠️ ŽÁDNÁ KONTROLA KONTEXTU TU NENÍ, A JE TO ZÁMĚR PODLOŽENÝ DOKUMENTACÍ.
+  //
+  // Chvíli tu stálo `if (env.CONTEXT !== "production")` s komentářem, že to
+  // brání `netlify dev` sáhnout na produkci. Brána code review 13. 9. 2026
+  // upozornila, že to nejspíš nic nedělá, a dokumentace Netlify to potvrdila:
+  // ve funkcích jsou za běhu dostupné JEN `URL`, `SITE_NAME` a `SITE_ID`
+  // („only the following variables are available to serverless functions
+  // during runtime"). `CONTEXT` je proměnná BUILDU. Podmínka tedy nikdy
+  // nevyšla a selhávala OTEVŘENĚ — horší než žádná, protože budila dojem
+  // ochrany. Testy si `CONTEXT` dosazovaly ručně, takže to nechytily.
+  //
+  // Co plochu doopravdy drží:
+  //   * plán běží jen na publikovaných nasazeních („Scheduled functions only
+  //     run on their schedule for published deploys — Deploy Previews and
+  //     branch deploys won't trigger them automatically"),
+  //   * servisní klíč existuje jen v prostředí Netlify.
+  //
+  // Co tím pádem ZBÝVÁ jako vědomé riziko: tlačítko „Run now" v Netlify UI
+  // spustí funkci i z náhledu, a `netlify dev` s načtenými produkčními
+  // proměnnými zavolá produkci z notebooku. Obojí je vědomý úkon člověka,
+  // který k Netlify má přístup — tedy totéž, co platí o každém servisním klíči.
 
   const klic = env.SUPABASE_SERVICE_ROLE_KEY?.trim();
   // `.trim()` NENÍ kosmetika. Secret vložený přes schránku s sebou běžně nese
@@ -77,8 +117,11 @@ export async function vyprazdniFrontu(
         apikey: klic,
         "Content-Type": "application/json",
       },
-      body: "{}",
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      // ⚠️ `limit` se posílá VÝSLOVNĚ, ať se dávka vejde do 30sekundového okna
+      // Netlify (viz `DAVKA` výš). Bez něj si `send-emails` vezme svých 50
+      // a běh by platforma uťala uprostřed odesílání.
+      body: JSON.stringify({ limit: DAVKA }),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (e) {
     // ⚠️ Chybu NEPOUŠTĚT ven celou. Kdyby `fetch` padl na špatné hlavičce,
