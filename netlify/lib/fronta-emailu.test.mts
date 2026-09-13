@@ -7,8 +7,10 @@ import { vyprazdniFrontu, TIMEOUT_MS, DAVKA } from "./fronta-emailu.mts";
 // CO TENHLE SOUBOR HLÍDÁ: tohle je jediné místo v repu, kde z hostingu odchází
 // SERVISNÍ KLÍČ. Nejcennější tvrzení nejsou o šťastné cestě, ale tři jiná:
 //   * bez klíče se NEVOLÁ NIC (jinak by lokál a náhledy volaly produkci),
-//   * mimo produkční kontext se NEVOLÁ NIC,
-//   * klíč se nikdy neobjeví v tom, co funkce vrací (log hostingu).
+//   * klíč se nikdy neobjeví v tom, co funkce vrací (log hostingu),
+//   * ÚSPĚCH SE POZNÁ Z TĚLA, NE ZE STAVOVÉHO KÓDU — `send-emails` vrací 200
+//     i když neodešlo nic (chybí `RESEND_API_KEY` → režim náhledu) a i když
+//     selhala všechna jednotlivá odeslání (`selhalo: 20`).
 // =============================================================================
 
 const KLIC = "sb_secret_TESTOVACI_KLIC_NEPOUZIVAT";
@@ -21,7 +23,10 @@ function spionFetch(odpoved: Partial<Response> = {}) {
     return {
       ok: true,
       status: 200,
-      text: async () => "{\"odeslano\":0}",
+      // Přesně to, co vrací `send-emails` po ostrém běhu nad prázdnou frontou.
+      // Ne náhodné JSON: kdyby tu chyběl `rezim`, braly by scénáře níž úspěch
+      // z něčeho, co produkce nikdy nevrátí.
+      text: async () => '{"rezim":"ostry","odeslano":0,"selhalo":0,"zapisSelhal":0}',
       ...odpoved,
     } as Response;
   });
@@ -187,5 +192,102 @@ describe("vyprazdniFrontu", () => {
     expect(trvalo, "požadavek nevisel na timeoutu, skončil jinak").toBeGreaterThanOrEqual(25);
     expect(trvalo, "timeout se neuplatnil, běželo to dál").toBeLessThan(5_000);
     expect(JSON.stringify(v), "klíč prosákl do výsledku").not.toContain(KLIC);
+  });
+  // ===========================================================================
+  // ÚSPĚCH SE POZNÁ Z TĚLA, NE ZE STAVOVÉHO KÓDU
+  // ===========================================================================
+  // Bezpečnostní brána 13. 9. 2026: `send-emails` vrací HTTP 200 i na dvou
+  // cestách, kde neodejde nic. Kdyby se tu soudilo podle `odpoved.ok`, tichá
+  // porucha by v Netlify svítila zeleně — tedy přesně to, čemu měl návratový
+  // stav zabránit.
+
+  /** Odpověď `send-emails` jako text, ať scénáře níž nejsou samé uvozovky. */
+  function telo(zprava: Record<string, unknown>) {
+    return { text: async () => JSON.stringify(zprava) };
+  }
+
+  it("JÁDRO: režim náhledu (chybí RESEND_API_KEY) je NEÚSPĚCH, i když vrátí 200", async () => {
+    const { fn } = spionFetch(telo({ rezim: "nahled", duvod: "RESEND_API_KEY neni nastaveny", ceka: 12 }));
+    const v = await vyprazdniFrontu(
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      fn,
+    );
+
+    expect(v.stav, "scénář nemá smysl, pokud netestuje právě dvoustovku").toBe(200);
+    expect(v.odeslano, "zrotovaný klíč prošel jako úspěšný běh").toBe(false);
+    expect(v.duvod).toContain("RESEND_API_KEY");
+  });
+
+  it("JÁDRO: selhalá odeslání jsou NEÚSPĚCH, i když vrátí 200", async () => {
+    const { fn } = spionFetch(telo({ rezim: "ostry", odeslano: 0, selhalo: 20, zapisSelhal: 0 }));
+    const v = await vyprazdniFrontu(
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      fn,
+    );
+
+    expect(v.stav).toBe(200);
+    expect(v.odeslano, "celá dávka selhala a běh se tvářil zeleně").toBe(false);
+    expect(v.duvod).toContain("20");
+  });
+
+  it("JÁDRO: nezapsaný výsledek je NEÚSPĚCH (hrozí dvojí odeslání)", async () => {
+    // `zapisSelhal` je horší než `selhalo`: e-mail odešel, ale fronta o tom
+    // neví, takže ho úklid za 10 minut pošle znovu. Musí to být vidět.
+    const { fn } = spionFetch(telo({ rezim: "ostry", odeslano: 5, selhalo: 0, zapisSelhal: 1 }));
+    const v = await vyprazdniFrontu(
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      fn,
+    );
+    expect(v.odeslano).toBe(false);
+  });
+
+  it("režim nanečisto je taky NEÚSPĚCH (fronta se zahodí, nic neodejde)", async () => {
+    const { fn } = spionFetch(telo({ rezim: "nanecisto", odeslano: 0, preskoceno: 20 }));
+    const v = await vyprazdniFrontu(
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      fn,
+    );
+    expect(v.odeslano).toBe(false);
+    expect(v.duvod).toContain("nanecisto");
+  });
+
+  it("nerozpoznaná odpověď je NEÚSPĚCH, ne pád", async () => {
+    const { fn } = spionFetch({ text: async () => "<html>502 Bad Gateway</html>" });
+    const v = await vyprazdniFrontu(
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      fn,
+    );
+    expect(v.odeslano).toBe(false);
+    expect(v.duvod).toContain("nerozpoznaný");
+  });
+
+  // ROZLIŠUJÍCÍ PROTIPŘÍKLAD ke scénářům výš: bez něj by testům vyhověla
+  // i funkce, která hlásí neúspěch VŽDYCKY.
+  it("JÁDRO: povedený ostrý běh je úspěch a nese počet odeslaných", async () => {
+    const { fn } = spionFetch(telo({ rezim: "ostry", odeslano: 7, selhalo: 0, zapisSelhal: 0 }));
+    const v = await vyprazdniFrontu(
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      fn,
+    );
+    expect(v.odeslano).toBe(true);
+    expect(v.duvod, "log neřekne, kolik jich odešlo").toContain("7");
+  });
+
+  it("rozhoduje CELÉ tělo, ne jen ořezaný začátek pro log", async () => {
+    // Kdyby se parsoval `telo` (oříznutý na 300 znaků), JSON by tu nedal
+    // parsovat a povedený běh by se hlásil jako porucha.
+    const { fn } = spionFetch(telo({
+      rezim: "ostry",
+      vypln: "y".repeat(400),
+      odeslano: 3,
+      selhalo: 0,
+      zapisSelhal: 0,
+    }));
+    const v = await vyprazdniFrontu(
+      { SUPABASE_SERVICE_ROLE_KEY: KLIC, SUPABASE_URL: "https://x.supabase.co" },
+      fn,
+    );
+    expect(v.odeslano, "rozhodovalo se z oříznutého těla").toBe(true);
+    expect(v.telo!.length, "do logu šlo celé tělo").toBeLessThanOrEqual(300);
   });
 });

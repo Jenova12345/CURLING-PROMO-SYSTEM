@@ -18,6 +18,19 @@ export interface Prostredi {
   VITE_SUPABASE_URL?: string;
 }
 
+/**
+ * Tvar odpovědi `send-emails` — jen ta pole, podle kterých se tu rozhoduje.
+ * Všechna jsou nepovinná schválně: kdyby funkce vrátila něco jiného, než
+ * čekáme, musí to skončit jako NEÚSPĚCH, ne jako pád parseru.
+ */
+interface OdpovedSendEmails {
+  rezim?: string;
+  /** POČET odeslaných zpráv (ne boolean — na rozdíl od `Vysledek.odeslano`). */
+  odeslano?: number;
+  selhalo?: number;
+  zapisSelhal?: number;
+}
+
 export interface Vysledek {
   odeslano: boolean;
   duvod: string;
@@ -130,14 +143,63 @@ export async function vyprazdniFrontu(
     return { odeslano: false, duvod: `Volání send-emails selhalo (${druh}).` };
   }
 
-  // Tělo se čte kvůli logu, ale ořezané: odpověď v režimu náhledu může nést
-  // adresy a texty zpráv a ty nepatří do logu hostingu.
-  const telo = (await odpoved.text().catch(() => "")).slice(0, 300);
+  // ⚠️ HTTP 200 OD `send-emails` NEZNAMENÁ, ŽE SE ODESLALO. Dvě cesty vracejí
+  // dvoustovku, i když neodejde nic:
+  //   * chybí (nebo se zrotoval) `RESEND_API_KEY` → funkce spadne do větve
+  //     NÁHLEDU, vrátí `rezim: "nahled"` a jen vypíše, co ve frontě leží;
+  //   * jednotlivá odeslání selžou → `selhalo: 20`, ale stavový kód se odvozuje
+  //     jen z `potiz` a `zapisSelhal`, takže je pořád 200.
+  // Kdyby se tu soudilo podle `odpoved.ok`, prošel by zeleně přesně ten případ,
+  // kvůli kterému návratový stav vznikl. Našla bezpečnostní brána 13. 9. 2026.
+  // Rozhoduje proto TĚLO odpovědi.
+  const surove = await odpoved.text().catch(() => "");
+
+  // Ořez až tady: parsuje se CELÉ tělo, do logu jde jen začátek. Odpověď
+  // v režimu náhledu může nést adresy a texty zpráv a ty do logu hostingu
+  // nepatří.
+  const telo = surove.slice(0, 300);
+  const stav = odpoved.status;
+
+  if (!odpoved.ok) {
+    return { odeslano: false, duvod: `send-emails vrátilo ${stav}.`, stav, telo };
+  }
+
+  let zprava: OdpovedSendEmails | null;
+  try {
+    zprava = JSON.parse(surove) as OdpovedSendEmails;
+  } catch {
+    zprava = null;
+  }
+
+  // Cokoli jiného než ostré odeslání je vada NASTAVENÍ, ne úspěšný běh.
+  if (zprava?.rezim !== "ostry") {
+    return {
+      odeslano: false,
+      duvod: zprava?.rezim === "nahled"
+        ? "send-emails běželo v režimu NÁHLEDU a nic neodeslalo — chybí RESEND_API_KEY."
+        : `send-emails neběželo naostro (režim: ${zprava?.rezim ?? "nerozpoznaný"}).`,
+      stav,
+      telo,
+    };
+  }
+
+  const selhalo = Number(zprava.selhalo ?? 0);
+  // `zapisSelhal` je horší než `selhalo`: e-mail nejspíš ODEŠEL, ale fronta
+  // o tom neví, takže ho úklid za 10 minut pošle znovu. Musí být vidět.
+  const zapisSelhal = Number(zprava.zapisSelhal ?? 0);
+  if (selhalo > 0 || zapisSelhal > 0) {
+    return {
+      odeslano: false,
+      duvod: `send-emails hlásí neúspěch: selhalo ${selhalo}, nezapsáno ${zapisSelhal}.`,
+      stav,
+      telo,
+    };
+  }
 
   return {
-    odeslano: odpoved.ok,
-    duvod: odpoved.ok ? "Fronta zpracována." : `send-emails vrátilo ${odpoved.status}.`,
-    stav: odpoved.status,
+    odeslano: true,
+    duvod: `Fronta zpracována, odesláno ${Number(zprava.odeslano ?? 0)}.`,
+    stav,
     telo,
   };
 }
