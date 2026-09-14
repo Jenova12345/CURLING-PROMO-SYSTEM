@@ -217,6 +217,61 @@ tří gatů.** Platí i pro drobné úpravy — u peněz není „malá změna".
 
 Když se součty rozejdou, změna neprochází — bez ohledu na to, jak dobře vypadá kód.
 
+## DAŇOVÝ REŽIM HALY — OVĚŘENÝ FAKT, NEHÁDAT SE O NĚM ZNOVU
+
+**Curling promo Ostrava s.r.o., IČO 29796717 = NEPLÁTCE DPH.**
+Ověřeno 14. 9. 2026 ve čtyřech nezávislých registrech, všechny se shodly:
+
+| zdroj | co vrátil |
+|---|---|
+| ARES, základní záznam | `"dic": null` |
+| ARES, `seznamRegistraci` | `"stavZdrojeDph": "NEEXISTUJICI"` (přitom `stavZdrojeVr`/`Res` = `AKTIVNI`, takže subjekt zná) |
+| ARES, endpoint DPH | `GET /ekonomicke-subjekty-dph/29796717` → **404 Not Found** |
+| Registr plátců DPH (MFČR ADIS) | `statusCode="0" statusText="OK"`, `typSubjektu="NENALEZEN"` |
+| VIES (EU) | `"isValid": false, "userError": "INVALID"` |
+
+`typSubjektu` u MFČR je právě to pole, které by řeklo `PLATCE` nebo
+`IDENTIFIKOVANA_OSOBA` — vrací `NENALEZEN`. Není to tedy ani identifikovaná
+osoba. Firma vznikla **16. 7. 2026**, na povinnou registraci (obrat 2 mil. Kč
+za 12 měsíců) nemohla mít čas a dobrovolně registrovaná podle registrů není.
+
+**DIČ „CZ29796717" nikde neexistuje.** Tvarem se shoduje s IČO, jak to
+u českých právnických osob bývá, ale to platí jen když registrace existuje.
+Tady neexistuje — nepoužívat ho a neodvozovat z IČO.
+
+**Účet ve Fakturoidu je nastavený SPRÁVNĚ** (`vat_mode: non_vat_payer`,
+ověřeno čtením přes API 14. 9. 2026).
+
+⚠️ **NÁŠ SYSTÉM TO MÁ NAOPAK A ZATÍM SE TO VĚDOMĚ NEOPRAVUJE:**
+`IS_VAT_PAYER=true` (secret v Supabase) a `billing_settings.vat_mode='platce'`.
+Obojí je špatně, shodují se spolu, a proto je brána `overDanovyRezim`
+propustila — porovnává dva zdroje, které jsou oba vedle. **Třetí zdroj
+(účet u Fakturoidu) nekontroluje nikdo.** Čeká se na rozhodnutí; až padne,
+mění se to jako běžná změna přes brány, ne natvrdo.
+
+Změřený dopad přepnutí na neplátce (14. 9. 2026, na produkci v transakci
+s ROLLBACKem):
+- **„Kdo kolik dluží" se NEHNE.** Všech 18 řádků `billing_reconcile` je
+  před i po identických — funkce o DPH vůbec neví, `dluzi` je hodiny × sazba.
+- **Mění se jen doklady za komerční akce.** 34 rezervací za 581 100 Kč je
+  vedeno v cenách BEZ daně (`cena_bez_dph = true`); tam by Fakturoid jako
+  plátci přidal 12 % navrch (`vat_price_mode: without_vat`), jako neplátci
+  nepřidá nic. Rozdíl ≈ **69 732 Kč**, o které by zákazníci byli
+  naúčtováni víc.
+- **Klubové doklady se nemění.** 173 rezervací za 821 400 Kč má ceny
+  VČETNĚ daně (`pricesIncludeVat: true`), takže částka k úhradě je stejná
+  v obou režimech; liší se jen rozpis daně na dokladu.
+
+**Nic se zatím nenaúčtovalo špatně.** K 14. 9. 2026 je v produkci
+`invoices` = 0, `invoice_items` = 0, `fakturoid_invoices` = 0, žádná
+rezervace nemá `invoice_id` ani `invoiced_at`. Interní engine navíc
+v režimu `platce` odmítá vystavit cokoli („Doklad umí zatím jen režim
+neplátce DPH"), takže doklad s DPH jím vzniknout ani nemohl. Jediný
+historický záznam v auditu (1. 9. 2026) bylo testovací zabrání
+`zavod2-…` bez `provider_invoice_id` i `cislo`, smazané po 27 sekundách.
+
+---
+
 ## Kde právě jsme (aktualizováno 24. 8. 2026)
 
 **Etapa 3 — napojení na Fakturoid (varianta S2).** Ostrý doklad vystavuje

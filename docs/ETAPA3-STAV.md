@@ -40,6 +40,7 @@ nová implementace `InvoiceProvider`, aniž se sáhne na jádro.
 | **D3 — adresa** | Interim: celý `subjects.address` do `street`, `city`/`zip` prázdné. | 24. 8. 2026 |
 | Splatnost | 14 dní (`BILLING_DUE_DAYS`) | dřívější |
 | Režim DPH | Neplátce — řádky bez `vat_rate`, DIČ se neposílá | dřívější |
+| **Režim DPH — OVĚŘENO** | **IČO 29796717 je NEPLÁTCE** (ARES + MFČR + VIES, 14. 9. 2026). Řádek výš je tedy věcně správně. ⚠️ Produkce to ale má opačně: `IS_VAT_PAYER=true` a `billing_settings.vat_mode='platce'`. Podrobnosti, změřený dopad i důkazy jsou v CLAUDE.md, kapitola „Daňový režim haly“. | 14. 9. 2026 |
 
 ---
 
@@ -138,6 +139,11 @@ se tím podhodnotí o celou sazbu: místo 10 000 + 12 % = 11 200 Kč systém tvr
 
 **Rozsah na produkci k 2. 9. 2026:** 4 rezervace, 22 000 Kč základu,
 **2 640 Kč nezapočítané DPH** (Deloitte, Hybridní vzdělávání, 2× ZŠ Bulharská).
+
+> **Přeměřeno 14. 9. 2026: rozejitých rezervací je 0** — tahle vada už na produkci
+> není. Navíc `over_danovy_rezim_podkladu` se pod `vat_mode = 'neplatce'` vrací hned
+> prvním příkazem, takže po srovnání režimu (viz CLAUDE.md) přestane být tahle brána
+> činná úplně a celá kapitola se stane historií, ne úkolem.
 
 Fakturaci to nepustí dál — daňová brána z vlny B tyhle podklady odmítá
 („Doklad za akci by míchal ceny s DPH a bez DPH"). To je brána dělající svou
