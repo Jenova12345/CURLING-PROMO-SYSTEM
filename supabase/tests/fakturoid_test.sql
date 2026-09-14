@@ -33,13 +33,51 @@ END $$;
 -- ---------------------------------------------------------------------------
 -- Fixtura
 -- ---------------------------------------------------------------------------
+-- SUBJEKT A REZERVACE MUSÍ PATŘIT K SOBĚ.
+--
+-- Dřív se tu bralo „první subjekt" a „první čtyři rezervace" nezávisle na
+-- sobě, takže fixtura skoro jistě míchala rezervace cizích klubů pod hlavičku
+-- jednoho. Testům to nevadilo — měří claim a idempotenci, ne příjemce —
+-- a databáze to nekontrolovala. Od migrace 20260914220000 kontroluje
+-- (`fakturoid_zkus_zabrat` odmítne podklad, který nepatří příjemci
+-- z hlavičky), takže tahle sada na svojí vlastní nesourodé fixtuře padala.
+-- Oprava je ve fixtuře, ne v zámku: doklad na cizí rezervace je přesně to,
+-- co se zakazuje, a žádná legitimní cesta ho nevystavuje —
+-- `fakturoid_podklady_klub` filtruje rovnou tím subjektem a obě volající
+-- vrstvy (skript i Edge funkce) smíšené subjekty samy odmítají.
 CREATE TEMP TABLE fx AS
-SELECT
-  (SELECT id FROM subjects WHERE deleted_at IS NULL ORDER BY id LIMIT 1)  AS subjekt,
-  (SELECT id FROM reservations ORDER BY id LIMIT 1)                       AS r1,
-  (SELECT id FROM reservations ORDER BY id OFFSET 1 LIMIT 1)              AS r2,
-  (SELECT id FROM reservations ORDER BY id OFFSET 2 LIMIT 1)              AS r3,
-  (SELECT id FROM reservations ORDER BY id OFFSET 3 LIMIT 1)              AS r4;
+WITH s AS (
+  SELECT r.subject_id AS id
+    FROM reservations r
+    JOIN subjects sub ON sub.id = r.subject_id AND sub.deleted_at IS NULL
+   GROUP BY r.subject_id HAVING count(*) >= 4
+   ORDER BY count(*) DESC, r.subject_id LIMIT 1
+), r AS (
+  SELECT res.id, row_number() OVER (ORDER BY res.id) AS poradi
+    FROM reservations res, s WHERE res.subject_id = s.id
+)
+SELECT s.id                                          AS subjekt,
+       (SELECT id FROM r WHERE poradi = 1)           AS r1,
+       (SELECT id FROM r WHERE poradi = 2)           AS r2,
+       (SELECT id FROM r WHERE poradi = 3)           AS r3,
+       (SELECT id FROM r WHERE poradi = 4)           AS r4
+  FROM s;
+
+-- Kdyby se seed změnil a fixtura vyšla neúplná, ať to spadne TADY a ne
+-- o padesát řádků níž jako záhadné „claim neprošel".
+DO $$
+DECLARE _f record;
+BEGIN
+  SELECT * INTO _f FROM fx;
+  IF _f.subjekt IS NULL OR _f.r4 IS NULL THEN
+    RAISE EXCEPTION 'Fixtura: v datech není subjekt se čtyřmi rezervacemi, sada by neměřila nic.';
+  END IF;
+  IF EXISTS (SELECT 1 FROM reservations
+              WHERE id IN (_f.r1, _f.r2, _f.r3, _f.r4)
+                AND subject_id IS DISTINCT FROM _f.subjekt) THEN
+    RAISE EXCEPTION 'Fixtura: rezervace nepatří subjektu z hlavičky.';
+  END IF;
+END $$;
 
 -- ===========================================================================
 -- 1) ZÁMEK 3 — atomický claim
