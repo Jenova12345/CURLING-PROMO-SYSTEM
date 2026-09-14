@@ -40,6 +40,32 @@ jako opatrnost do zásoby.
    `db reset --linked`, žádné mazání natvrdo. Na ostré produkci by reset smazal
    klientova data — viz `docs/PRODUKCE-PRAVIDLA.md`.
 
+   **Každou migraci piš idempotentně** (`IF NOT EXISTS`, `CREATE OR REPLACE`,
+   `DROP … IF EXISTS` před `CREATE`). Ne proto, že by jeden soubor mohl zůstat
+   rozpůlený — proti tomu obálka drží —, ale kvůli těmhle třem věcem. Změřeno
+   14. 9. 2026 na odhozeném `postgres:17`, CLI 2.104.0, třemi pokusy:
+
+   - **Jeden soubor migrace JE atomický.** CLI ho posílá jako jednu transakci.
+     Test: soubor `CREATE TABLE pulka_pred; SELECT 1/0; CREATE TABLE pulka_po;`
+     → po pádu neexistuje **ani** `pulka_pred`. Celý soubor se vrátil.
+     (Dřívější znění tohohle zadání tvrdilo opak — neplatí to.)
+   - **Dávka souborů atomická NENÍ.** To je ta skutečná díra. Push tří migrací,
+     kde spadne druhá → první zůstala nasazená **a zapsaná** v
+     `schema_migrations`, třetí se vůbec nespustila. Opravený push tedy dojede
+     na databázi, kde část změn už je. Přesně to popisuje `docs/PRODUKCE-PRAVIDLA.md`
+     (P2) jako důvod pro čerstvý dump před **každým** pushem.
+   - **Explicitní `COMMIT;` nebo `BEGIN;` v těle migrace tu obálku rozbije** —
+     a je to nejhorší z možných výsledků. Test: `CREATE TABLE pred_commitem;
+     COMMIT; CREATE TABLE po_commitu; SELECT 1/0;` → `pred_commitem` **přežila**,
+     ale do `schema_migrations` se nezapsalo **nic**. Migrace tedy visí jako
+     nenasazená, a opakovaný push spadne na „už existuje". Bez idempotence
+     z toho není cesta ven jinou než ruční. **Do migrací se `BEGIN`/`COMMIT`
+     nepíše** — obálku dodá CLI.
+
+   Vedlejší zjištění z téhož měření: `CREATE INDEX CONCURRENTLY` uvnitř migrace
+   neprojde nikdy (`SQLSTATE 25001`, „cannot be executed within a pipeline“) —
+   spadne ale čistě, takže škodu nenadělá. Index v migraci dělej normálně.
+
 7. **Když se cokoli neověří čistě → zastav a napiš to.** Neřeš to sám, nehrň
    to dál. Rozdíl v kontrolním součtu, test, který projde i po mutaci, dump
    podezřelé velikosti — to všechno je důvod přestat, ne obejít.

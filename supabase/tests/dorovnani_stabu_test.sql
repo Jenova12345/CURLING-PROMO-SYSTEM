@@ -677,8 +677,23 @@ DO $$
 DECLARE _a uuid; _navic int;
 BEGIN
   _a := pg_temp.akce('TEST přebytek v pohledu', '{"instructor": 2}'::jsonb, 2);
-  UPDATE public.shifts SET status = 'claimed', claimed_by = '33333333-3333-3333-3333-333333333333',
-         claimed_at = now()
+
+  -- OBĚ SMĚNY OBSADÍ DVA RŮZNÍ LIDÉ, ne jeden dvakrát.
+  --
+  -- Dřív tu stál jeden `UPDATE`, který obsadil VŠECHNY směny akce týmž
+  -- člověkem. Od migrace 20260914200000 to neprojde: jeden člověk nesmí mít na
+  -- jedné akci dvakrát tutéž roli (`shifts_jedna_role_na_akci`). Ta zkratka
+  -- fungovala jen díky mezeře, kterou ta migrace zavírá — kontrola seděla
+  -- v triggeru na přechodu `open -> pending` a tenhle zápis jde `-> claimed`.
+  --
+  -- Měřená věc se tím nemění: scénář potřebuje jen to, aby byly OBĚ směny
+  -- obsazené (a `dorovnej_stab` je tedy nemohl zrušit). Kdo je drží, je jedno.
+  UPDATE public.shifts SET status = 'claimed', claimed_at = now(),
+         -- `min(id)` nejde: pro `uuid` v Postgresu agregace `min` neexistuje.
+         claimed_by = CASE WHEN id = (SELECT s.id FROM public.shifts s
+                                       WHERE s.event_id = _a ORDER BY s.id LIMIT 1)
+                           THEN '22222222-2222-2222-2222-222222222222'::uuid
+                           ELSE '33333333-3333-3333-3333-333333333333'::uuid END
    WHERE id IN (SELECT id FROM public.shifts WHERE event_id = _a);
 
   UPDATE public.events SET role_reqs = '{"instructor": 1}'::jsonb, required_staff = 1 WHERE id = _a;

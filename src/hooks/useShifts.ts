@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { popisChybySmeny } from '@/lib/chybySmen';
 import { useAuth } from '@/contexts/AuthContext';
 import { bezZrusenychAkci, jenNeskoncene } from '@/lib/nabidkySmen';
 
@@ -136,19 +137,16 @@ export const useShifts = () => {
         .single();
 
       if (error) {
-        if (error.message.includes('již byla obsazena')) {
-          throw new Error('Směna již byla obsazena někým jiným.');
-        }
-        if (error.message.includes('již máte jinou směnu')) {
-          throw new Error('Na této akci již máte jinou směnu.');
-        }
         // Hláška z databáze se propouští, protože nese důvod, který uživatel
         // jinak nemá odkud vzít: obecné „nepodařilo se" u zrušené akce vypadá
-        // jako výpadek, ne jako pravidlo.
-        if (error.message.includes('Akce je zrušená')) {
-          throw new Error('Akce je zrušená, směnu na ní vzít nelze.');
-        }
-        throw new Error('Nepodařilo se přihlásit na směnu.');
+        // jako výpadek, ne jako pravidlo. Seznam propouštěných vět a důvod,
+        // proč je to na jednom místě, je v `@/lib/chybySmen`.
+        //
+        // Dřív tu stály tři ručně psané větve a jedna z nich („již máte jinou
+        // směnu") hlídala text, který databáze od 1. 9. 2026 neposílá — byla
+        // přes dva týdny mrtvá a uživatel místo důvodu dostával obecnou větu.
+        throw new Error(popisChybySmeny(
+          error.message, 'Nepodařilo se přihlásit na směnu.', 'sam'));
       }
       return data;
     },
@@ -174,10 +172,7 @@ export const useShifts = () => {
         .single();
 
       if (error) {
-        if (error.message.includes('Akce je zrušená')) {
-          throw new Error('Akce je zrušená, směnu na ní schválit nelze.');
-        }
-        throw new Error('Nepodařilo se schválit směnu.');
+        throw new Error(popisChybySmeny(error.message, 'Nepodařilo se schválit směnu.'));
       }
       return data;
     },
@@ -371,7 +366,12 @@ export const useShifts = () => {
         .single();
 
       if (error) {
-        throw new Error('Nepodařilo se přiřadit směnu.');
+        // TOHLE MÍSTO HLÁŠKU Z DATABÁZE ZAHAZOVALO ÚPLNĚ.
+        // `assignShift` je druhá cesta `open -> claimed` (první je schvalování
+        // přihlášky) a admin tu po migraci 20260914200000 může narazit na
+        // „Tenhle člověk už na této akci tuhle roli má." — s původní obecnou
+        // větou by hledal výpadek místo pravidla.
+        throw new Error(popisChybySmeny(error.message, 'Nepodařilo se přiřadit směnu.'));
       }
       return data;
     },

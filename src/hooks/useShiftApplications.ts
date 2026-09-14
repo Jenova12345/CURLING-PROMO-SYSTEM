@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { popisChybySmeny } from '@/lib/chybySmen';
 
 export interface ShiftApplication {
   id: string;
@@ -107,7 +108,16 @@ export const useShiftApplications = () => {
         .select()
         .single();
       if (shiftErr || !shiftData) {
-        throw new Error('Směna již byla obsazena nebo není volná.');
+        // HLÁŠKU Z DATABÁZE NEPŘEPISOVAT NASLEPO. Dřív tu byla jen věta
+        // „Směna již byla obsazena nebo není volná.", která zakryla všechno —
+        // včetně „Tenhle člověk už na této akci tuhle roli má." (migrace
+        // 20260914200000), což říká pravý opak: směna volná JE, jen ji tomuhle
+        // člověku dát nelze. Admin by podle té původní věty hledal výpadek.
+        //
+        // Převod řeší `@/lib/chybySmen` společně s ostatními třemi místy, která
+        // do `shifts` zapisují; syrová hláška z Postgresu se ven nepropouští.
+        throw new Error(popisChybySmeny(
+          shiftErr?.message, 'Směna již byla obsazena nebo není volná.'));
       }
 
       // Update this app -> approved
