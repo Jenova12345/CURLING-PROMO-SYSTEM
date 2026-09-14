@@ -6,7 +6,11 @@ import { Database } from '@/integrations/supabase/types';
 export type Subject = Database['public']['Tables']['subjects']['Row'];
 export type SubjectType = Database['public']['Enums']['subject_type'];
 export type RepLevel = Database['public']['Enums']['subject_rep_level'];
-export type RepRow = { id: string; subject_id: string; user_id: string; level: RepLevel; member_name?: string };
+// `member_name` je POVINNÉ, ne volitelné. Hook ho vždycky vyplní (a při
+// neznámém profilu dosadí 'Neznámý'), ale dokud byl v typu volitelný, mohly
+// šablonové řetězce v toastech a aria-labelech vyrobit doslova „undefined" —
+// tedy uživateli viditelný text. (Nález code-review brány.)
+export type RepRow = { id: string; subject_id: string; user_id: string; level: RepLevel; member_name: string };
 export type ProfileLite = { user_id: string; full_name: string | null };
 
 // Správa subjektů (kluby/firmy) + přiřazení lidí. Vše admin (RLS). ARES přes edge funkci.
@@ -14,7 +18,7 @@ export const useSubjectsAdmin = () => {
   const { user, isAdmin } = useAuth();
   const qc = useQueryClient();
 
-  const { data: subjects = [], isLoading } = useQuery({
+  const { data: subjects = [], isLoading, error: chybaSubjektu } = useQuery({
     queryKey: ['subjects-admin'],
     queryFn: async () => {
       // `select('*')` tu být nesmí: `default_rate` je po A2b pro `authenticated`
@@ -35,12 +39,12 @@ export const useSubjectsAdmin = () => {
     enabled: !!user && isAdmin,
   });
 
-  const { data: reps = [] } = useQuery({
+  const { data: reps = [], error: chybaReps } = useQuery({
     queryKey: ['subject-reps-admin'],
     queryFn: async () => {
       const { data, error } = await supabase.from('subject_reps').select('id, subject_id, user_id, level');
       if (error) throw error;
-      const rows = (data ?? []) as RepRow[];
+      const rows = (data ?? []) as Omit<RepRow, 'member_name'>[];
       const ids = [...new Set(rows.map((r) => r.user_id))];
       if (ids.length) {
         const { data: profs } = await supabase.from('profiles_public').select('user_id, full_name').in('user_id', ids);
@@ -48,12 +52,14 @@ export const useSubjectsAdmin = () => {
         (profs ?? []).forEach((p: ProfileLite) => { if (p.user_id) map[p.user_id] = p.full_name || 'Neznámý'; });
         return rows.map((r) => ({ ...r, member_name: map[r.user_id] ?? 'Neznámý' }));
       }
-      return rows;
+      // Sem se dojde jen když `rows` je prázdné (žádná ID = žádné řádky), takže
+      // se nic nedoplňuje — `map` je tu kvůli typu, ať vrátí `RepRow[]`.
+      return rows.map((r) => ({ ...r, member_name: 'Neznámý' }));
     },
     enabled: !!user && isAdmin,
   });
 
-  const { data: profiles = [] } = useQuery({
+  const { data: profiles = [], error: chybaProfilu, isLoading: profilyNacitaji } = useQuery({
     queryKey: ['profiles-lite'],
     queryFn: async () => {
       const { data, error } = await supabase.from('profiles_public').select('user_id, full_name').order('full_name');
@@ -62,6 +68,22 @@ export const useSubjectsAdmin = () => {
     },
     enabled: !!user && isAdmin,
   });
+
+  // CHYBA ČTENÍ SE MUSÍ DOSTAT NA OBRAZOVKU.
+  //
+  // Všechny tři dotazy výš dosud chybu jen spolkly a stránka se vykreslila
+  // s prázdnými daty — takže výpadek sítě, odvolaný grant nebo zúžená RLS
+  // vypadaly úplně stejně jako „zatím tu nikdo není". Nejvíc to bolelo
+  // u `profiles`: prázdný seznam znamená prázdné rozbalovátko „Přidat člověka…",
+  // tedy přesně příznak „nejde přidat člověka do klubu" bez jediného vodítka,
+  // proč. Admin nemá jak poznat rozdíl mezi „není koho přidat" a „nenačetlo se to".
+  //
+  // Pořadí je od nejširšího dopadu k nejužšímu: bez subjektů není co zobrazit,
+  // bez `reps` chybí seznamy lidí u karet, bez `profiles` jen rozbalovátko.
+  // Přetypování tu nepotřebujeme — react-query vydává `Error | null` samo.
+  // Pozor: Supabase sem hází `PostgrestError`, což instance Error NENÍ, ale
+  // `.message` má, takže banner níž se o něj opřít může.
+  const chyba = chybaSubjektu ?? chybaReps ?? chybaProfilu;
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['subjects-admin'] });
@@ -139,7 +161,19 @@ export const useSubjectsAdmin = () => {
   });
 
   return {
-    subjects, reps, profiles, isLoading, aresLookup, findSubjectByIco,
+    subjects, reps, profiles, isLoading, chyba, aresLookup, findSubjectByIco,
+    // `profilyNacitaji` a `chybaProfilu` se vydávají ZVLÁŠŤ, protože `isLoading`
+    // výš pochází jen z dotazu `subjects-admin`, kdežto rozbalovátko „Přidat
+    // člověka…" pohání `profiles-lite`. Bez nich se nedá rozlišit „načítá se"
+    // od „nenačetlo se" od „nikdo tu není" — a stránka by jeden z těch stavů
+    // musela popsat nepravdivě. `QueryClient` v App.tsx je bez konfigurace,
+    // takže platí default `retry: 3` a chyba se objeví až po několika sekundách.
+    //
+    // `isLoading`, ne `isPending`: v react-query v5 je `isPending` true i u
+    // dotazu, který je `enabled: false` — tedy dokud `useAuth()` nedodá `user`.
+    // Stránka se v tu chvíli sice nevykresluje (má early return pro neadmina),
+    // ale `isLoading` (= `isPending && isFetching`) je na tuhle změnu odolné.
+    profilyNacitaji, chybaProfilu,
     createSubject: createSubject.mutateAsync,
     updateSubject: updateSubject.mutateAsync,
     deleteSubject: deleteSubject.mutateAsync,

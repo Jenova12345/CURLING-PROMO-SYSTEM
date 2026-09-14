@@ -645,3 +645,27 @@ describe('Barva v kalendáři: jedno pravidlo pro Týden i Měsíc', () => {
     ).toBe('Bez barvy klubu');
   });
 });
+
+describe('Subjekty: rozhodování o hláškách zůstává v čisté funkci', () => {
+  // `src/lib/stavSubjektu.test.ts` hlídá, že se ty funkce rozhodují správně,
+  // včetně pořadí větví. Co ale otestovat neumí, je jestli je komponenta vůbec
+  // VOLÁ — kdyby si někdo ternární řetězec zkopíroval zpátky do JSX, čisté testy
+  // by dál svítily zeleně nad kódem, který se nikde nepoužívá.
+  //
+  // Tohle je přesně ten případ, kdy textová brána dává smysl: měří se EXISTENCE
+  // VOLÁNÍ, ne větev. Polaritu podmínek by ze zdrojáku číst nešlo, a taky se
+  // o to nepokouší.
+  it('Subjects.tsx volá stavSeznamuLidi i stavUlozeniUdaju', () => {
+    const zdroj = cti('src/pages/Subjects.tsx');
+
+    expect(zdroj,
+      'stavSeznamuLidi se v Subjects.tsx nevolá — rozhodování se nejspíš vrátilo ' +
+      'do JSX, kde ho testy z stavSubjektu.test.ts nehlídají',
+    ).toContain('stavSeznamuLidi(');
+
+    expect(zdroj,
+      'stavUlozeniUdaju se v Subjects.tsx nevolá. Je to ta funkce, která brání ' +
+      'hlášce „Uloženo" za krok, který neproběhl — tedy jádro původního hlášení.',
+    ).toContain('stavUlozeniUdaju(');
+  });
+});

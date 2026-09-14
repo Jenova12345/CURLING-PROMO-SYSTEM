@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Building2, Trash2, Plus, UserPlus } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Building2, Trash2, Plus, UserPlus, AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,12 +15,23 @@ import {
 } from '@/components/ui/alert-dialog';
 import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
-import { useSubjectsAdmin, type Subject, type RepLevel } from '@/hooks/useSubjectsAdmin';
+import { useSubjectsAdmin, type RepRow, type Subject, type RepLevel } from '@/hooks/useSubjectsAdmin';
 import { parseSazba } from '@/lib/money';
 import { PALETA_KLUBU } from '@/lib/barvaKlubu';
+import { stavSeznamuLidi, stavUlozeniUdaju } from '@/lib/stavSubjektu';
 import { cn } from '@/lib/utils';
 
 const LEVELS: [RepLevel, string][] = [['rep', 'Správce klubu'], ['member', 'Člen']];
+
+// Text ke každému stavu rozbalovátka. Samotné ROZHODOVÁNÍ je v
+// `src/lib/stavSubjektu.ts`, protože tady by se nedalo otestovat — repo nemá
+// jsdom. Tady zůstává jen překlad stavu na větu.
+const HLASKY_SEZNAMU: Record<Exclude<ReturnType<typeof stavSeznamuLidi>, 'seznam'>, string> = {
+  'nacita': 'Načítám lidi…',
+  'chyba': 'Seznam lidí se nenačetl.',
+  'nikdo-v-systemu': 'V systému zatím nikdo není.',
+  'vse-prirazeno': 'Všichni už jsou přiřazeni.',
+};
 
 const Subjects = () => {
   const { toast } = useToast();
@@ -31,7 +42,18 @@ const Subjects = () => {
 
   if (!isAdmin) return <div className="p-6 text-muted-foreground">Subjekty může spravovat jen správce.</div>;
 
-  const err = (e: unknown) => toast({ title: 'Chyba', description: e instanceof Error ? e.message : '', variant: 'destructive' });
+  // `instanceof Error` samo nestačí. `PostgrestError` sice od `Error` dědí, ale
+  // jako TŘÍDA se konstruuje jen v cestě `.throwOnError()`; v cestě
+  // `{ data, error }`, kterou používá celý tenhle hook, je to prostý objekt
+  // z `JSON.parse` — má `.message`, ale `instanceof Error` na něm neplatí.
+  // Dnes sem chodí jen `new Error` z mutací, ale kdo sem jednou pošle chybu
+  // ze `s.chyba`, dostal by „Chyba" bez důvodu. (Nález code-review brány.)
+  const popisChyby = (e: unknown): string =>
+    e instanceof Error ? e.message
+      : typeof e === 'object' && e !== null && typeof (e as { message?: unknown }).message === 'string'
+        ? (e as { message: string }).message
+        : '';
+  const err = (e: unknown) => toast({ title: 'Chyba', description: popisChyby(e), variant: 'destructive' });
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-6">
@@ -43,12 +65,29 @@ const Subjects = () => {
         <Button onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4 mr-2" /> Nový subjekt</Button>
       </div>
 
+      {/* Bez tohohle vypadá výpadek čtení jako prázdná data: žádné subjekty,
+          nikdo přiřazen, prázdné rozbalovátko „Přidat člověka…". Admin pak hlásí
+          „nejde přidat člověka do klubu" a hledá chybu tam, kde není. */}
+      {s.chyba && (
+        <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <span>
+            Data se nepodařilo načíst, takže seznamy níž mohou být neúplné nebo prázdné.
+            Zkus stránku znovu načíst. ({s.chyba.message})
+          </span>
+        </div>
+      )}
+
       {s.isLoading ? <div className="text-muted-foreground">Načítám…</div> : (
         <div className="grid gap-4 md:grid-cols-2">
           {s.subjects.map((subj) => (
             <SubjectCard key={subj.id} subject={subj} admin={s} onDelete={() => setDelSubject(subj)} onErr={err} />
           ))}
-          {s.subjects.length === 0 && <div className="text-muted-foreground">Zatím žádné subjekty.</div>}
+          {/* `&& !s.chyba`: při selhání dotazu jde `isLoading` na false a `subjects`
+              zůstane prázdné, takže by se pod červeným bannerem vykreslilo
+              „Zatím žádné subjekty." — a admin čte to spodní. Je to táž lež,
+              jakou tohle kolo zavíralo v rozbalovátku, jen o patro výš. */}
+          {s.subjects.length === 0 && !s.chyba && <div className="text-muted-foreground">Zatím žádné subjekty.</div>}
         </div>
       )}
 
@@ -99,7 +138,23 @@ function SubjectCard({ subject, admin, onDelete, onErr }: {
           ...(subject.type === 'club' ? { barva: barva || null } : null),
         },
       });
-      toast({ title: 'Uloženo' });
+      // ZPRÁVA ŘÍKÁ, CO SE ULOŽILO. Dřív tu stálo jen „Uloženo" — a protože
+      // tohle tlačítko NEUKLÁDÁ přiřazení lidí, dostal admin potvrzení úspěchu
+      // za krok, který neproběhl. Přesně tak vznikl nález „nejde přidat člověka
+      // do klubu ani po kliknutí na Uložit": člověk se vybral v rozbalovátku,
+      // stisklo se jediné tlačítko, které vypadá jako uložení, a systém řekl OK.
+      //
+      // JEDEN TOAST, NE DVA. `TOAST_LIMIT` v `use-toast.ts` je 1 a reducer dělá
+      // `[nový, ...staré].slice(0, 1)`, takže druhé volání ten první vyhodí
+      // dřív, než se vykreslí. Dvě volání za sebou by tu vyrobila přesně tentýž
+      // tichý úspěch, jen z druhé strany: admin s vybraným člověkem by uviděl
+      // varování a ŽÁDNÉ potvrzení, že se přejmenování uložilo.
+      toast(stavUlozeniUdaju({ vybranyClovek: addUser }) === 'ulozeno-ale-clovek-ne'
+        ? {
+            title: 'Uloženo — ale jen údaje',
+            description: 'Název, sazba a barva. Vybraného člověka přidáš tlačítkem „Přidat" dole.',
+          }
+        : { title: 'Uloženo', description: 'Název, sazba a barva.' });
     } catch (e) { onErr(e); }
   };
 
@@ -178,36 +233,72 @@ function SubjectCard({ subject, admin, onDelete, onErr }: {
               )}
             </div>
           )}
-          <Button size="sm" variant="outline" onClick={saveMeta} disabled={admin.isBusy}>Uložit</Button>
+          {/* „Uložit údaje", ne holé „Uložit": na kartě jsou dvě nezávislá uložení
+              (údaje subjektu a přiřazení lidí) a obecný popisek sváděl k tomu
+              číst ho jako „ulož všechno na kartě". */}
+          <Button size="sm" variant="outline" onClick={saveMeta} disabled={admin.isBusy}>Uložit údaje</Button>
         </div>
 
         <div className="space-y-1 border-t pt-2">
           <div className="text-xs font-medium">Přiřazení lidé</div>
           {subjectReps.length === 0 && <div className="text-xs text-muted-foreground">Nikdo přiřazen.</div>}
           {subjectReps.map((r) => (
-            <div key={r.id} className="flex items-center justify-between gap-2">
-              <span className="truncate">{r.member_name}</span>
-              <div className="flex items-center gap-1">
-                <Select value={r.level} onValueChange={(v) => admin.updateRep({ id: r.id, level: v as RepLevel }).catch(onErr)}>
-                  <SelectTrigger className="h-7 w-28 text-xs"><SelectValue /></SelectTrigger>
-                  <SelectContent>{LEVELS.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent>
-                </Select>
-                <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => admin.removeRep(r.id).catch(onErr)}><Trash2 className="h-3.5 w-3.5" /></Button>
-              </div>
-            </div>
+            <RepRadek key={r.id} rep={r} admin={admin} onErr={onErr} />
           ))}
           <div className="flex items-center gap-1 pt-1">
             <Select value={addUser} onValueChange={setAddUser}>
               <SelectTrigger className="h-7 flex-1 text-xs"><SelectValue placeholder="Přidat člověka…" /></SelectTrigger>
-              <SelectContent>{available.map((p) => <SelectItem key={p.user_id} value={p.user_id}>{p.full_name || p.user_id.slice(0, 8)}</SelectItem>)}</SelectContent>
+              <SelectContent>
+                {/* `s.isLoading` pokrývá jen `subjects-admin`; lidi vozí
+                    samostatný dotaz, proto se jeho stav rozlišuje zvlášť.
+                    Čtyři větve, protože „načítá se", „nenačetlo se" a „nikdo tu
+                    není" jsou tři různé věci a splynout nesmějí. */}
+                {(() => {
+                  const stav = stavSeznamuLidi({
+                    nacitaSe: admin.profilyNacitaji,
+                    chyba: admin.chybaProfilu,
+                    pocetProfilu: admin.profiles.length,
+                    pocetDostupnych: available.length,
+                  });
+                  if (stav === 'seznam') {
+                    return available.map((p) => (
+                      <SelectItem key={p.user_id} value={p.user_id}>{p.full_name || p.user_id.slice(0, 8)}</SelectItem>
+                    ));
+                  }
+                  return (
+                    <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                      {HLASKY_SEZNAMU[stav]}
+                    </div>
+                  );
+                })()}
+              </SelectContent>
             </Select>
             <Select value={addLevel} onValueChange={(v) => setAddLevel(v as RepLevel)}>
               <SelectTrigger className="h-7 w-24 text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>{LEVELS.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent>
             </Select>
-            <Button size="icon" variant="outline" className="h-7 w-7" disabled={!addUser || admin.isBusy}
-              onClick={async () => { try { await admin.addRep({ subject_id: subject.id, user_id: addUser, level: addLevel }); setAddUser(''); } catch (e) { onErr(e); } }}>
-              <UserPlus className="h-3.5 w-3.5" />
+            {/* POPSANÉ TLAČÍTKO, NE HOLÁ IKONA. Tohle je jediný způsob, jak se
+                člověk do klubu přidá, a do 14. 9. 2026 to byl bezejmenný panáček
+                vedle rozbalovátka — vedle toho svítilo tlačítko „Uložit", které
+                dělá něco jiného. Kdo hledal, čím přiřazení potvrdit, sáhl po tom
+                druhém a dostal „Uloženo". */}
+            <Button size="sm" variant="outline" className="h-7 shrink-0 px-2 text-xs" disabled={!addUser || admin.isBusy}
+              aria-label={`Přidat vybraného člověka do subjektu ${subject.name}`}
+              onClick={async () => {
+                try {
+                  // Týž fallback jako v rozbalovátku o pár řádků výš: kdo tam
+                  // svítil jako zkrácené UUID, ať je pod tímtéž jménem i v toastu.
+                  const vybrany = admin.profiles.find((p) => p.user_id === addUser);
+                  const kdo = vybrany?.full_name || addUser.slice(0, 8);
+                  await admin.addRep({ subject_id: subject.id, user_id: addUser, level: addLevel });
+                  setAddUser('');
+                  // Potvrzení po úspěchu tu dřív nebylo vůbec: jediným signálem
+                  // bylo, že se jméno objeví v seznamu nad tím — což při pomalém
+                  // refetchi vypadá, jako by se nestalo nic.
+                  toast({ title: 'Přidáno', description: `${kdo} → ${subject.name}` });
+                } catch (e) { onErr(e); }
+              }}>
+              <UserPlus className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Přidat
             </Button>
           </div>
         </div>
@@ -289,6 +380,95 @@ function CreateSubjectDialog({ open, onOpenChange, admin, onErr }: {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Jeden přiřazený člověk: jeho úroveň a tlačítko na odebrání.
+ *
+ * ÚROVEŇ DRŽÍ LOKÁLNÍ STAV, NE SERVEROVÁ DATA. Dřív tu bylo
+ * `<Select value={r.level} onValueChange={… admin.updateRep(…)}>`, tedy
+ * rozbalovátko řízené přímo tím, co přišlo ze serveru. Po kliknutí na „Správce
+ * klubu" se proto okamžitě vrátilo na „Člen" a drželo to tam, dokud nedoběhl
+ * refetch — vypadalo to, že se změna neuložila, a admin klikal znovu.
+ *
+ * Je to táž vada jako tichý úspěch u tlačítka „Uložit", jen obrácená: falešné
+ * SELHÁNÍ místo falešného úspěchu. Proto se hodnota přepne hned, po úspěchu se
+ * potvrdí toastem, a při chybě se vrátí zpátky na to, co říká server.
+ */
+function RepRadek({ rep, admin, onErr }: {
+  rep: RepRow; admin: ReturnType<typeof useSubjectsAdmin>; onErr: (e: unknown) => void;
+}) {
+  const { toast } = useToast();
+  const [level, setLevel] = useState<RepLevel>(rep.level);
+  // Zámek po dobu zápisu. Bez něj by stačilo, aby během letu naší mutace dorazil
+  // refetch vyvolaný něčím jiným na stránce (`invalidate()` obnovuje celý
+  // `subject-reps-admin`): přinesl by ještě STAROU úroveň, useEffect by ji
+  // vnutil rozbalovátku a to by na okamžik skočilo zpátky. Tedy přesně ten
+  // blikot, kvůli kterému tahle komponenta vznikla, jen užší.
+  const zapisujeme = useRef(false);
+
+  // Srovnat se serverem, když data dorazí jinak, než čekáme — po refetchi,
+  // po cizí změně, nebo když se náš zápis neuložil. Během vlastního zápisu ne:
+  // tam je pravdou to, co uživatel právě vybral.
+  useEffect(() => {
+    if (!zapisujeme.current) setLevel(rep.level);
+  }, [rep.level]);
+
+  const zmenUroven = async (v: RepLevel) => {
+    const puvodni = level;
+    setLevel(v);
+    zapisujeme.current = true;
+    try {
+      await admin.updateRep({ id: rep.id, level: v });
+      toast({
+        title: 'Úroveň změněna',
+        description: `${rep.member_name}: ${LEVELS.find(([k]) => k === v)?.[1] ?? v}`,
+      });
+    } catch (e) {
+      setLevel(puvodni);   // neuložilo se — ať rozbalovátko nelže
+      onErr(e);
+    } finally {
+      zapisujeme.current = false;
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="truncate">{rep.member_name}</span>
+      <div className="flex items-center gap-1">
+        {/* `aria-label` musí nést i HODNOTU. Sám o sobě přebije jméno vybrané
+            položky, takže odečítačka ohlásila „Úroveň: Jan Novák" a už ne, jestli
+            je Člen nebo Správce — proti stavu před touhle dávkou to byl krok
+            zpátky. `disabled` tu je ze stejného důvodu jako u koše: rychlý
+            dvojklik jinak pustí dvě `updateRep` naráz a vyhraje ta, která
+            commitne později, ne ta, kterou člověk vybral jako poslední. */}
+        <Select value={level} onValueChange={(v) => zmenUroven(v as RepLevel)} disabled={admin.isBusy}>
+          <SelectTrigger className="h-7 w-28 text-xs"
+            aria-label={`Úroveň: ${rep.member_name} — ${LEVELS.find(([k]) => k === level)?.[1] ?? level}`}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>{LEVELS.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent>
+        </Select>
+        {/* Poslední tichá mutace na stránce. Řádek po kliknutí zmizí až
+            s refetchem, takže na pomalé síti vypadá odebrání stejně jako
+            „nestalo se nic" — přesně ten příznak, kvůli kterému tahle
+            komponenta vznikla. Jméno se bere do proměnné dřív, než řádek
+            zmizí. */}
+        <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive"
+          disabled={admin.isBusy}
+          aria-label={`Odebrat ze subjektu: ${rep.member_name}`}
+          onClick={async () => {
+            const kdo = rep.member_name;
+            try {
+              await admin.removeRep(rep.id);
+              toast({ title: 'Odebráno', description: `${kdo} už u subjektu není.` });
+            } catch (e) { onErr(e); }
+          }}>
+          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+        </Button>
+      </div>
+    </div>
   );
 }
 
