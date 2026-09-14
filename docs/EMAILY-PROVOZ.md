@@ -7,14 +7,21 @@ v tabulce níž je **změřený dotazem**, ne odhadnutý (13. 9. 2026).
 
 ## Stav produkce (curling-promo-prod, `fcwubbytqxubgptftnru`)
 
+Změřeno dotazem **14. 9. 2026**, po nasazení kroku 0.
+
 | Co | Hodnota | Co to znamená |
 |---|---|---|
-| `settings.email_notifications_enabled` | `false` | Fronta se ani nenaplňuje. Nic neodejde. |
+| `settings.email_notifications_enabled` | `false` | **Fronta se ani nenaplňuje. Nic neodejde.** |
 | řádků v `email_outbox` | 0 | Fronta je prázdná. |
-| `pg_net` | **není** | Plánovač v databázi neběží a nebude, viz níž. |
-| `pg_cron` | **není** | Totéž. |
-| poslední migrace | `20260912140000` | Migrace `…160000` a `…200000` NEJSOU nasazené. |
-| strop `email_max_za_hodinu` | **na produkci není** | Sloupec neexistuje a `email_outbox_prevzit` o stropu neví. Přináší ho krok 0. |
+| `pg_net` | není | Plánovač v databázi neběží a nebude, viz níž. |
+| `pg_cron` | není | Totéž. |
+| poslední migrace | `20260912220000` | Krok 0 je **hotový** — všechny tři migrace nasazené. |
+| strop `email_max_za_hodinu` | `100` | Nasazený a je i uvnitř `email_outbox_prevzit`. |
+| index `idx_email_outbox_claimed` | je | Starý `idx_email_outbox_user_claimed` zahozen. |
+
+> ⚠️ **Commit messages ohledně nasazení nečti** — nesou značku „NENASAZENO"
+> z doby, kdy vznikly, a přepisovat historii se nebude. Stav produkce se čte
+> z `supabase_migrations.schema_migrations`, nikde jinde.
 
 ---
 
@@ -35,8 +42,7 @@ v tabulce níž je **změřený dotazem**, ne odhadnutý (13. 9. 2026).
 
 ### Dvě pojistky proti záplavě
 
-⚠️ **Obě přinášejí nenasazené migrace, viz krok 0 níž.** Na dnešní produkci
-ani jedna neplatí.
+✅ Obě jsou na produkci nasazené od 14. 9. 2026 (krok 0 níž).
 
 * **Série a přebití jdou jako JEDNA zpráva**, ne jako N. Migrace
   `20260912160000` a `20260912200000`. Bez nich by zrušení celé sezóny
@@ -67,16 +73,18 @@ hlavičky odchozích požadavků včetně tokenu a odpovědi včetně obsahu po�
 
 ## Co musí kdo nastavit, než se zapne
 
-> ⚠️ **POŘADÍ NENÍ LIBOVOLNÉ A KROK 0 SE NESMÍ PŘESKOČIT.** Kdo dnes provede
-> jen kroky 1–3 a přeskočí nulu, zapne rozesílání **bez obou pojistek proti záplavě** — na
-> produkci dnes strop `email_max_za_hodinu` neexistuje (ověřeno: sloupec tam
-> není a nasazená verze `email_outbox_prevzit` o stropu nic neví) a zrušení
-> série pošle jeden e-mail za každý termín. Přesně ten scénář, kvůli kterému
-> obě pojistky vznikly. Našla bezpečnostní brána 13. 9. 2026.
+> ⚠️ **POŘADÍ NENÍ LIBOVOLNÉ A KROK 0 SE NESMÍ PŘESKOČIT.** Kdo přeskočí nulu,
+> zapne rozesílání **bez obou pojistek proti záplavě**: bez stropu
+> `email_max_za_hodinu` a se zrušením série, které pošle jeden e-mail za každý
+> termín. Přesně ten scénář, kvůli kterému obě pojistky vznikly. Našla
+> bezpečnostní brána 13. 9. 2026. Na produkci je krok 0 od 14. 9. 2026 hotový,
+> ale platí to pro každé další prostředí i pro obnovu ze zálohy.
 
-### 0) Nasadit obě migrace — PRVNÍ, ne až potom
+### 0) Nasadit migrace — PRVNÍ, ne až potom
 
-Produkce je na `20260912140000`. Nenasazené a potřebné jsou:
+✅ **HOTOVO 14. 9. 2026.** Všechny tři nasazené přes `scripts/safe-deploy.sh`,
+jedna po druhé, každá s vlastní čerstvou zálohou (`backups/prod-2026-09-14-*`).
+Zůstává tu popsané pro případ obnovy ze zálohy nebo nasazení na další prostředí.
 
 | Migrace | Co přináší |
 |---|---|
