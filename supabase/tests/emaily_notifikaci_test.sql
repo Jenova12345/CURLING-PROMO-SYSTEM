@@ -107,10 +107,19 @@ BEGIN
     FROM pg_temp.mail(_clen, 'reservation_pending') m;
   PERFORM pg_temp.tvrd(_predmet = 'Rezervace čeká na potvrzení správce klubu',
     'e-mail zakladatele má vlastní předmět ze šablony');
+  -- Adresa se od 14. 9. 2026 bere z `settings.web_base_url`, ne z kódu, takže
+  -- se sem nepíše natvrdo — jinak by test zčervenal při každé změně domény,
+  -- a to z falešného důvodu.
+  --
+  -- `strpos`, NE `LIKE`: adresa je DATA, a v LIKE vzoru by z `_` a `%` byly
+  -- divoké karty. Dnes to drží jen proto, že CHECK na `web_base_url` ani jeden
+  -- z těch znaků nepustí — tedy náhodou, ne konstrukcí. Až se allowlist jednou
+  -- rozšíří, tvrzení by tiše změklo. (Nález brány pro migrace.)
   PERFORM pg_temp.tvrd(_telo LIKE 'Dobrý den,%'
                    AND _telo LIKE '%04.12.2028 17:00%'
                    AND _telo LIKE '%Curling Promo Ostrava%'
-                   AND _telo LIKE '%curling-ostrava-system.netlify.app/calendar%',
+                   AND strpos(_telo, (SELECT s.web_base_url FROM public.settings s
+                                       WHERE s.singleton LIMIT 1) || '/calendar') > 0,
     'tělo e-mailu má oslovení, termín, odkaz i podpis');
 END $$;
 
@@ -388,7 +397,11 @@ DECLARE _telo text;
 BEGIN
   SELECT s.body INTO _telo FROM public.email_sablona(
     'reservation_approved', 'x', 'y', '.zly-web.cz/prihlaseni') s;
-  PERFORM pg_temp.tvrd(_telo LIKE '%netlify.app/calendar%'
+  -- Odkaz musí vést na adresu Z NASTAVENÍ — porovnávat se skutečnou hodnotou,
+  -- ne s natvrdo napsanou doménou, jinak tvrzení měří starý stav kódu.
+  -- `strpos` ze stejného důvodu jako výš: adresa do LIKE vzoru nepatří.
+  PERFORM pg_temp.tvrd(strpos(_telo, (SELECT s.web_base_url FROM public.settings s
+                                       WHERE s.singleton LIMIT 1) || '/calendar') > 0
                    AND _telo NOT LIKE '%zly-web%',
     'JÁDRO: odkaz v e-mailu zůstane na našem webu');
 END $$;
