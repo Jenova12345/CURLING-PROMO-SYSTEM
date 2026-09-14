@@ -45,6 +45,40 @@ SELECT created_at, faze, sqlstate, left(chyba, 120) FROM public.notifikace_chyby
 Tabulku nic nerotuje (`pg_cron` na produkci není), takže poroste. Při zapínání
 odesílatele je to jedna z věcí k dořešení.
 
+### Cena za tu pojistku: subtransakce (změřeno, a vyšlo to hůř než odhad)
+
+Každý `EXCEPTION` blok je subtransakce. Jedno volání `notify_user` teď stojí
+**2 subxid** (před migrací `20260914180000` stálo 0); backend jich cachuje
+**64**, takže práh je **32 volání v jedné transakci**.
+
+| případ | volání | XID | z 64 slotů |
+|---|---|---|---|
+| běžná rezervace člena | 5 | 12 | ≈ 19 % |
+| **přebití obou velkých klubů** | **36** | **73** | **≈ 114 %** |
+| strop produkce (všechny dvojice) | 56 | ~113 | ≈ 176 % |
+
+**Práh se tedy už dnes překračuje** — v komerční akci, která přebije led oběma
+velkým klubům. Není to chyba správnosti ani ztráta dat: přelitá cache znamená,
+že cizí backendy dohledávají viditelnost v `pg_subtrans`. Při zátěži jedné haly
+to nejspíš nikdo nepozná. Ale odstup tam **není** a nesmí se tvrdit, že je.
+
+Pozor na dvě věci, které se při odhadu snadno přehlédnou (přehlédli jsme je
+oba, já i brána migrací, každý jinam): smyčka `reservation_overridden`
+v `create_booking` **nefiltruje podle `level`**, takže jde i přes členy, ne jen
+přes zástupce — a navíc přidává autora rezervace přes `UNION SELECT
+rr.created_by`, což na produkci přihodí 20 dvojic, které v `subject_reps`
+vůbec nejsou.
+
+> ⚠️ Komentář v migraci `20260914180000` uvádí „34 volání = 68 subxid" — je to
+> **podstřelené** a neopravuje se přepisem (migrace jsou dopředné). Opravu nese
+> `20260914190000`, která ji zapsala do komentářů `notify_user`
+> a `create_booking`, kde ji čtenář té smyčky uvidí.
+
+Kdyby se někdy hlásilo, že přebíjení ledu trvá dlouho nebo že u toho zlobí celý
+systém, tohle je první podezřelý. Řešení není odebrat handlery, ale nevolat
+`notify_user` 36× v jedné transakci — zakládat zprávy dávkově jedním
+`INSERT ... SELECT`, nebo smyčku vytáhnout z transakce.
+
 > ⚠️ **Commit messages ohledně nasazení nečti** — nesou značku „NENASAZENO"
 > z doby, kdy vznikly, a přepisovat historii se nebude. Stav produkce se čte
 > z `supabase_migrations.schema_migrations`, nikde jinde.
