@@ -257,6 +257,9 @@ v režimu neplátce DPH. Bez automatiky, dobropisů a evidence plateb.
 
 - Fakturace: vlastní generování vs Fakturoid/iDoklad?
 - E-maily k notifikacím: který poskytovatel (Resend / SMTP) a z jaké domény?
-  (v aplikaci notifikace fungují, e-mailová fronta je připravená a vypnutá)
+  (v aplikaci notifikace fungují a **e-mailová fronta je ZAPNUTÁ** —
+  `settings.email_notifications_enabled = true`, ověřeno na produkci 14. 9. 2026.
+  Dřívější znění tvrdilo, že je vypnutá; neplatí to. Řádky se tedy do
+  `email_outbox` opravdu zakládají a čekají na odesílatele.)
 - Platby: jen faktura, nebo i online platby/zálohy?
 - Finální logo a barevnost.

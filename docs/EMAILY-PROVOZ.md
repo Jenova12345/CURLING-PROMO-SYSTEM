@@ -1,23 +1,49 @@
 # E-mailové notifikace — jak to jede a co zapnout
 
-Provozní list pro chvíli, kdy se notifikace budou zapínat. Stav produkce
-v tabulce níž je **změřený dotazem**, ne odhadnutý (13. 9. 2026).
+Provozní list k e-mailovým notifikacím. Stav produkce v tabulce níž je
+**změřený dotazem**, ne odhadnutý.
 
 ---
 
 ## Stav produkce (curling-promo-prod, `fcwubbytqxubgptftnru`)
 
-Změřeno dotazem **14. 9. 2026**, po nasazení kroku 0.
+Změřeno dotazem **14. 9. 2026 v 16:20**, po nasazení migrace `20260914160000`.
 
 | Co | Hodnota | Co to znamená |
 |---|---|---|
-| `settings.email_notifications_enabled` | `false` | **Fronta se ani nenaplňuje. Nic neodejde.** |
-| řádků v `email_outbox` | 0 | Fronta je prázdná. |
+| `settings.email_notifications_enabled` | **`true`** | **Fronta se PLNÍ.** Řádky do `email_outbox` vznikají. |
+| řádků v `email_outbox` | 6 | Všech 6 má `status = 'sent'`, ve frontě nečeká nic. |
 | `pg_net` | není | Plánovač v databázi neběží a nebude, viz níž. |
 | `pg_cron` | není | Totéž. |
-| poslední migrace | `20260912220000` | Krok 0 je **hotový** — všechny tři migrace nasazené. |
+| poslední migrace | `20260914160000` | Adresa portálu se bere z `settings`, ne z kódu. |
 | strop `email_max_za_hodinu` | `100` | Nasazený a je i uvnitř `email_outbox_prevzit`. |
 | index `idx_email_outbox_claimed` | je | Starý `idx_email_outbox_user_claimed` zahozen. |
+
+> ⚠️ **Dřívější znění téhle tabulky tvrdilo, že je fronta VYPNUTÁ** (`false`,
+> 0 řádků, poslední migrace `20260912220000`) — a to se stejným razítkem
+> „změřeno dotazem 14. 9. 2026". Nebyla to pravda a stálo to za pozornost:
+> `notify_user` běží v živé cestě `create_booking`, takže na tom, jestli se
+> e-mailová větev vůbec prochází, záleží víc než na pohodlí. Kdo tuhle tabulku
+> aktualizuje, ať přiloží dotaz, ne dojem.
+
+## Chyba notifikace rezervaci neshodí (od `20260914180000`)
+
+`notify_user` má od té migrace dva vnořené `EXCEPTION` bloky: selže-li e-mail,
+notifikace v aplikaci zůstane; selže-li i ta, rezervace stejně vznikne. Každá
+spolknutá chyba jde do `public.notifikace_chyby` (čte ji **jen admin**) a do logu
+Postgresu jako `WARNING`.
+
+**Prázdná `notifikace_chyby` = notifikace jedou.** Řádky v ní znamenají, že se
+někomu nedoručila zpráva, i když jeho rezervace vznikla. Dnes na to v aplikaci
+není obrazovka ani alert — jediná cesta je dotaz:
+
+```sql
+SELECT created_at, faze, sqlstate, left(chyba, 120) FROM public.notifikace_chyby
+ ORDER BY created_at DESC LIMIT 20;
+```
+
+Tabulku nic nerotuje (`pg_cron` na produkci není), takže poroste. Při zapínání
+odesílatele je to jedna z věcí k dořešení.
 
 > ⚠️ **Commit messages ohledně nasazení nečti** — nesou značku „NENASAZENO"
 > z doby, kdy vznikly, a přepisovat historii se nebude. Stav produkce se čte
