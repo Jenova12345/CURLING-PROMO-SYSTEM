@@ -16,7 +16,11 @@ export const useSettings = () => {
   const { user } = useAuth();
   const qc = useQueryClient();
 
-  const { data: settings = null, isLoading } = useQuery({
+  // `error` se propouští ven schválně. Bez něj `settings === null` znamená
+  // dvě různé věci najednou — „správce to ještě nevyplnil" a „dotaz spadl" —
+  // a stránka pak radí napsat správci haly kvůli něčemu, co je nastavené.
+  // Tatáž záměna, které se `Settings.tsx` vyhýbá přes `can_see_rates`.
+  const { data: settings = null, isLoading, error } = useQuery({
     queryKey: ['reservation-settings'],
     queryFn: async () => {
       // Čte se z pohledu, ne z tabulky: sazby jsou v `settings` sloupcovým
@@ -81,7 +85,7 @@ export const useSettings = () => {
   });
 
   return {
-    settings, sheets, isLoading,
+    settings, sheets, isLoading, error,
     updateSettings: updateSettings.mutateAsync,
     addSheet: addSheet.mutateAsync,
     updateSheet: updateSheet.mutateAsync,

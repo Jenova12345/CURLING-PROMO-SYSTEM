@@ -64,6 +64,15 @@ export const NAV_ITEMS: NavItem[] = [
     vyzadujeZastupce: true,
   },
   {
+    path: '/cenik',
+    label: 'Ceník',
+    icon: Coins,
+    // Ceník vidí KAŽDÁ role — je to vyvěšená cena ledu, ne cena konkrétního
+    // zákazníka. Stránka je jen ke čtení; komerční sazba ani individuální
+    // sazby klubů na ní nejsou (viz src/pages/Cenik.tsx a migrace A2b).
+    roles: ['admin', 'trainer', 'part_time_staff', 'instructor', 'bar_staff', 'manager', 'pro_player', 'hobby_player'],
+  },
+  {
     path: '/shifts',
     label: 'Směny', 
     icon: Clock,
@@ -145,7 +154,7 @@ export const ROLE_LABELS: Record<string, string> = {
   hobby_player: 'Hráč klubu',
 };
 
-export const DEFAULT_PATHS = ['/', '/calendar', '/profile', '/communication', '/help'];
+export const DEFAULT_PATHS = ['/', '/calendar', '/cenik', '/profile', '/communication', '/help'];
 
 // Legacy function for backward compatibility
 export const filterNavItemsByRole = (

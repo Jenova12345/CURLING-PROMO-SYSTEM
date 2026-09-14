@@ -10,6 +10,7 @@ import ForgotPassword from "./pages/ForgotPassword";
 import UpdatePassword from "./pages/UpdatePassword";
 import Dashboard from "./pages/Dashboard";
 import Calendar from "./pages/Calendar";
+import Cenik from "./pages/Cenik";
 import Dues from "./pages/Dues";
 import Invoices from "./pages/Invoices";
 import Requests from "./pages/Requests";
@@ -44,6 +45,7 @@ const App = () => (
               <Route path="/calendar" element={<Calendar />} />
               {/* Rezervace sloučeny do Kalendáře — starý odkaz přesměruj */}
               <Route path="/reservations" element={<Navigate to="/calendar" replace />} />
+              <Route path="/cenik" element={<Cenik />} />
               <Route path="/shifts" element={<Shifts />} />
               <Route path="/dues" element={<Dues />} />
               <Route path="/invoices" element={<Invoices />} />
