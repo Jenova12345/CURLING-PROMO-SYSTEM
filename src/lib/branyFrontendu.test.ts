@@ -669,3 +669,104 @@ describe('Subjekty: rozhodování o hláškách zůstává v čisté funkci', ()
     ).toContain('stavUlozeniUdaju(');
   });
 });
+
+describe('Kontrolní součet: fakturoidí sloupce jsou vidět a křičí', () => {
+  // Migrace 20260914210000 zviditelnila `fakturoid` a `fakturoid_rozdil`.
+  // Do 14. 9. 2026 je `billing_reconcile` VRACELA, ale tabulka v Invoices.tsx
+  // vykreslovala sedm sloupců a ani jeden z těch dvou mezi nimi nebyl — takže
+  // se fakturoidí kontrolní součet počítal a nikdo ho neviděl.
+  //
+  // ŽÁNR A JEHO HRANICE — a proč je první verze téhle brány k ničemu.
+  // Repo nemá jsdom, takže se tabulka nedá vykreslit a proklikat. První verze
+  // těchhle testů se ptala jen na výskyt názvů (`toContain('fakturoid')`)
+  // a code review bránu 14. 9. 2026 OBEŠLA na první pokus: stačilo zabalit obě
+  // buňky do `{false && …}` a v `nesedi` přepsat `||` na `&&` — oprava mrtvá,
+  // všechny tři testy zelené. Jedna aserce byla navíc TAUTOLOGIE:
+  // `toContain('rozdil')` projde i bez `rozdil`, protože `'fakturoid_rozdil'`
+  // ten podřetězec obsahuje.
+  //
+  // Proto se od té doby matchuje VŽDY CELÝ VÝRAZ VČETNĚ OPERÁTORŮ, ne názvy.
+  // Textová brána nikdy nedokáže, že se něco vykreslilo; dokáže jen to, že
+  // zdroják vypadá přesně takhle. To stačí, aby mutace musela být viditelná.
+  const invoices = () => cti('src/pages/Invoices.tsx');
+
+  it('obě buňky jsou v tabulce vykreslené bez podmínky', () => {
+    const zdroj = invoices();
+
+    // Celá buňka včetně tagů. `{false && …}` nebo jakýkoli jiný obal
+    // tenhle řetězec rozbije, takže se mutace neschová.
+    expect(zdroj,
+      'buňka se sloupcem „Fakturoid" zmizela nebo se dostala pod podmínku — ' +
+      'částka, kterou za subjekt drží fakturoidí doklady, by nebyla vidět',
+    ).toContain('<TableCell className="text-right">{fmtKc(Number(r.fakturoid))}</TableCell>');
+
+    expect(zdroj,
+      'hodnota „Rozdíl dokladů" se přestala vykreslovat přímo z r.fakturoid_rozdil',
+    ).toMatch(/<TableCell className=\{`text-right \$\{Number\(r\.fakturoid_rozdil\)[^}]*\}`\}>\s*\{fmtKc\(Number\(r\.fakturoid_rozdil\)\)\}/);
+
+    // Hlavičky — bez nich by buňky visely pod cizím sloupcem.
+    expect(zdroj, 'hlavička sloupce „Fakturoid" zmizela')
+      .toContain('<TableHead className="text-right">Fakturoid</TableHead>');
+    expect(zdroj, 'hlavička sloupce „Rozdíl dokladů" zmizela')
+      .toContain('<TableHead className="text-right">Rozdíl dokladů</TableHead>');
+  });
+
+  it('nenulový fakturoid_rozdil se zvýrazňuje stejně jako rozdil', () => {
+    const zdroj = invoices();
+
+    // Celý ternár včetně podmínky a včetně toho, že destruktivní třída je
+    // v PRAVDIVÉ větvi. Samotné `toContain('text-destructive')` by prošlo
+    // i po obrácení podmínky.
+    const zvyrazneni = (sloupec: string) =>
+      new RegExp(
+        `Number\\(r\\.${sloupec}\\) !== 0 \\? 'font-bold text-destructive' : ''`,
+      );
+
+    expect(zdroj,
+      'zvýraznění nenulového „Rozdíl dokladů" zmizelo nebo se mu obrátila podmínka',
+    ).toMatch(zvyrazneni('fakturoid_rozdil'));
+
+    // Kontrolní vzorek: kdyby se tenhle rozbil, nezměnila se fakturoidí
+    // oprava, ale celý způsob zvýrazňování — a regex výš měří něco jiného,
+    // než si myslí.
+    expect(zdroj,
+      'zvýraznění nenulového „Rozdíl" zmizelo — vzor, podle kterého se řídí ' +
+      'i fakturoidí sloupec, přestal platit',
+    ).toMatch(zvyrazneni('rozdil'));
+  });
+
+  it('banner „Sedí to" reaguje na KTERÝKOLI z obou rozdílů', () => {
+    const zdroj = invoices();
+
+    // CELÝ výraz i s `||`. Kdyby se z něj stalo `&&`, banner by mlčel,
+    // dokud se nerozejdou OBA rozdíly naráz — a právě tuhle mutaci
+    // předchozí verze testu propustila.
+    expect(zdroj,
+      'filtr `nesedi` už není „rozdil NEBO fakturoid_rozdil". Při `&&` by nad ' +
+      'červenou buňkou svítilo zelené „Sedí to."',
+    ).toMatch(
+      /\(r\) =>\s*Number\(r\.rozdil\) !== 0 \|\| Number\(r\.fakturoid_rozdil\) !== 0/,
+    );
+
+    // Samostatně a NE přes `toContain('rozdil')` — ten by prošel i bez
+    // `rozdil`, protože `fakturoid_rozdil` ho obsahuje jako podřetězec.
+    expect(zdroj, 'filtr `nesedi` přestal hlídat samotný rozdil')
+      .toMatch(/Number\(r\.rozdil\) !== 0/);
+  });
+
+  it('nápověda i banner přiznávají DRUHOU příčinu nenulového rozdílu', () => {
+    // Změřeno 14. 9. 2026 na replice: doklad, který kryje rezervace z 5. 9.
+    // a z 1. 10., má v zářijové sestavě `fakturoid_rozdil` = 2000, přestože
+    // je v pořádku — sečte se celý `nas_soucet`, ale jen zářijové rezervace.
+    // Chová se tak i funkce PŘED migrací 20260914210000; ta to jen poprvé
+    // ukáže na obrazovce. Dokud se porovnání neomezí na doklady, které se do
+    // období vejdou celé (produktové rozhodnutí PM), musí to text říct —
+    // jinak obrazovka tvrdí „doklad se rozešel s podkladem" o zdravém dokladu.
+    const zdroj = invoices();
+
+    expect(zdroj, 'nápověda u kontrolního součtu zamlčela příčinu „doklad přesahuje období"')
+      .toMatch(/rezervace mimo zobrazený měsíc/);
+    expect(zdroj, 'banner „Nesedí" zase tvrdí jen jednu příčinu ze dvou')
+      .toMatch(/nebo sahá mimo zobrazený měsíc/);
+  });
+});

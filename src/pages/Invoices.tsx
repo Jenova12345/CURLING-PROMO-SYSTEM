@@ -102,7 +102,18 @@ const Invoices = () => {
     to: format(endOfMonth(mesic), 'yyyy-MM-dd'),
   }), [mesic]);
   const { data: soucet = [], isLoading: soucetLoading } = useBillingReconcile(obdobi);
-  const nesedi = soucet.filter((r) => Number(r.rozdil) !== 0);
+  // POČÍTÁ SE I `fakturoid_rozdil`, ne jen `rozdil`.
+  //
+  // Jsou to dvě různé otázky a ani jedna druhou nezastoupí:
+  //   `rozdil`           … sedí součet rezervací s tím, co za subjekt drží doklady?
+  //   `fakturoid_rozdil` … sedí částka NA fakturoidím dokladu s rezervacemi, které nese?
+  // Doklad může mít správného příjemce a špatnou částku — pak je `rozdil` nula
+  // a rozejde se jen ten druhý. Kdyby se tu hlídal jen `rozdil`, svítil by nad
+  // červenou buňkou zelený banner „Sedí to." — a to je přesně ten tichý souhlas,
+  // kvůli kterému kontrolní součet existuje.
+  const nesedi = soucet.filter(
+    (r) => Number(r.rozdil) !== 0 || Number(r.fakturoid_rozdil) !== 0,
+  );
 
   if (!isAdmin) return <div className="p-6 text-muted-foreground">Faktury vidí jen správce.</div>;
 
@@ -308,8 +319,8 @@ const Invoices = () => {
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
               <span>
                 <b>Nesedí u {nesedi.length} {nesedi.length === 1 ? 'subjektu' : 'subjektů'}.</b>{' '}
-                Rozdíl znamená, že se doklad rozešel s rezervacemi — nefakturuj dál
-                a nejdřív to dohledej.
+                Buď se doklad rozešel s rezervacemi, nebo sahá mimo zobrazený měsíc —
+                nefakturuj dál a nejdřív to dohledej.
               </span>
             </div>
           )}
@@ -321,6 +332,8 @@ const Invoices = () => {
                   <TableHead>Subjekt</TableHead>
                   <TableHead className="text-right">Fakturováno</TableHead>
                   <TableHead className="text-right">V konceptu</TableHead>
+                  <TableHead className="text-right">Fakturoid</TableHead>
+                  <TableHead className="text-right">Rozdíl dokladů</TableHead>
                   <TableHead className="text-right">K fakturaci</TableHead>
                   <TableHead className="text-right">Neschválené</TableHead>
                   <TableHead className="text-right">Dluží</TableHead>
@@ -333,6 +346,11 @@ const Invoices = () => {
                     <TableCell className="font-medium">{r.subjekt}</TableCell>
                     <TableCell className="text-right">{fmtKc(Number(r.fakturovano))}</TableCell>
                     <TableCell className="text-right">{fmtKc(Number(r.v_konceptu))}</TableCell>
+                    <TableCell className="text-right">{fmtKc(Number(r.fakturoid))}</TableCell>
+                    {/* Zvýrazňuje se stejně jako „Rozdíl" — obojí znamená „nefakturuj dál". */}
+                    <TableCell className={`text-right ${Number(r.fakturoid_rozdil) !== 0 ? 'font-bold text-destructive' : ''}`}>
+                      {fmtKc(Number(r.fakturoid_rozdil))}
+                    </TableCell>
                     <TableCell className="text-right">{fmtKc(Number(r.k_fakturaci))}</TableCell>
                     <TableCell className="text-right">{fmtKc(Number(r.neschvalene))}</TableCell>
                     <TableCell className="text-right font-semibold">{fmtKc(Number(r.dluzi))}</TableCell>
@@ -347,6 +365,13 @@ const Invoices = () => {
           <p className="text-xs text-muted-foreground">
             Neschválené rezervace se nefakturují (rozhodnutí PM), proto jsou ve „Dluží"
             a zároveň mimo „Fakturováno" — rozdíl to ale dělat nesmí.
+            {' '}<b>Fakturoid</b> je částka, kterou za subjekt drží doklady vystavené ve
+            Fakturoidu; <b>Rozdíl dokladů</b> porovnává částku na dokladu s rezervacemi,
+            které nese. Nenulový „Rozdíl dokladů" má dvě možné příčiny a obě se musí
+            dohledat: buď se doklad rozešel se svým podkladem, nebo doklad pokrývá
+            i rezervace mimo zobrazený měsíc (sečte se celý doklad, ale jen ty
+            rezervace, které do měsíce spadnou). Druhý případ poznáš tak, že
+            v sestavě za delší období rozdíl zmizí.
           </p>
         </CardContent>
       </Card>
