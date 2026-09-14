@@ -124,6 +124,18 @@ si ho. Kdyby se projekt někdy stěhoval, mění se i ten řádek v kódu.
 * Jména se čtou doslova. Překlep = funkce se spustí, **nic nezavolá**
   a napíše do logu proč. Nic se tím nerozbije.
 
+⚠️ **Po vložení proměnné spusť nový deploy** (Deploys → Trigger deploy →
+Deploy site), případně pushni cokoli. Dokumentace Netlify to sice výslovně
+neříká, ale scope „Functions" se váže na nasazení, takže už publikované
+nasazení novou proměnnou vidět nemusí. Než se to potvrdí, je levnější
+redeploy udělat než ladit, proč funkce hlásí „Chybí
+SUPABASE_SERVICE_ROLE_KEY", když je proměnná vidět v UI.
+
+**Jak poznat, že funkce jede:** naplánovanou funkci nejde zavolat URL, ale
+`curl -o /dev/null -w '%{http_code}' https://<web>/.netlify/functions/posli-emaily`
+vrátí **403**, když je zaregistrovaná. Když vrátí 200 (obsah `index.html`),
+spadlo to do SPA redirectu a funkce nasazená není.
+
 ### 2) Supabase → Edge Functions → Secrets
 
 | Proměnná | K čemu |
