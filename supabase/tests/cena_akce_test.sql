@@ -178,10 +178,27 @@ BEGIN
 
   PERFORM pg_temp.tvrd(_soucet = 32000, 'po přecenění na 4 000 je součet 2 × 4 × 4 000 = 32 000');
 
-  -- Komerční subjekt je bez DPH v `amount`, `dluh` je s DPH — poměr musí sedět
-  -- přesně, jinak se rozešel doklad s „Kdo kolik dluží".
-  PERFORM pg_temp.tvrd(round(_soucet * 1.12, 2) = round(_dluh, 2),
-    format('… a dluh je přesně o DPH vyšší (%s → %s)', _soucet, _dluh));
+  -- POMĚR `amount` ↔ `dluh` ZÁVISÍ NA DAŇOVÉM REŽIMU, tak ať se na něj test ptá.
+  --
+  -- Dřív tu stálo natvrdo `_soucet * 1.12` a platilo to jen pod `vat_mode`
+  -- = 'platce'. Od 15. 9. 2026 je globálně `neplatce` (hala plátce DPH není —
+  -- ověřeno ARES + MFČR + VIES 14. 9. 2026), takže pohled `reservations_billing`
+  -- daň nepřipočítává a `dluh` se rovná základu.
+  --
+  -- Invariant se tím NEOSLABUJE, jen se dopočítá ze stejného zdroje, ze kterého
+  -- ho bere ten pohled. Obě větve se navíc tvrdí zvlášť, ať je v hlášce vidět,
+  -- která platila.
+  IF COALESCE((SELECT vat_mode FROM public.billing_settings WHERE singleton),
+              'neplatce') = 'neplatce' THEN
+    PERFORM pg_temp.tvrd(round(_soucet, 2) = round(_dluh, 2),
+      format('… a dluh se rovná základu — neplátce daň nepřipočítává (%s → %s)',
+             _soucet, _dluh));
+  ELSE
+    PERFORM pg_temp.tvrd(
+      round(_soucet * (1 + (SELECT vat_rate_ice FROM public.billing_settings WHERE singleton) / 100), 2)
+        = round(_dluh, 2),
+      format('… a dluh je přesně o DPH vyšší (%s → %s)', _soucet, _dluh));
+  END IF;
 
   SELECT sum(rozdil) INTO _rozdil FROM public.billing_reconcile('2027-04-01','2027-04-30');
   PERFORM pg_temp.tvrd(COALESCE(_rozdil, 0) = 0,

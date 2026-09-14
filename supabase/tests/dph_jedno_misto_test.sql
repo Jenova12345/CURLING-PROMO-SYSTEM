@@ -13,13 +13,25 @@
 -- proto první: klubový subjekt s KOMERČNÍ akcí dluží základ + 12 %, protože
 -- přesně tolik bude na dokladu.
 --
--- POZOR: testy počítají s `vat_mode = 'platce'` a `vat_rate_ice = 12`. Když
--- se to v nastavení změní, mají zčervenat — je to peněžní invariant, ne
--- náhodná konfigurace.
+-- POZOR: testy počítají s `vat_mode = 'platce'` a `vat_rate_ice = 12`.
+--
+-- OD 15. 9. 2026 SI TEN REŽIM SADA NASTAVUJE SAMA (níž, hned za BEGIN).
+-- Do té doby se spoléhala na globální nastavení — a to se migrací
+-- 20260915090000 mění na `neplatce`, protože hala plátce DPH NENÍ
+-- (ověřeno ARES + MFČR + VIES 14. 9. 2026). Sada by tím zčervenala,
+-- ačkoli měří něco jiného: že se DPH počítá na JEDNOM místě.
+--
+-- Ta otázka nepřestává platit tím, že hala dnes daň neúčtuje — kdyby se
+-- k DPH někdy registrovala, tenhle invariant musí pořád držet. Proto se
+-- pokrytí zachovává a jen se odpojuje od globálního nastavení.
+-- (Transakce se na konci celá roluje, takže nastavení nikam neuteče.)
 -- =============================================================================
 
 \set ON_ERROR_STOP on
 BEGIN;
+
+-- Daňový režim, pod kterým tahle sada měří. Nezávisle na tom, co je globálně.
+UPDATE public.billing_settings SET vat_mode = 'platce', vat_rate_ice = 12 WHERE singleton;
 
 DO $$
 BEGIN

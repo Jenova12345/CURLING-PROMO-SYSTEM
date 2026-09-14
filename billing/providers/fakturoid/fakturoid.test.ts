@@ -104,6 +104,34 @@ describe('config', () => {
     expect(() => overDanovyRezim(false, null)).toThrow(BillingValidationError);
   });
 
+  it('CÍLOVÝ STAV po KROKU 4: IS_VAT_PAYER=false + vat_mode=neplatce projde', () => {
+    // Curling promo Ostrava s.r.o. (IČO 29796717) je NEPLÁTCE — ověřeno
+    // 14. 9. 2026 v ARES, registru plátců DPH u MFČR i ve VIES. Účet
+    // u Fakturoidu to má taky (`vat_mode: non_vat_payer`).
+    //
+    // Tenhle test připíná právě tu jednu kombinaci, do které se systém
+    // přepíná, aby se na ni nedalo omylem sáhnout. `nactiConfig` se sem bere
+    // celý schválně: kdyby někdo změnil, jak se `IS_VAT_PAYER` čte (třeba
+    // zpátky na „prázdno = neplátce"), spadne to tady.
+    const cfg = nactiConfig({ ...ENV, IS_VAT_PAYER: 'false' });
+    expect(cfg.jePlatceDph).toBe(false);
+    expect(() => overDanovyRezim(cfg.jePlatceDph, 'neplatce')).not.toThrow();
+
+    // A obě půlky mezistavu při nasazení musí spadnout HLASITĚ — na pořadí
+    // (nejdřív migrace, nebo nejdřív secret) tak nezáleží.
+    expect(() => overDanovyRezim(cfg.jePlatceDph, 'platce')).toThrow(BillingValidationError);
+    expect(() => overDanovyRezim(true, 'neplatce')).toThrow(BillingValidationError);
+  });
+
+  it('identifikovaná osoba NENÍ neplátce a neprojde', () => {
+    // Třetí hodnota enumu `vat_mode`. `overDanovyRezim` porovnává jen proti
+    // řetězci „neplatce", takže identifikovaná osoba spadne do větve plátce —
+    // což je správně (má DIČ a odvádí daň z přijatých služeb), ale nikde to
+    // nebylo napsané ani otestované.
+    expect(() => overDanovyRezim(false, 'identifikovana_osoba')).toThrow(BillingValidationError);
+    expect(() => overDanovyRezim(true, 'identifikovana_osoba')).not.toThrow();
+  });
+
   it('na účet se nezapíše bez LIVE a bez shody se schváleným účtem', () => {
     const test = { slug: 'curling-test', live: true };
     const ostry = { slug: 'curling-ostry', live: true };

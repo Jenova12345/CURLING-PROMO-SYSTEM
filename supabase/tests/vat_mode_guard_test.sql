@@ -55,10 +55,31 @@ BEGIN
   -- 1) Výchozí stav po migraci MUSÍ být plátce. Kdyby nebyl, celý tenhle soubor
   --    by testoval něco jiného, než si myslí.
   SELECT vat_mode INTO _rezim FROM public.billing_settings WHERE singleton;
-  IF _rezim <> 'platce' THEN
-    RAISE EXCEPTION 'TEST SELHAL: po migraci má být vat_mode=platce, je %.', _rezim;
+  -- OD 15. 9. 2026 SE ČEKÁ „neplatce", NE „platce".
+  --
+  -- Migrace 20260830140000 halu přepnula na plátce s odůvodněním „hala je od
+  -- přechodu plátce DPH". Ten předpoklad se nenaplnil: IČO 29796717 není
+  -- k DPH registrované — ověřeno 14. 9. 2026 v ARES (`dic: null`,
+  -- `stavZdrojeDph: NEEXISTUJICI`), v registru plátců DPH u MFČR
+  -- (`typSubjektu="NENALEZEN"`) i ve VIES (`isValid: false`), a účet
+  -- u Fakturoidu je taky `non_vat_payer`. Srovnává to migrace
+  -- 20260915090000_danovy_rezim_neplatce.sql.
+  --
+  -- Tenhle test tedy dál dělá totéž, co dělal: připíná, že se daňový režim
+  -- nehýbe potichu. Jen připíná pravdu místo předpokladu.
+  IF _rezim <> 'neplatce' THEN
+    RAISE EXCEPTION 'TEST SELHAL: po migraci má být vat_mode=neplatce, je %.', _rezim;
   END IF;
-  RAISE NOTICE 'OK  po migraci je hala vedená jako plátce DPH';
+  RAISE NOTICE 'OK  po migraci je hala vedená jako NEPLÁTCE DPH';
+
+  -- OD KROKU 1 DÁL SI REŽIM SADA NASTAVUJE SAMA.
+  --
+  -- Kroky 2–4 níž testují ZÁMEK, který se zapíná pod plátcem. Dokud byl
+  -- plátce i globální default, stačilo se na něj spolehnout. Od migrace
+  -- 20260915090000 je globálně `neplatce`, takže by se ty kroky bez tohohle
+  -- řádku ptaly na zámek, který není zapnutý — a tvrdily by „zamčeno" tam,
+  -- kde je otevřeno. Transakce se na konci roluje, ven to neuteče.
+  UPDATE public.billing_settings SET vat_mode = 'platce' WHERE singleton;
 
   -- 2) KONCEPT SE POD PLÁTCEM NESMÍ ZALOŽIT ANI ZAČÍT.
   --
