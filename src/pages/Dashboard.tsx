@@ -10,10 +10,11 @@ import { cs } from 'date-fns/locale';
 import { Link } from 'react-router-dom';
 import NewShiftsAlert from '@/components/NewShiftsAlert';
 import { jeKomercni, BARVA_KOMERCE } from '@/lib/barvaKlubu';
+import { nadchazejiciAkce } from '@/lib/nadchazejiciAkce';
 
 const Dashboard = () => {
   const { profile, roles, isAdmin, isStaff } = useAuth();
-  const { events } = useEvents();
+  const { events, zruseneAkce } = useEvents();
   const { openShifts, myShifts, totalHoursWorked, totalEarnings } = useShifts();
 
   const roleLabels: Record<string, string> = {
@@ -27,9 +28,16 @@ const Dashboard = () => {
     hobby_player: 'Hráč klubu',
   };
 
-  const upcomingEvents = events
-    .filter(e => new Date(e.start_time) > new Date())
-    .slice(0, 5);
+  // ZRUŠENÁ AKCE NENÍ NADCHÁZEJÍCÍ. Do 14. 9. 2026 se tu filtroval jen čas —
+  // jenže `events` o zrušení neví nic, takže se sem 36 zrušených budoucích akcí
+  // (změřeno na produkci) propsalo jako „nejbližší akce v kalendáři". Kalendář
+  // je přitom neukazuje (propouští jen `status='confirmed'`) a Směny je nenabízejí
+  // (`zrusene_akce_se_smenami`) — Přehled byl jediné místo, kde přežily.
+  //
+  // `.slice(0, 5)` zůstává tam, kde byl: karta „Nadcházející události" počítá
+  // délku TOHOHLE pole, takže čítač se chová jako dřív (stropuje se na pěti),
+  // jen se do něj napočítávají živé akce místo zrušených.
+  const upcomingEvents = nadchazejiciAkce(events, zruseneAkce).slice(0, 5);
 
   // KOMERCE TU SCHVÁLNĚ NENÍ. Její barva žije v `BARVA_KOMERCE` a bere se
   // odtamtud (viz tečka níž) — druhá hodnota vedle té konstanty by se rozešla

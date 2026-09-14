@@ -33,6 +33,23 @@ export const useEvents = () => {
     enabled: !!user,
   });
 
+  // Akce, které jsou zrušené. Chodí z RPC, protože `events` o zrušení neví nic
+  // (nemá `status`, `cancelled_at` ani `deleted_at`) a `reservations` běžný člen
+  // přes RLS nevidí — viz `src/lib/nadchazejiciAkce.ts`.
+  //
+  // Bez `enabled` na roli schválně: Přehled vidí KAŽDÝ přihlášený, takže tenhle
+  // seznam potřebují i role, které na směny nesahají. Tím se liší od dvojčete
+  // v `useShifts`, které jede jen pro admina a štáb.
+  const { data: zruseneAkce = new Set<string>() } = useQuery({
+    queryKey: ['zrusene-akce'],
+    queryFn: async () => {
+      const { data, error } = await (supabase as any).rpc('zrusene_akce');
+      if (error) throw error;
+      return new Set<string>(((data || []) as string[]).filter(Boolean));
+    },
+    enabled: !!user,
+  });
+
   const createEvent = useMutation({
     mutationFn: async (eventData: CreateEventData) => {
       const { data, error } = await supabase
@@ -104,6 +121,7 @@ export const useEvents = () => {
 
   return {
     events,
+    zruseneAkce,
     isLoading,
     createEvent: createEvent.mutateAsync,
     updateEvent: updateEvent.mutateAsync,

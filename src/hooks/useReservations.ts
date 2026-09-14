@@ -240,6 +240,12 @@ export const useReservations = (range: DateRange | null) => {
       // Zrušení rezervace je právě ten okamžik, kdy se množina zrušených akcí
       // mění — bez tohohle by filtr nabídek běžel na starých datech.
       queryClient.invalidateQueries({ queryKey: ['zrusene-akce-se-smenami'] });
+    // Totéž pro Přehled. Jsou to DVA různé klíče, ne omylem: `zrusene-akce`
+    // vrací všechny zrušené akce (Přehled), `zrusene-akce-se-smenami` jen ty
+    // s rozpisem (nabídky směn) a jede jen adminovi a štábu. Kdyby se tu
+    // invalidoval jen jeden, druhá obrazovka by po zrušení rezervace ještě
+    // chvíli tvrdila, že se akce koná.
+    queryClient.invalidateQueries({ queryKey: ['zrusene-akce'] });
     queryClient.invalidateQueries({ queryKey: ['notifications'] });
     queryClient.invalidateQueries({ queryKey: ['dues'] });
   };
