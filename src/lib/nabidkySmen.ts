@@ -11,6 +11,41 @@ export interface NabidnutelnaSmena {
   event_id: string | null;
 }
 
+/** Minimum pro filtr na čas. `event` chybět smí — viz `jenNeskoncene`. */
+export interface CasovanaSmena {
+  event?: { end_time?: string | null } | null;
+}
+
+/**
+ * Odfiltruje směny akcí, které už SKONČILY.
+ *
+ * PROČ `end_time` A NE `start_time`: rozhoduje se podle toho, jestli se na tu
+ * směnu ještě dá nastoupit, ne jestli akce začala. Akce, která právě běží, je
+ * pořád obsaditelná — brigádník onemocní a admin shání náhradu na zbytek. Kdyby
+ * se filtrovalo podle začátku, přišel by přesně o tenhle případ. Skryje se tedy
+ * jen to, co je doopravdy pryč.
+ *
+ * Táž hranice, jakou už používá `shiftsToComplete` (`event.end_time < now`),
+ * takže se „ještě k obsazení" a „už k dokončení" nemůžou překrývat ani minout.
+ *
+ * SMĚNA BEZ AKCE SE NESKRÝVÁ. Starší směny vedené přes `events.required_staff`
+ * mají `event_id` NULL a k `event` se nemají jak dostat; stejně tak řádek,
+ * kterému se vnořená akce nenačetla. „Nevím, kdy to je" není „už to bylo" —
+ * zmizet by při výpadku mohl celý rozpis, což je horší než původní vada.
+ */
+export function jenNeskoncene<T extends CasovanaSmena>(
+  smeny: T[],
+  ted: Date = new Date(),
+): T[] {
+  return smeny.filter((s) => {
+    const konec = s.event?.end_time;
+    if (!konec) return true;
+    const kdy = new Date(konec);
+    if (Number.isNaN(kdy.getTime())) return true;
+    return kdy > ted;
+  });
+}
+
 /**
  * Odfiltruje směny, jejichž akce je zrušená.
  *

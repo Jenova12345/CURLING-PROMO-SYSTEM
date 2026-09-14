@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
-import { bezZrusenychAkci } from '@/lib/nabidkySmen';
+import { bezZrusenychAkci, jenNeskoncene } from '@/lib/nabidkySmen';
 
 export const useShifts = () => {
   const { user, isAdmin, isStaff, roles } = useAuth();
@@ -402,7 +402,19 @@ export const useShifts = () => {
   // pojistka — po migraci 20260903120000 je taková směna v databázi `cancelled`,
   // takže sem nedojde. Filtr chrání případ, kdy by se sem starší řádek dostal
   // dřív, než ho invariant zavře.
-  const openShifts = bezZrusenychAkci(shifts, zruseneAkce).filter(s => {
+  //
+  // VOLNÁ SMĚNA NA AKCI, KTERÁ UŽ SKONČILA, NENÍ NABÍDKA. Do 14. 9. 2026 se tu
+  // filtroval jen stav a role, takže neobsazená směna visela v nabídce navždycky —
+  // brigádníkovi mezi tím, na co se může přihlásit (a přihlásit se nedá, akce
+  // byla), a adminovi v „Směny kde chybí brigádníci" jako úkol, který už nejde
+  // splnit. Na produkci to 14. 9. 2026 ještě nebylo vidět (0 volných směn na
+  // skončených akcích — hala je v provozu krátce), ale stane se to první akcí,
+  // která proběhne neobsazená.
+  //
+  // Filtr sedí ZDE, v jednom zdroji: `openShifts` živí nabídku brigádníka,
+  // adminský seznam i čítač na Přehledu. Kdyby se filtrovalo až v komponentě,
+  // kryla by se jedna z těch tří cest a zbylé dvě by ukazovaly jiné číslo.
+  const openShifts = jenNeskoncene(bezZrusenychAkci(shifts, zruseneAkce)).filter(s => {
     if (s.status !== 'open') return false;
     if (myEventIds.has(s.event_id)) return false;
     
