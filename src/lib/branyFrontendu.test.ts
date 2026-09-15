@@ -700,9 +700,15 @@ describe('Subjekty: rozhodování o hláškách zůstává v čisté funkci', ()
 
 describe('Kontrolní součet: fakturoidí sloupce jsou vidět a křičí', () => {
   // Migrace 20260914210000 zviditelnila `fakturoid` a `fakturoid_rozdil`.
-  // Do 14. 9. 2026 je `billing_reconcile` VRACELA, ale tabulka v Invoices.tsx
-  // vykreslovala sedm sloupců a ani jeden z těch dvou mezi nimi nebyl — takže
-  // se fakturoidí kontrolní součet počítal a nikdo ho neviděl.
+  // Do 14. 9. 2026 je `billing_reconcile` VRACELA, ale tabulka vykreslovala
+  // sedm sloupců a ani jeden z těch dvou mezi nimi nebyl — takže se fakturoidí
+  // kontrolní součet počítal a nikdo ho neviděl.
+  //
+  // ⚠️ 16. 9. 2026 se kontrolní součet PŘESTĚHOVAL z `Invoices.tsx` (stránka
+  // Faktury, zrušená spolu s interním enginem) do `Dues.tsx` („Přehled
+  // fakturace"). Brána musí ukazovat na nové místo — jinak by po zrušení
+  // stránky četla neexistující soubor, nebo hůř: zůstala zelená nad kódem,
+  // který už není nikde vykreslený.
   //
   // ŽÁNR A JEHO HRANICE — a proč je první verze téhle brány k ničemu.
   // Repo nemá jsdom, takže se tabulka nedá vykreslit a proklikat. První verze
@@ -716,21 +722,31 @@ describe('Kontrolní součet: fakturoidí sloupce jsou vidět a křičí', () =>
   // Proto se od té doby matchuje VŽDY CELÝ VÝRAZ VČETNĚ OPERÁTORŮ, ne názvy.
   // Textová brána nikdy nedokáže, že se něco vykreslilo; dokáže jen to, že
   // zdroják vypadá přesně takhle. To stačí, aby mutace musela být viditelná.
-  const invoices = () => cti('src/pages/Invoices.tsx');
+  const invoices = () => cti('src/pages/Dues.tsx');
 
   it('obě buňky jsou v tabulce vykreslené bez podmínky', () => {
     const zdroj = invoices();
 
-    // Celá buňka včetně tagů. `{false && …}` nebo jakýkoli jiný obal
-    // tenhle řetězec rozbije, takže se mutace neschová.
+    // KOTVÍ SE NA SOUSEDNOST, NE NA VÝSKYT BUŇKY.
+    //
+    // Dřívější znění tvrdilo, že „`{false && …}` nebo jakýkoli jiný obal tenhle
+    // řetězec rozbije". NEROZBIJE — `{false && <TableCell …>…</TableCell>}` ten
+    // podřetězec pořád OBSAHUJE, takže `toContain` projde. Změřeno mutací
+    // 16. 9. 2026 při stěhování kontrolního součtu: buňka „Fakturoid" se
+    // schovala pod `{false && …}` a celá sada zůstala zelená.
+    //
+    // Teď se proto vyžaduje, aby buňka navazovala PŘÍMO na předchozí (mezi
+    // nimi smí být jen bílé znaky). Jakýkoli obal tam vloží znaky navíc
+    // a shodí to.
     expect(zdroj,
       'buňka se sloupcem „Fakturoid" zmizela nebo se dostala pod podmínku — ' +
       'částka, kterou za subjekt drží fakturoidí doklady, by nebyla vidět',
-    ).toContain('<TableCell className="text-right">{fmtKc(Number(r.fakturoid))}</TableCell>');
+    ).toMatch(/\{fmtKc\(Number\(r\.v_konceptu\)\)\}<\/TableCell>\s*<TableCell className="text-right">\{fmtKc\(Number\(r\.fakturoid\)\)\}<\/TableCell>/);
 
     expect(zdroj,
-      'hodnota „Rozdíl dokladů" se přestala vykreslovat přímo z r.fakturoid_rozdil',
-    ).toMatch(/<TableCell className=\{`text-right \$\{Number\(r\.fakturoid_rozdil\)[^}]*\}`\}>\s*\{fmtKc\(Number\(r\.fakturoid_rozdil\)\)\}/);
+      'hodnota „Rozdíl dokladů" se přestala vykreslovat přímo z r.fakturoid_rozdil, ' +
+      'nebo se dostala pod podmínku',
+    ).toMatch(/\{fmtKc\(Number\(r\.fakturoid\)\)\}<\/TableCell>\s*(?:\{\/\*[\s\S]*?\*\/\}\s*)?<TableCell className=\{`text-right \$\{Number\(r\.fakturoid_rozdil\)[^}]*\}`\}>\s*\{fmtKc\(Number\(r\.fakturoid_rozdil\)\)\}/);
 
     // Hlavičky — bez nich by buňky visely pod cizím sloupcem.
     expect(zdroj, 'hlavička sloupce „Fakturoid" zmizela')
@@ -778,7 +794,7 @@ describe('Kontrolní součet: fakturoidí sloupce jsou vidět a křičí', () =>
 
     // Samostatně a NE přes `toContain('rozdil')` — ten by prošel i bez
     // `rozdil`, protože `fakturoid_rozdil` ho obsahuje jako podřetězec.
-    expect(zdroj, 'filtr `nesedi` přestal hlídat samotný rozdil')
+    expect(zdroj, 'filtr `nesediSoucet` přestal hlídat samotný rozdil')
       .toMatch(/Number\(r\.rozdil\) !== 0/);
   });
 
@@ -891,8 +907,19 @@ describe('Fakturoid: tlačítko v „Přehled fakturace"', () => {
       .not.toContain('createClubDraft');
     expect(duesKod, 'Dues.tsx volá createCommercialDraft — to je zamčený interní engine')
       .not.toContain('createCommercialDraft');
-    expect(duesKod, 'Dues.tsx importuje useInvoices — interní engine se sem vrátil')
-      .not.toContain('useInvoices');
+    // ⚠️ ZÁKAZ SE ZÚŽIL, A JE TO ZÁMĚR. Do 16. 9. 2026 tu stálo prosté
+    // `.not.toContain('useInvoices')`. Od přesunu kontrolního součtu do Dues
+    // se z `@/hooks/useInvoices` legitimně bere `useBillingReconcile` — což
+    // interní engine NENÍ, je to jen čtení `billing_reconcile`, a ta fakturoidí
+    // doklady zná. Plošný zákaz by tedy zakazoval tu správnou věc.
+    //
+    // Místo něj se hlídá PŘESNÝ TVAR importu: z toho modulu smí přijít
+    // `useBillingReconcile` a nic jiného. Kdo si sem přitáhne `useInvoices`,
+    // `useInvoiceDetail` nebo cokoli dalšího, ten řetězec rozbije.
+    const importUseInvoices = duesKod.match(/import\s*\{[^}]*\}\s*from\s*'@\/hooks\/useInvoices';/);
+    expect(importUseInvoices?.[0],
+      'import z @/hooks/useInvoices má jiný tvar — do Dues se smí brát jen useBillingReconcile',
+    ).toBe("import { useBillingReconcile } from '@/hooks/useInvoices';");
   });
 
   it('… a místo toho volá edge funkci fakturoid-invoice', () => {

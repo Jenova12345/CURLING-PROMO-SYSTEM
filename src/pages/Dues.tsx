@@ -1,10 +1,12 @@
 import { useMemo, useState } from 'react';
 import {
   format, startOfDay, addDays, subDays, startOfWeek, addWeeks, subWeeks,
-  startOfMonth, addMonths, subMonths,
+  startOfMonth, endOfMonth, addMonths, subMonths,
 } from 'date-fns';
 import { cs } from 'date-fns/locale';
-import { ChevronLeft, ChevronRight, Wallet, FileText, Receipt, ExternalLink, AlertTriangle } from 'lucide-react';
+import {
+  ChevronLeft, ChevronRight, Wallet, FileText, Receipt, ExternalLink, AlertTriangle, Check, Scale,
+} from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -16,6 +18,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { openInvoiceDraft } from '@/lib/invoiceDraft';
 import { fmtHodin as fmtH, fmtKc } from '@/lib/money';
 import { useBillingSettings } from '@/hooks/useBillingSettings';
+import { useBillingReconcile } from '@/hooks/useInvoices';
 import {
   useFakturoid, FakturoidNejistaChyba,
   type FakturoidPozadavek, type FakturoidVysledek, type FakturoidVarovani,
@@ -74,6 +77,41 @@ const Dues = () => {
   const [varovani, setVarovani] = useState<FakturoidVarovani[]>([]);
   const [view, setView] = useState<View>('month');
   const [currentDate, setCurrentDate] = useState(() => startOfDay(new Date()));
+
+  /**
+   * KONTROLNÍ SOUČET MÁ VLASTNÍ MĚSÍC, NE OBDOBÍ TÉHLE STRÁNKY.
+   *
+   * Je to rozhodnutí přenesené beze změny ze stránky Faktury, odkud se sem
+   * kontrolní součet 16. 9. 2026 přestěhoval — a po přesunu platí ještě víc,
+   * protože přepínač období je teď kousek nad ním.
+   *
+   * Důvod je věcný, ne kosmetický: tohle je kontrola ÚČETNÍHO OBDOBÍ. Kdyby
+   * se navázal na přepínač Den/Týden/Měsíc, šel by zobrazit kontrolní součet
+   * za JEDEN DEN — a `fakturoid_rozdil` by pak byl nenulový skoro pokaždé,
+   * protože doklad zní na celý měsíc, ale do jednoho dne spadne jen část jeho
+   * rezervací. Přesně tu druhou příčinu popisuje nápověda pod tabulkou.
+   * Vyrábělo by to falešné poplachy u brány, která má křičet jen doopravdy.
+   */
+  const [mesic, setMesic] = useState(() => startOfMonth(new Date()));
+  const obdobiSouctu = useMemo(() => ({
+    from: format(startOfMonth(mesic), 'yyyy-MM-dd'),
+    to: format(endOfMonth(mesic), 'yyyy-MM-dd'),
+  }), [mesic]);
+  const { data: soucet = [], isLoading: soucetLoading } = useBillingReconcile(obdobiSouctu);
+
+  // POČÍTÁ SE I `fakturoid_rozdil`, ne jen `rozdil`.
+  //
+  // Jsou to dvě různé otázky a ani jedna druhou nezastoupí:
+  //   `rozdil`           … sedí součet rezervací s tím, co za subjekt drží doklady?
+  //   `fakturoid_rozdil` … sedí částka NA fakturoidím dokladu s rezervacemi, které nese?
+  // Doklad může mít správného příjemce a špatnou částku — pak je `rozdil` nula
+  // a rozejde se jen ten druhý. Kdyby se tu hlídal jen `rozdil`, svítil by nad
+  // červenou buňkou zelený banner „Sedí to." — a to je přesně ten tichý souhlas,
+  // kvůli kterému kontrolní součet existuje.
+  // `nesediSoucet`, ne `nesedi` — `nesedi` je už stav panelu u vystavování
+  // dokladu (jiná věc, jiný význam) a dvě různé „nesedí" na jedné stránce
+  // jsou přesně ten druh záměny, který se pak hledá hodinu.
+  const nesediSoucet = soucet.filter((r) => Number(r.rozdil) !== 0 || Number(r.fakturoid_rozdil) !== 0);
 
   const range = useMemo(() => {
     if (view === 'day') { const f = startOfDay(currentDate); return { from: f.toISOString(), to: addDays(f, 1).toISOString() }; }
@@ -545,6 +583,109 @@ const Dues = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* KONTROLNÍ SOUČET — přestěhováno ze stránky Faktury 16. 9. 2026.
+          Akceptační kritérium Etapy 2 na obrazovce; po vyřazení interního
+          enginu je tohle jediné místo v aplikaci, kde je vidět. */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Scale className="h-4 w-4" aria-hidden="true" /> Kontrolní součet
+          </CardTitle>
+          {/* Vlastní přepínač měsíce — viz komentář u `mesic`. Schválně NEsdílí
+              období s přehledem výš: tohle je kontrola účetního období. */}
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="icon" aria-label="Předchozí měsíc"
+                    onClick={() => setMesic((m) => subMonths(m, 1))}>
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <span className="min-w-32 text-center text-sm font-medium capitalize">
+              {format(mesic, 'LLLL yyyy', { locale: cs })}
+            </span>
+            <Button variant="outline" size="icon" aria-label="Další měsíc"
+                    onClick={() => setMesic((m) => addMonths(m, 1))}>
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {/* Verdikt je schválně první věc, kterou je vidět: rozpad po subjektech
+              je až vysvětlení, proč zrovna nesedí. */}
+          {soucetLoading ? (
+            <div className="text-muted-foreground">Načítám…</div>
+          ) : soucet.length === 0 ? (
+            <div className="text-muted-foreground text-sm">V tomto měsíci nejsou žádné účtovatelné rezervace.</div>
+          ) : nesediSoucet.length === 0 ? (
+            <div className="flex items-center gap-2 rounded-md border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900">
+              <Check className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>
+                Sedí to. Suma vystavených faktur odpovídá tomu, co ukazuje „Po subjektech",
+                u všech {soucet.length} subjektů.
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>
+                <b>Nesedí u {nesediSoucet.length} {nesediSoucet.length === 1 ? 'subjektu' : 'subjektů'}.</b>{' '}
+                Buď se doklad rozešel s rezervacemi, nebo sahá mimo zobrazený měsíc —
+                nefakturuj dál a nejdřív to dohledej.
+              </span>
+            </div>
+          )}
+
+          {soucet.length > 0 && (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Subjekt</TableHead>
+                    <TableHead className="text-right">Fakturováno</TableHead>
+                    <TableHead className="text-right">V konceptu</TableHead>
+                    <TableHead className="text-right">Fakturoid</TableHead>
+                    <TableHead className="text-right">Rozdíl dokladů</TableHead>
+                    <TableHead className="text-right">K fakturaci</TableHead>
+                    <TableHead className="text-right">Neschválené</TableHead>
+                    <TableHead className="text-right">Dluží</TableHead>
+                    <TableHead className="text-right">Rozdíl</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {soucet.map((r) => (
+                    <TableRow key={r.subject_id}>
+                      <TableCell className="font-medium">{r.subjekt}</TableCell>
+                      <TableCell className="text-right">{fmtKc(Number(r.fakturovano))}</TableCell>
+                      <TableCell className="text-right">{fmtKc(Number(r.v_konceptu))}</TableCell>
+                      <TableCell className="text-right">{fmtKc(Number(r.fakturoid))}</TableCell>
+                      {/* Zvýrazňuje se stejně jako „Rozdíl" — obojí znamená „nefakturuj dál". */}
+                      <TableCell className={`text-right ${Number(r.fakturoid_rozdil) !== 0 ? 'font-bold text-destructive' : ''}`}>
+                        {fmtKc(Number(r.fakturoid_rozdil))}
+                      </TableCell>
+                      <TableCell className="text-right">{fmtKc(Number(r.k_fakturaci))}</TableCell>
+                      <TableCell className="text-right">{fmtKc(Number(r.neschvalene))}</TableCell>
+                      <TableCell className="text-right font-semibold">{fmtKc(Number(r.dluzi))}</TableCell>
+                      <TableCell className={`text-right ${Number(r.rozdil) !== 0 ? 'font-bold text-destructive' : ''}`}>
+                        {fmtKc(Number(r.rozdil))}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Neschválené rezervace se nefakturují (rozhodnutí PM), proto jsou ve „Dluží"
+            a zároveň mimo „Fakturováno" — rozdíl to ale dělat nesmí.
+            {' '}<b>Fakturoid</b> je částka, kterou za subjekt drží doklady vystavené ve
+            Fakturoidu; <b>Rozdíl dokladů</b> porovnává částku na dokladu s rezervacemi,
+            které nese. Nenulový „Rozdíl dokladů" má dvě možné příčiny a obě se musí
+            dohledat: buď se doklad rozešel se svým podkladem, nebo doklad pokrývá
+            i rezervace mimo zobrazený měsíc (sečte se celý doklad, ale jen ty
+            rezervace, které do měsíce spadnou). Druhý případ poznáš tak, že
+            v sestavě za delší období rozdíl zmizí.
+          </p>
+        </CardContent>
+      </Card>
 
       {/* KROK 4 — co už do Fakturoidu odešlo.
           Bez tohohle seznamu nemá admin po zavření toastu kde zjistit, co
