@@ -722,10 +722,12 @@ describe('Kontrolní součet: fakturoidí sloupce jsou vidět a křičí', () =>
   // Proto se od té doby matchuje VŽDY CELÝ VÝRAZ VČETNĚ OPERÁTORŮ, ne názvy.
   // Textová brána nikdy nedokáže, že se něco vykreslilo; dokáže jen to, že
   // zdroják vypadá přesně takhle. To stačí, aby mutace musela být viditelná.
-  const invoices = () => cti('src/pages/Dues.tsx');
+  // Jméno podle OBSAHU, ne podle staré stránky: helper od stěhování čte
+  // `Dues.tsx`, a `invoices()` nad ním byl návod, jak se splést.
+  const soucetKod = () => cti('src/pages/Dues.tsx');
 
   it('obě buňky jsou v tabulce vykreslené bez podmínky', () => {
-    const zdroj = invoices();
+    const zdroj = soucetKod();
 
     // KOTVÍ SE NA SOUSEDNOST, NE NA VÝSKYT BUŇKY.
     //
@@ -755,8 +757,44 @@ describe('Kontrolní součet: fakturoidí sloupce jsou vidět a křičí', () =>
       .toContain('<TableHead className="text-right">Rozdíl dokladů</TableHead>');
   });
 
+  // NÁLEZ CODE REVIEW 16. 9. 2026 (🔴). `useQuery` chybu spolkne do
+  // `data === undefined`, výchozí `= []` z ní udělá prázdný seznam a karta
+  // pronese „v tomto měsíci nejsou žádné účtovatelné rezervace" — větu, o jejíž
+  // pravdivosti nic neví. Globální záchyt neexistuje (`new QueryClient()`
+  // v App.tsx nemá `QueryCache({ onError })`), takže nepřijde ani toast.
+  // U brány, která má křičet, je tichý souhlas ta nejdražší možná porucha.
+  it('chyba načtení se nevydává za „nic k fakturaci"', () => {
+    const zdroj = bezKomentaru(soucetKod());
+
+    // 1. Chyba se z hooku vůbec BERE. Bez tohohle je zbytek bezpředmětný.
+    expect(zdroj, 'kontrolní součet přestal číst `error` z useBillingReconcile')
+      .toMatch(/error:\s*soucetChyba\s*\}\s*=\s*\n?\s*useBillingReconcile\(/);
+
+    // 2. …a VYKRESLUJE se, ne jen leží v proměnné.
+    expect(zdroj, 'stav chyby se nikde nevykresluje')
+      .toMatch(/\)\s*:\s*soucetChyba\s*\?\s*\(/);
+
+    // 3. POŘADÍ VĚTVÍ. Při chybě je `soucet` taky prázdný, takže větev
+    //    „prázdno" před chybovou by ji navždy přebila a brána by zůstala
+    //    zelená nad kartou, která mlčí. Tohle je celé jádro nálezu.
+    const chybova = zdroj.indexOf(': soucetChyba ? (');
+    const prazdno = zdroj.indexOf('soucet.length === 0 ? (');
+    expect(chybova, 'chybová větev zmizela').toBeGreaterThan(-1);
+    expect(prazdno, 'větev pro prázdný součet zmizela').toBeGreaterThan(-1);
+    expect(chybova,
+      'chybová větev je AŽ ZA větví „prázdno" — prázdno ji přebije a chyba se neukáže',
+    ).toBeLessThan(prazdno);
+
+    // 4. Nesmí se tvářit jako klid. Věta musí říct, že se to NEDÁ OVĚŘIT.
+    const usek = zdroj.slice(chybova, prazdno).replace(/\s+/g, ' ');
+    expect(usek, 'chybová hláška netvrdí, že se kontrola nedá provést')
+      .toContain('Neznamená to, že je všechno v pořádku');
+    expect(usek, 'chybová hláška neukazuje důvod z databáze')
+      .toContain('soucetChyba as Error).message');
+  });
+
   it('nenulový fakturoid_rozdil se zvýrazňuje stejně jako rozdil', () => {
-    const zdroj = invoices();
+    const zdroj = soucetKod();
 
     // Celý ternár včetně podmínky a včetně toho, že destruktivní třída je
     // v PRAVDIVÉ větvi. Samotné `toContain('text-destructive')` by prošlo
@@ -780,7 +818,7 @@ describe('Kontrolní součet: fakturoidí sloupce jsou vidět a křičí', () =>
   });
 
   it('banner „Sedí to" reaguje na KTERÝKOLI z obou rozdílů', () => {
-    const zdroj = invoices();
+    const zdroj = soucetKod();
 
     // CELÝ výraz i s `||`. Kdyby se z něj stalo `&&`, banner by mlčel,
     // dokud se nerozejdou OBA rozdíly naráz — a právě tuhle mutaci
@@ -806,7 +844,7 @@ describe('Kontrolní součet: fakturoidí sloupce jsou vidět a křičí', () =>
     // ukáže na obrazovce. Dokud se porovnání neomezí na doklady, které se do
     // období vejdou celé (produktové rozhodnutí PM), musí to text říct —
     // jinak obrazovka tvrdí „doklad se rozešel s podkladem" o zdravém dokladu.
-    const zdroj = invoices();
+    const zdroj = soucetKod();
 
     expect(zdroj, 'nápověda u kontrolního součtu zamlčela příčinu „doklad přesahuje období"')
       .toMatch(/rezervace mimo zobrazený měsíc/);

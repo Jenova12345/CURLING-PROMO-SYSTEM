@@ -97,7 +97,16 @@ const Dues = () => {
     from: format(startOfMonth(mesic), 'yyyy-MM-dd'),
     to: format(endOfMonth(mesic), 'yyyy-MM-dd'),
   }), [mesic]);
-  const { data: soucet = [], isLoading: soucetLoading } = useBillingReconcile(obdobiSouctu);
+  // CHYBA MUSÍ JÍT VEN. `useQuery` ji jinak spolkne: `data` zůstane `undefined`,
+  // výchozí hodnota z něj udělá `[]` a karta pronese uklidňující „v tomto měsíci
+  // nejsou žádné účtovatelné rezervace" — větu, o jejíž pravdivosti nic neví.
+  // Kontrolní součet je brána, která má křičet; při výpadku RPC by místo toho
+  // tiše přikývla, a admin má nad ní tlačítko do ostré číselné řady.
+  // (Zděděno ze zrušené stránky Faktury, kde měl řádek stejnou slepotu. Nález
+  // code review 16. 9. 2026 🔴 — po přesunu je tahle karta JEDINÉ místo
+  // v aplikaci, kde je kontrolní součet vidět, takže dopad vyrostl.)
+  const { data: soucet = [], isLoading: soucetLoading, error: soucetChyba } =
+    useBillingReconcile(obdobiSouctu);
 
   // POČÍTÁ SE I `fakturoid_rozdil`, ne jen `rozdil`.
   //
@@ -613,13 +622,25 @@ const Dues = () => {
               je až vysvětlení, proč zrovna nesedí. */}
           {soucetLoading ? (
             <div className="text-muted-foreground">Načítám…</div>
+          ) : soucetChyba ? (
+            // PŘED větví „prázdno", ne za ní: `soucet` je při chybě taky prázdný,
+            // takže by ho prázdno přebilo a chyba by se nikdy neukázala.
+            <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>
+                <b>Kontrolní součet se nepodařilo načíst.</b>{' '}
+                Neznamená to, že je všechno v pořádku — znamená to, že se to teď nedá
+                ověřit. {(soucetChyba as Error).message}
+              </span>
+            </div>
           ) : soucet.length === 0 ? (
             <div className="text-muted-foreground text-sm">V tomto měsíci nejsou žádné účtovatelné rezervace.</div>
           ) : nesediSoucet.length === 0 ? (
             <div className="flex items-center gap-2 rounded-md border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900">
               <Check className="h-4 w-4 shrink-0" aria-hidden="true" />
               <span>
-                Sedí to. Suma vystavených faktur odpovídá tomu, co ukazuje „Po subjektech",
+                Sedí to. Suma vystavených faktur odpovídá rozpisu za{' '}
+                <b className="capitalize">{format(mesic, 'LLLL yyyy', { locale: cs })}</b>,
                 u všech {soucet.length} subjektů.
               </span>
             </div>
