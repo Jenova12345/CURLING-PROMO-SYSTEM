@@ -249,7 +249,9 @@ Brána `overDanovyRezim` tedy porovnává dva zdroje, které se shodují **a jso
 správně**. Dřív se shodovaly taky — jenže oba byly vedle, což je přesně ten
 stav, kvůli kterému brána sama o sobě nestačí. **Třetí zdroj (účet u Fakturoidu,
 `vat_mode: non_vat_payer`) nekontroluje v kódu pořád nikdo** — ověřuje se ručně
-čtením přes API.
+čtením přes API. Naposledy **15. 9. 2026**, a shodoval se: účet je
+„Curling promo Ostrava s.r.o.", `vat_mode: non_vat_payer`. Postup je
+v kapitole „KROK 5" níž.
 
 ⚠️ **Credentials Fakturoidu v lokálním `.env` NEJSOU produkční.** Ověřeno
 15. 9. 2026 porovnáním digestů proti `supabase secrets list`:
@@ -340,6 +342,73 @@ které umí založit doklad, a z aplikace se to nedá zapnout. Úplné vyřazen�
 > Pak `billing/README.md` (pravidla vrstvy). `docs/ETAPA2-STAV.md` níž popisuje
 > interní engine, který Etapa 3 nahrazuje — je pořád platný jako popis toho,
 > co v databázi je, ne jako popis toho, kam se jde.
+
+### KROK 5 — tlačítko „Vystavit ve Fakturoidu" (15. 9. 2026, NASAZENO)
+
+Vystavení dokladu je od téhle chvíle **v aplikaci**: Přehled fakturace →
+„Vystavit ve Fakturoidu". Klub se fakturuje za měsíc, komerční odběratel po
+akcích. Interní engine z téhle obrazovky zmizel úplně.
+
+**Ostrý účet je ověřený, a to všemi třemi zdroji** (15. 9. 2026, jednorázovou
+diagnostickou funkcí, která `GET /account.json` přečetla produkčními secrets
+a hned se smazala):
+
+| zdroj | hodnota |
+|---|---|
+| Fakturoid, `account.json` | **„Curling promo Ostrava s.r.o."**, `subdomain: curlingpromoostrava`, `vat_mode: non_vat_payer` |
+| `FAKTUROID_SLUG` == `FAKTUROID_POVOLENY_UCET` | `curlingpromoostrava` |
+| `billing_settings.vat_mode` / `IS_VAT_PAYER` | `neplatce` / `false` |
+
+Tím padla poznámka z kapitoly o daňovém režimu, že třetí zdroj (účet
+u Fakturoidu) nikdo nekontroluje — zkontrolovaný je. **V kódu ho pořád
+nekontroluje nic**, ověřuje se ručně takhle.
+
+`FAKTUROID_LIVE=true`, `FAKTUROID_MODE=koncept`. **První kliknutí vystaví ostrý
+doklad v ostré číselné řadě** — Fakturoid stav „koncept" nezná, `koncept`
+u nás znamená jen „neposlal se e-mail". Omyl se řeší stornem nebo dobropisem,
+ne smazáním.
+
+#### ⏳ TŘI ODLOŽENÉ TIKETY — vědomě neuděláno, ne přehlédnuto
+
+**T1 — Měsíční invariant klubového dokladu drží JEN prohlížeč.**
+Klíč idempotence je `klub-{subjectId}-{RRRRMM}` a měsíc se bere z `obdobiOd`.
+Nikde se ale neověřuje, že `obdobiOd..obdobiDo` je celý kalendářní měsíc:
+Edge funkce ta dvě data přebírá z těla požadavku bez kontroly, `mapujKlubMesicne`
+z nich jen odvodí `RRRRMM` a na `fakturoid_invoices` je jen CHECK
+`obdobi_do >= obdobi_od`. Jedinou zábranou je `disabled` na dvou tlačítkách
+(`klubovaJde = view === 'month'` v `src/pages/Dues.tsx`).
+**Důsledek:** kdo pošle týdenní období (devtools, budoucí cron, skript), vystaví
+doklad na týden a spálí klíč na celý měsíc. Zbytek měsíce pak vrací
+`existoval`/`preskoceno` a nevyfakturuje se jinak než dobropisem.
+**Oprava patří na server**, ne do UI: buď do `mapujKlubMesicne`
+(`billing/mapping.ts`) jako `BillingValidationError`, nebo jako CHECK
+u `druh = 'club_monthly'`. Vyžaduje redeploy Edge funkce.
+
+**T2 — Edge funkce balí hlášky databázových guardů do holého `Error`.**
+`supabase/functions/fakturoid-invoice/index.ts` dělá u obou podkladových RPC
+`throw new Error('fakturoid_podklady_…: ' + error.message)`. Holý `Error` není
+`BillingError`, takže `kodChyby()` vrátí `'neznama'` a adminovi dojde pevná věta
+„Doklad se nepodařilo vystavit. Detail je v provozním logu."
+**Co se tím ztratí:** české hlášky psané pro člověka — guard A5 („nedorazili"),
+`over_danovy_rezim_podkladu` („míchal by ceny s DPH a bez DPH"), „čeká na
+schválení". Do logu Edge funkce se admin z aplikace nedostane, takže je to
+slepá ulička. Starý kód je vypisoval schválně.
+**Není to únik** (ven jde pevný text, což je správně), je to regrese
+provozuschopnosti. Oprava: házet je jako `BillingValidationError` s vlastním
+kódem a pro ten jeden kód pustit text ven — endpoint je admin-only a ty hlášky
+sazbu nenesou. Vyžaduje redeploy Edge funkce.
+
+**T3 — Stornovaný doklad zamkne rezervaci natrvalo, a nově ani není vidět.**
+Vazby v `fakturoid_invoice_reservations` maže jedině `fakturoid_uvolni_zabrani`,
+a ta odmítne doklad, který má `provider_invoice_id`. Rezervace na vystaveném
+a pak stornovaném dokladu tedy zůstane zamčená napořád.
+**Co se změnilo 15. 9. 2026:** po migraci `20260915110000` taková rezervace
+zmizí i z náhledu „nevyfakturované akce", kde byla dosud aspoň vidět (byť
+zavádějícím způsobem — server ji stejně odmítal). Chování to nezavádí, jen
+schovává.
+**Backstop zůstává** `billing_reconcile` (sloupce `fakturoid`,
+`fakturoid_rozdil`), takže systémově neviditelné to není. Cesta ven dnes
+neexistuje jinak než servisním zásahem do databáze.
 
 ---
 
