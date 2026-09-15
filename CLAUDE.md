@@ -198,6 +198,48 @@ změna" neexistuje.
    všechno (obchází granty i RLS), takže test tvrdí zavřeno o dveřích, vedle
    kterých je otevřené okno. Dvakrát to takhle propustilo blokér.
 
+## Docker: ptej se, než ho budeš potřebovat — a po sobě ukliď
+
+**Tomáš nemá Docker puštěný pořád a nemá ho mít.** Lokální Supabase stack je
+12 kontejnerů a ~2,5 GB RAM; na jeho Macu (7,75 GB) je to třetina paměti.
+Měřeno 16. 9. 2026: `supabase start` pro tenhle projekt = 2,47 GB.
+
+**Postup, který platí vždycky:**
+
+1. **Než začneš cokoli, co potřebuje Docker** (`supabase start`, `db reset`,
+   `psql` do lokálního kontejneru, SQL testovací sady, `pg_dump` z kontejneru) —
+   **řekni to a počkej, až Tomáš Docker zapne.** Nespouštěj ho sám a nepředpokládej,
+   že běží.
+2. **Až ho přestaneš potřebovat, řekni to** a **vypni po sobě aspoň stack
+   tohohle projektu**: `npx supabase stop`. Data zůstanou v docker volume,
+   `supabase start` je vrátí; a i kdyby ne, lokální databáze je celá
+   reprodukovatelná z migrací a `seed.sql` přes `supabase db reset`.
+3. **Docker Desktop jako takový vypíná Tomáš**, ne ty — na Macu to není
+   příkaz, ale aplikace.
+
+⚠️ **Na stroji běží víc Supabase stacků než tenhle.** 16. 9. 2026 běžely dva:
+`supabase_*_ltrazktulfxvzlvkxdsb` (curling-system, náš) a `supabase_*_jenova-portal`
+(jiný projekt). **Nikdy nevypínej kontejnery, které k tomuhle repu nepatří** —
+`docker stop` přes všechno by shodil cizí rozdělanou práci. Filtruj podle
+jména projektu, nebo použij `supabase stop` z adresáře tohohle repa
+(ten vypne jen svůj stack).
+
+**Co Docker NEPOTŘEBUJE** (ať ho nezapínáš zbytečně): `npm run typecheck`,
+`npm run test:run`, `npm run build`, čtení produkce přes `psql` proti pooleru,
+`supabase functions list/deploy`, `supabase secrets list`, `git`. Zapínat ho
+má smysl jen kvůli lokální databázi — tedy hlavně u migrací a SQL testů.
+
+**Výjimka, na kterou pozor:** `scripts/safe-deploy.sh` sahá pro `pg_dump` do
+lokálního kontejneru, **jen když ho nenajde na PATH**. Na téhle mašině na PATH
+JE: `/opt/homebrew/opt/libpq/bin/pg_dump`, verze **18.6** — a skript hledá
+`1[7-9]\.`, takže projde. Záloha produkce tedy Docker NEPOTŘEBUJE; ověřeno
+16. 9. 2026 spuštěním té podmínky se zastaveným stackem, a 15. 9. 2026 reálným
+během (dump 4,3 MB, hláška „beru z kontejneru" se neobjevila).
+Kdyby se to změnilo, skript si Docker vyžádá sám — a to je důvod poprosit
+Tomáše, ať ho zapne, ne ho spustit potichu.
+
+---
+
 ## Čemu v tomhle repu nevěřit
 
 - **`npx tsc --noEmit` netypuje nic** — kořenový `tsconfig.json` má `"files": []`
