@@ -953,13 +953,39 @@ describe('Fakturoid: tlačítko v „Přehled fakturace"', () => {
   // řádku říkal 1 rezervaci a 10 000 Kč, server vystavil 3 a 50 000 Kč.
   // Kdyby se do dialogu vrátila čísla toho řádku, admin odklepne jednu částku
   // a Fakturoid vystaví ostrý doklad na jinou — opravitelný jen dobropisem.
+  //
+  // BRÁNA SE KOTVÍ NA CELOU VĚTEV, NE NA JEDEN ZÁPIS. První verze měla
+  // `.not.toContain('{ count: a.rezervaci, amount: Number(a.castka) }')` a byla
+  // mutačně slepá hned třikrát: `+a.castka` místo `Number(a.castka)` prošlo,
+  // `{ count: s.count, amount: 0 }` prošlo, a `summary.find` směl zůstat
+  // nepoužitý nahoře. Nález code review 15. 9. 2026.
   it('„Rezervace bez akce" neposílá do potvrzení čísla svého řádku', () => {
-    expect(duesKod,
-      'do potvrzovacího dialogu se vrátila čísla řádku „bez akce" — ta jsou nižší ' +
-      'než to, co klubová cesta doopravdy vystaví',
-    ).not.toContain('{ count: a.rezervaci, amount: Number(a.castka) }');
-    expect(duesKod, 'souhrn za subjekt se v této větvi nedohledává')
+    const i = duesKod.indexOf('if (a.event_id === null) {');
+    expect(i, 'větev pro „rezervace bez akce" zmizela').toBeGreaterThan(-1);
+    const vetev = duesKod.slice(i, duesKod.indexOf('} else {', i));
+
+    expect(vetev,
+      'klubová větev sahá na čísla řádku „bez akce" — ta jsou nižší než to, ' +
+      'co klubová cesta doopravdy vystaví (změřeno 1 rez./10 000 vs 3 rez./50 000)',
+    ).not.toMatch(/a\.rezervaci|a\.castka/);
+    expect(vetev, 'souhrn za subjekt se v této větvi nedohledává')
       .toContain('summary.find((x) => x.subjectId === akce.subjectId)');
+    expect(vetev, 'do potvrzení nejde souhrn za subjekt')
+      .toContain('{ count: s.count, amount: s.amount }');
+  });
+
+  // Selhání načtení nesmí vypadat jako „nic nebylo vystaveno" — je to tvrzení
+  // o ostré číselné řadě, které by nikdo neověřil. Nález code review.
+  it('karta dokladů rozlišuje chybu načtení od prázdna', () => {
+    expect(duesKod, 'chyba načtení se z hooku nebere').toContain('chybaDokladu');
+    // Kotvit na pouhý výskyt `chybaDokladu` NESTAČÍ — zůstane v destrukturalizaci
+    // i poté, co se větev odpojí (`chybaDokladu ? (` → `false ? (`). Měřit se
+    // musí to VĚTVENÍ v JSX.
+    expect(duesKod, 'chybová větev v kartě není zapojená na `chybaDokladu`')
+      .toMatch(/nacitamDoklady \?[\s\S]{0,120}?:\s*chybaDokladu \? \(/);
+    const bezMezer = dues.replace(/\s+/g, ' ');
+    expect(bezMezer, 'chybí věta, která přizná, že nevíme')
+      .toContain('nevíme</b>, co už odešlo');
   });
 
   // Bez téhle věty admin čeká doklad „na zbytek" a dostane doklad na celý měsíc.
@@ -1010,6 +1036,12 @@ describe('Fakturoid: hook nesmí spolknout důvod chyby', () => {
   it('tělo chybové odpovědi se čte z context (vzor z useInvoices)', () => {
     expect(hookKod).toContain('(error as { context?: Response }).context');
     expect(hookKod).toContain('await ctx.json()');
+    // A HLAVNĚ SE TO MUSÍ VOLAT. Obě aserce výš míří dovnitř helperu `teloChyby`;
+    // kdyby se přestal volat (`const telo = null`), zůstal by v souboru a test
+    // by byl zelený nad mrtvým kódem. Nález code review 15. 9. 2026.
+    const chybova = hookKod.slice(hookKod.indexOf('if (error) {'));
+    expect(chybova, 'tělo chyby se v chybové větvi nedolovává')
+      .toContain('await teloChyby(error)');
   });
 
   // 409 `nesedi` přichází jako chyba, ale není to porucha — je to nález pro

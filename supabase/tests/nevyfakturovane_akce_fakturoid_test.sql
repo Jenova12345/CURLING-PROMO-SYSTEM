@@ -13,9 +13,18 @@
 -- zmizet správně a přitom ukazovat jinou částku, než jaká půjde na doklad —
 -- a admin odklikne číslo, které nikdy neviděl.
 --
--- MUTAČNÍ ZKOUŠKA: vrať v migraci kterýkoli ze tří `NOT EXISTS` bloků zpátky
--- (nebo pusť starou definici funkce) a sekce 3, 4, 6 i 7 musí zčervenat.
--- Ověřeno 15. 9. 2026 — viz `docs/ETAPA3-STAV.md`.
+-- MUTAČNÍ ZKOUŠKA — naměřeno 15. 9. 2026, každý filtr odstraněn ZVLÁŠŤ:
+--
+--   fakturoidí filtr, hlavní větev    → červená sekce 5 (ČÁSTEČNÉ)
+--   fakturoidí filtr, `EXISTS`        → červená sekce 6 (OBDOBÍ)
+--   fakturoidí filtr, „bez akce"      → červená sekce 7 (BEZ AKCE)
+--   všechny tři najednou              → červená sekce 3 (JÁDRO)
+--   filtr ceny zadarmo, hlavní větev  → červená sekce 7b (ZADARMO)
+--   filtr ceny zadarmo, „bez akce"    → červená sekce 7b (ZADARMO BEZ AKCE)
+--
+-- ⚠️ Hlavní větev sama o sobě sekci 3 NESHODÍ — filtr v `EXISTS` celou zabranou
+-- akci schová i bez ní. Dřívější znění téhle poznámky jmenovalo sekce 3, 4, 6, 7;
+-- neplatilo to a mátlo by to příštího člověka při mutační zkoušce.
 -- =============================================================================
 
 \set ON_ERROR_STOP on
@@ -191,10 +200,16 @@ BEGIN
   SELECT hodnota::uuid INTO _r1  FROM _s WHERE klic='r1';
   SELECT hodnota::uuid INTO _r2  FROM _s WHERE klic='r2';
 
-  -- Uvolníme celý claim a zabereme znovu jen Dráhu 1.
-  PERFORM public.fakturoid_uvolni_zabrani('akce-'||_ev::text, 'test — částečné zabrání');
-  PERFORM public.fakturoid_zkus_zabrat('akce-cast-'||_ev::text, 'commercial_event', _sub, _ev,
-          NULL, NULL, 20000, 1, 'koncept', ARRAY[_r1]);
+  -- Uvolníme celý claim a zabereme znovu jen Dráhu 1. Obojí s tvrzením na
+  -- návratovou hodnotu — bez něj by tichý neúspěch uvolnění vypadal jako
+  -- úspěšné částečné zabrání a zbytek sekce by měřil něco jiného, než tvrdí.
+  PERFORM pg_temp.tvrd(
+    public.fakturoid_uvolni_zabrani('akce-'||_ev::text, 'test — částečné zabrání'),
+    'ČÁSTEČNÉ: původní claim se podařilo uvolnit');
+  PERFORM pg_temp.tvrd(
+    public.fakturoid_zkus_zabrat('akce-cast-'||_ev::text, 'commercial_event', _sub, _ev,
+          NULL, NULL, 20000, 1, 'koncept', ARRAY[_r1]),
+    'ČÁSTEČNÉ: zabrání jen Dráhy 1 prošlo');
 
   SELECT * INTO _p FROM pg_temp.shoda_se_serverem(_sub,_ev,'2029-08-01','2029-08-31');
   PERFORM pg_temp.tvrd(_p.nahled_pocet = 1,
@@ -418,7 +433,9 @@ DECLARE _pocet integer;
 BEGIN
   SELECT count(*) INTO _pocet FROM public.nevyfakturovane_akce(
     (SELECT id FROM public.subjects WHERE name='Demo Firma s.r.o.'), '2029-08-01','2029-08-31');
-  PERFORM pg_temp.tvrd(_pocet >= 0, 'PRÁVA: admin pod rolí authenticated náhled dostane');
+  -- `>= 1`, ne `>= 0`: nula by prošla i tehdy, kdyby funkce vracela prázdno
+  -- z jiného důvodu, a tvrzení by dokazovalo jen to, že volání nespadlo.
+  PERFORM pg_temp.tvrd(_pocet >= 1, 'PRÁVA: admin pod rolí authenticated náhled opravdu VIDÍ');
 END $$;
 
 RESET ROLE;

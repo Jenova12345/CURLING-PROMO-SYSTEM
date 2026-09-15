@@ -188,7 +188,16 @@ COMMENT ON FUNCTION public.nevyfakturovane_akce(uuid, date, date) IS
 -- ── Kontrola: STRUKTURA, ne konkrétní částky ────────────────────────────────
 DO $kontrola$
 DECLARE
-  _telo   text := pg_get_functiondef('public.nevyfakturovane_akce(uuid,date,date)'::regprocedure);
+  -- KOMENTÁŘE SE ODSTŘIHNOU, JINAK KONTROLA MĚŘÍ VLASTNÍ VYSVĚTLIVKY.
+  --
+  -- Tělo funkce je plné komentářů, které zmiňují `fakturoid_invoice_reservations`
+  -- i podmínku na cenu zadarmo. Počítat výskyty v syrovém textu je tedy slepé
+  -- oběma směry: dobře okomentovaná úprava shodí migraci, kdežto smazaný filtr
+  -- se dá zamaskovat zmínkou v komentáři. Přesně na tomhle spadla 14. 9. 2026
+  -- kontrola uvnitř jiné migrace.
+  _telo   text := regexp_replace(
+                    pg_get_functiondef('public.nevyfakturovane_akce(uuid,date,date)'::regprocedure),
+                    '--[^\n]*', '', 'g');
   _vazeb  integer;
   _prava  text;
 BEGIN

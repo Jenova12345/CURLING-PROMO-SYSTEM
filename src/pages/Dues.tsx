@@ -54,7 +54,7 @@ type KPotvrzeni = {
 const Dues = () => {
   const { isAdmin } = useAuth();
   const { toast } = useToast();
-  const { doklady, nacitamDoklady, vystavit, vystavuje } = useFakturoid();
+  const { doklady, nacitamDoklady, chybaDokladu, vystavit, vystavuje } = useFakturoid();
   // Podklad tiskne údaje haly z nastavení, ne z `BRAND` (riziko 5 v plánu):
   // doklad má ukazovat, co je nastavené, ne co je zadrátované ve frontendu.
   const {
@@ -553,7 +553,16 @@ const Dues = () => {
       <Card>
         <CardHeader><CardTitle className="text-base">Vystaveno ve Fakturoidu</CardTitle></CardHeader>
         <CardContent>
-          {nacitamDoklady ? <div className="text-muted-foreground">Načítám…</div> : doklady.length === 0 ? (
+          {nacitamDoklady ? <div className="text-muted-foreground">Načítám…</div> : chybaDokladu ? (
+            /* TŘETÍ VĚTEV JE NUTNOST, NE PEČLIVOST. Bez ní by se selhání SELECTu
+               (RLS, výpadek sítě) zobrazilo jako „Zatím nebyl vystaven žádný
+               doklad." — tedy jako tvrzení o ostré číselné řadě, které nikdo
+               neověřil. Radši přiznat, že nevíme. */
+            <div role="alert" className="text-sm text-destructive">
+              Seznam vystavených dokladů se nepodařilo načíst, takže <b>nevíme</b>, co už odešlo.
+              Načti stránku prosím znovu — nebo se podívej přímo do Fakturoidu.
+            </div>
+          ) : doklady.length === 0 ? (
             <div className="text-muted-foreground text-sm">Zatím nebyl vystaven žádný doklad.</div>
           ) : (
             <div className="overflow-x-auto">

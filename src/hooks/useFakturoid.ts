@@ -120,7 +120,7 @@ export const useFakturoid = () => {
    * rozpracovaný claim v něm není — a je to tak správně: dokud doklad u
    * Fakturoidu nevznikl, není co ukazovat.
    */
-  const { data: doklady = [], isLoading: nacitamDoklady } = useQuery({
+  const { data: doklady = [], isLoading: nacitamDoklady, error: chybaDokladu } = useQuery({
     queryKey: ['fakturoid-doklady'],
     queryFn: async () => {
       const { data, error } = await supabase
@@ -192,6 +192,11 @@ export const useFakturoid = () => {
   return {
     doklady,
     nacitamDoklady,
+    // MUSÍ JÍT VEN. Bez něj je `doklady = []` při selhání SELECTu
+    // nerozeznatelné od „nic nebylo vystaveno" — a na jediné obrazovce, která
+    // adminovi říká, co odešlo do OSTRÉ číselné řady, je tahle záměna ta
+    // nejhorší možná.
+    chybaDokladu,
     vystavit: vystavit.mutateAsync,
     vystavuje: vystavit.isPending,
   };
