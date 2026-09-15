@@ -242,12 +242,22 @@ Tady neexistuje — nepoužívat ho a neodvozovat z IČO.
 **Účet ve Fakturoidu je nastavený SPRÁVNĚ** (`vat_mode: non_vat_payer`,
 ověřeno čtením přes API 14. 9. 2026).
 
-⚠️ **NÁŠ SYSTÉM TO MÁ NAOPAK A ZATÍM SE TO VĚDOMĚ NEOPRAVUJE:**
-`IS_VAT_PAYER=true` (secret v Supabase) a `billing_settings.vat_mode='platce'`.
-Obojí je špatně, shodují se spolu, a proto je brána `overDanovyRezim`
-propustila — porovnává dva zdroje, které jsou oba vedle. **Třetí zdroj
-(účet u Fakturoidu) nekontroluje nikdo.** Čeká se na rozhodnutí; až padne,
-mění se to jako běžná změna přes brány, ne natvrdo.
+✅ **SROVNÁNO 15. 9. 2026 — systém je na neplátci.**
+Migrace `20260915090000_danovy_rezim_neplatce.sql` přepnula
+`billing_settings.vat_mode` na `neplatce`, secret `IS_VAT_PAYER` je `false`.
+Brána `overDanovyRezim` tedy porovnává dva zdroje, které se shodují **a jsou
+správně**. Dřív se shodovaly taky — jenže oba byly vedle, což je přesně ten
+stav, kvůli kterému brána sama o sobě nestačí. **Třetí zdroj (účet u Fakturoidu,
+`vat_mode: non_vat_payer`) nekontroluje v kódu pořád nikdo** — ověřuje se ručně
+čtením přes API.
+
+⚠️ **Credentials Fakturoidu v lokálním `.env` NEJSOU produkční.** Ověřeno
+15. 9. 2026 porovnáním digestů proti `supabase secrets list`:
+`FAKTUROID_CLIENT_ID`, `CLIENT_SECRET`, `USER_AGENT`, `FAKTUROID_LIVE`
+a `IS_VAT_PAYER` se liší (`SLUG`, `POVOLENY_UCET`, `MODE` sedí). Lokální pár
+vrací z OAuth **401 `invalid_client`**, takže účet u Fakturoidu se z téhle
+mašiny přečíst nedá — jde to jedině přes nasazenou Edge funkci, která běží
+s produkčními secrets. Nepokládej lokální `.env` za obraz produkce.
 
 Změřený dopad přepnutí na neplátce (14. 9. 2026, na produkci v transakci
 s ROLLBACKem):
@@ -262,11 +272,55 @@ s ROLLBACKem):
   VČETNĚ daně (`pricesIncludeVat: true`), takže částka k úhradě je stejná
   v obou režimech; liší se jen rozpis daně na dokladu.
 
+### ⏳ ČEKAJÍCÍ ÚKOL: hala se stane plátcem DPH
+
+**Ví se, že to přijde; neví se kdy.** Hala podle klienta během několika
+měsíců plátcem DPH bude. Datum zatím nikdo nezná — závisí na rozhodnutí
+finančního úřadu.
+
+**Spouštěč:** až přijde **rozhodnutí FÚ** s přiděleným **DIČ** a **datem
+účinnosti registrace**. Do té doby se NIC nepřepíná — dnešní stav
+(neplátce) je ten správný a doložený čtyřmi registry.
+
+**Co se pak musí udělat, a v tomhle pořadí:**
+
+1. **Zapsat DIČ** do `billing_settings.supplier_dic` (dnes je prázdné,
+   protože DIČ `CZ29796717` NEEXISTUJE — viz výš; po registraci bude mít
+   skutečnou hodnotu z rozhodnutí, neodvozovat ji z IČO).
+2. **Přepnout účet u Fakturoidu** na plátce (`vat_mode`) — ručně v jejich
+   aplikaci, my do toho nepíšeme.
+3. **Secret `IS_VAT_PAYER` na `true`** v Supabase (dělá Tomáš, secrets jsou
+   write-only).
+4. **Migrace `vat_mode = 'platce'`** — dopředná, idempotentní, jako každá jiná.
+   POZOR: `vat_mode` se přepíná i z obrazovky Nastavení → Fakturace
+   (`authenticated` má na ten sloupec UPDATE), takže se to dá udělat omylem
+   jedním kliknutím. Migrace je proto jen polovina práce; druhá je ověřit
+   reálným tokenem, že se všechna tři místa shodla.
+5. **ROZHODNOUT O DATU ÚČINNOSTI.** Registrace platí od data v rozhodnutí,
+   ne ode dne, kdy to někdo přepne. Doklady za období PŘED tím datem musí
+   zůstat bez DPH. Dnešní `billing_settings.vat_mode` je JEDNA hodnota bez
+   časové osy — neumí „do 30. 6. neplátce, od 1. 7. plátce". Než se přepne,
+   je potřeba vědět, jestli v té době bude existovat nevyfakturované období
+   před datem účinnosti; pokud ano, je to samostatný úkol (datum účinnosti
+   do nastavení, nebo dofakturovat všechno staré ještě jako neplátce).
+
+**Co se tím NEODEMKNE:** interní fakturační engine. Ten má od 15. 9. 2026
+vlastní zámek (`billing_settings.interni_engine_povolen`, výchozí `false`),
+nezávislý na daňovém režimu — viz migrace
+`20260915100000_zamek_interniho_enginu.sql`. Ostré doklady vystavuje
+Fakturoid a přepnutím na plátce se na tom nic nemění.
+
+**Co bude dál chybět:** `vat_*` sloupce na `invoice_items` jsou pořád prázdné
+místo (otázka Q7 na účetní). To je důvod, proč interní engine v režimu plátce
+odmítá vystavit — ta zábrana zůstává a je správná.
+
 **Nic se zatím nenaúčtovalo špatně.** K 14. 9. 2026 je v produkci
 `invoices` = 0, `invoice_items` = 0, `fakturoid_invoices` = 0, žádná
 rezervace nemá `invoice_id` ani `invoiced_at`. Interní engine navíc
-v režimu `platce` odmítá vystavit cokoli („Doklad umí zatím jen režim
-neplátce DPH"), takže doklad s DPH jím vzniknout ani nemohl. Jediný
+v té době v režimu `platce` odmítal vystavit cokoli („Doklad umí zatím jen
+režim neplátce DPH"), takže doklad s DPH jím vzniknout ani nemohl. **Od
+15. 9. 2026 už engine nedrží zavřený daňový režim, ale vlastní zámek**
+(`interni_engine_povolen = false`) — na režimu nezávislý, fail-closed. Jediný
 historický záznam v auditu (1. 9. 2026) bylo testovací zabrání
 `zavod2-…` bez `provider_invoice_id` i `cislo`, smazané po 27 sekundách.
 
@@ -276,7 +330,11 @@ historický záznam v auditu (1. 9. 2026) bylo testovací zabrání
 
 **Etapa 3 — napojení na Fakturoid (varianta S2).** Ostrý doklad vystavuje
 Fakturoid, náš systém do něj posílá jen podklady. Interní fakturační engine se
-na ostré doklady přestává používat; jeho vyřazení je samostatný pozdější ticket.
+na ostré doklady už nepoužívá a **od 15. 9. 2026 je zamčený**
+(`billing_settings.interni_engine_povolen = false`, migrace
+`20260915100000_zamek_interniho_enginu.sql`) — zavřených je všech pět funkcí,
+které umí založit doklad, a z aplikace se to nedá zapnout. Úplné vyřazení
+(smazání kódu a obrazovek) zůstává samostatný pozdější ticket.
 
 > **Než začneš cokoli kolem fakturace, přečti `docs/ETAPA3-STAV.md`.**
 > Pak `billing/README.md` (pravidla vrstvy). `docs/ETAPA2-STAV.md` níž popisuje
