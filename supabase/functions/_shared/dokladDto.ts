@@ -146,7 +146,17 @@ export function klicObjektu(cislo: string, datumVystaveni: string, verze = 1): s
  * nevznikaly dvě nezávislé číslovací soustavy.
  */
 export function nazevKeStazeni(cislo: string, odberatel: string, datum: string): string {
-  const poradi = cislo.slice(-4);
+  // DVĚ ČÍSELNÉ ŘADY, DVA TVARY. Interní doklad je `RRRR` + čtyřmístné pořadí
+  // (`20260001`), takže „poslední čtyři" jsou přesně to pořadí. Fakturoid
+  // čísluje `2026-001` — poslední čtyři znaky jsou `-001`, tedy jméno souboru
+  // začínající pomlčkou a bez roku. Osmimístné celočíselné se proto zkracuje,
+  // cokoli jiného se bere celé.
+  //
+  // Sanitizace se dělá i tak, přestože `cislo` chodí z číselné řady, ne od
+  // uživatele: název jde do query stringu podepsané URL přes `encodeURI`, který
+  // `&` ani `=` neescapuje — jeden takový znak by přilepil parametr navíc.
+  const cisty = (cislo ?? '').replace(/[^A-Za-z0-9]/g, '');
+  const poradi = /^[0-9]{8}$/.test(cisty) ? cisty.slice(-4) : cisty;
   const kdo = (odberatel ?? '')
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')   // pryč s diakritikou
     .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')

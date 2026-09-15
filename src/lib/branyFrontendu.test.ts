@@ -1252,3 +1252,183 @@ describe('Faktury: zrušená stránka se nesmí vrátit', () => {
       .not.toMatch(/\.from\(\s*'invoices?(_items|_list)?'/);
   });
 });
+
+describe('Naše kopie PDF: odkaz podepisuje server, ne prohlížeč', () => {
+  // ÚKLID 16. 9. 2026, krok 3. Fakturoid drží originál dokladu (`public_url`),
+  // ale při vystavení si ukládáme i VLASTNÍ kopii PDF — do privátního bucketu
+  // `invoices`, pod `fakturoid/<klíč>.pdf`. Do teď se k ní z aplikace nedalo
+  // dostat vůbec: bucket má jedinou politiku, `invoices_bucket_service` pro
+  // `service_role` (migrace 20260818090000), takže `authenticated` v něm
+  // neuvidí ani jméno souboru, natož aby si podepsal URL.
+  //
+  // ŘEŠENÍ, KTERÉ SE ZAMÍTLO: otevřít bucket politikou pro adminy. Bylo by to
+  // o migraci míň, ale obrátilo by to vlastní návrh (`invoice-pdf-url` má
+  // v hlavičce napsané, proč kontrola role patří na server a na KAŽDÝ
+  // požadavek) a role by se od té chvíle kontrolovala jen při přihlášení.
+  // Místo toho umí tatáž funkce vydat odkaz i na fakturoidí doklad.
+
+  const duesKod = bezKomentaru(cti('src/pages/Dues.tsx'));
+  const hookKod = bezKomentaru(cti('src/hooks/useFakturoid.ts'));
+  const fnKod = bezKomentaru(cti('supabase/functions/invoice-pdf-url/index.ts'));
+
+  it('klient si odkaz nepodepisuje sám', () => {
+    // Kdyby se tohle objevilo, znamená to, že se bucket otevřel `authenticated` —
+    // a s ním i všechny ostatní doklady tomu, kdo uhodne cestu.
+    for (const zdroj of [duesKod, hookKod]) {
+      expect(zdroj, 'klient sahá do Storage přímo — bucket s doklady se otevřel prohlížeči')
+        .not.toMatch(/createSignedUrl|storage\s*\.\s*from\(/);
+    }
+  });
+
+  it('hook žádá o fakturoidí doklad, ne o interní', () => {
+    expect(hookKod, 'volání invoice-pdf-url z Dues zmizelo')
+      .toContain("supabase.functions.invoke('invoice-pdf-url'");
+    // `invoice_id` je interní engine (tabulka `public.invoices`, zamčená
+    // a prázdná). Poslat ho sem znamená 404 „Doklad neexistuje" u dokladu,
+    // který ve skutečnosti existuje.
+    const telo = hookKod.slice(hookKod.indexOf("invoke('invoice-pdf-url'"));
+    expect(telo.slice(0, 200), 'posílá se invoice_id místo fakturoid_invoice_id')
+      .toContain('fakturoid_invoice_id');
+  });
+
+  it('konkrétní důvod se čte z těla odpovědi', () => {
+    // Bez tohohle dolování by admin u „kopie neexistuje" i u „nepřihlášen"
+    // viděl tutéž větu o non-2xx a neměl podle čeho jednat.
+    const usek = hookKod.slice(hookKod.indexOf("invoke('invoice-pdf-url'"));
+    // JEDEN `teloChyby`, ne druhá kopie téhož dolování: dvě implementace
+    // v jednom souboru se rozejdou při první opravě (nález code review).
+    expect(usek, 'tělo chybové odpovědi se u stahování nečte přes společný teloChyby')
+      .toMatch(/await teloChyby\(error\)/);
+    expect(usek, 'vypršelá session se nerozlišuje — admin dostane obecnou hlášku')
+      .toMatch(/ctx\.status === 401/);
+  });
+
+  it('tlačítko je jen u dokladu, u kterého kopie opravdu leží', () => {
+    // Bez podmínky by nabízelo stažení, které skončí chybou: uložení PDF je
+    // v pipeline varování, ne důvod doklad neuznat, takže `pdf_path` NULL být může.
+    expect(duesKod, 'tlačítko „Stáhnout naši kopii" zmizelo')
+      .toContain('Stáhnout naši kopii');
+    expect(duesKod, 'tlačítko se nabízí i u dokladu bez uložené kopie')
+      .toMatch(/\{d\.pdf_path && \(\s*<Button[\s\S]{0,400}?Stáhnout naši kopii/);
+  });
+
+  // Úsek fakturoidí větve, ohraničený na OBOU stranách. Bez horní hranice
+  // slice přeteče do interní větve níž a brána pak měří cizí kód — na tom
+  // 16. 9. 2026 spadly rovnou tři testy naráz.
+  const fakturoidniVetev = () => {
+    const od = fnKod.indexOf('if (fakturoidId) {');
+    const do_ = fnKod.indexOf('const { data: f, error: chybaDokladu }');
+    expect(od, 'větev pro fakturoidí doklad zmizela').toBeGreaterThan(-1);
+    expect(do_, 'interní větev zmizela — hranice úseku se nedá určit').toBeGreaterThan(od);
+    return fnKod.slice(od, do_);
+  };
+
+  it('metadata se čtou tokenem volajícího, ne servisním klíčem', () => {
+    // NENÍ TO ELEGANCE, JE TO JEDINÁ FUNKČNÍ VARIANTA (nález code review
+    // 16. 9. 2026 🔴, ověřeno na produkci). `service_role` NEMÁ SELECT ani na
+    // `fakturoid_invoices`, ani na pohled nad ní — migrace 20260824120000
+    // revokuje všechno a grantuje zpátky jen `authenticated`. Servisním
+    // klientem by tahle větev vracela 500 „permission denied" pokaždé.
+    const vetev = fakturoidniVetev();
+    expect(vetev, 'metadata se čtou servisním klientem — service_role na to nemá právo')
+      .not.toMatch(/await server\s*\n?\s*\.from\(/);
+    expect(vetev, 'nečte se pohled fakturoid_invoices_list klientem volajícího')
+      .toMatch(/await jakoUzivatel\s*\n?\s*\.from\('fakturoid_invoices_list'\)/);
+    // Servisní klíč smí v téhle větvi jedinou věc: podepsat URL.
+    const servisniPouziti = [...vetev.matchAll(/\bserver\b/g)].length;
+    expect(servisniPouziti,
+      'servisní klient se ve fakturoidí větvi používá na víc než podpis URL',
+    ).toBe(1);
+  });
+
+  it('Edge funkce nevydá odkaz na doklad, který u Fakturoidu nevznikl', () => {
+    const vetev = fakturoidniVetev();
+    // Podmínky `deleted_at IS NULL AND uvolneno_at IS NULL AND
+    // provider_invoice_id IS NOT NULL` se tu ZÁMĚRNĚ neopisují — nese je sám
+    // pohled `fakturoid_invoices_list`. Ruční kopie by se s ním jednou rozešla.
+    // Hlídá se proto to, na čem to stojí: že se čte POHLED, ne základní tabulka.
+    expect(vetev, 'čte se základní tabulka místo pohledu — filtry pohledu pak neplatí')
+      .not.toContain("from('fakturoid_invoices')");
+    expect(vetev, 'chybí 404 pro doklad, který pohled nevydal')
+      .toMatch(/if \(!fd\) return odpoved\(\{ error: '[^']+' \}, 404\);/);
+    // Prefix: `fakturoid_zapis_pdf` bere cestu jako volný `text` bez CHECK
+    // a admin na ni přes PostgREST dosáhne. Bucket je jeden, takže díra to není,
+    // ale podepisovat cokoli, co v řádku stojí, je zbytečná důvěra.
+    expect(vetev, 'přestal se ověřovat prefix pdf_path')
+      .toMatch(/startsWith\('fakturoid\/'\)/);
+  });
+
+  it('datum v názvu souboru je pražské, ne UTC', () => {
+    // `vystaveno_at` je `timestamptz`. `slice(0, 10)` by vzalo UTC a doklad
+    // 2026-001, vystavený 16. 9. v 00:51 pražského času, by se stáhl jako
+    // „…150926.pdf", zatímco tabulka o řádek výš ukazuje 16. 9.
+    const vetev = fakturoidniVetev();
+    expect(vetev, 'datum se z timestamptz bere bez převodu do pražského času')
+      .toMatch(/timeZone: 'Europe\/Prague'/);
+    expect(vetev, 'datum se ořezává řetězcově — to je UTC')
+      .not.toMatch(/vystaveno_at[^\n]*slice\(0, ?10\)/);
+  });
+
+  it('Edge funkce si drží kontrolu role PŘED servisním klíčem', () => {
+    // Pořadí je celá bezpečnost téhle funkce: servisní klíč obchází RLS, takže
+    // se smí vytáhnout až potom, co je jisté, že se ptá správce haly.
+    const role = fnKod.indexOf("_role: 'admin'");
+    const servisni = fnKod.indexOf('createClient(url, servisni');
+    const fakturoid = fnKod.indexOf('if (fakturoidId) {');
+    expect(role, 'kontrola role admin z funkce zmizela').toBeGreaterThan(-1);
+    expect(role, 'servisní klient se vyrábí DŘÍV než se ověří role').toBeLessThan(servisni);
+    expect(servisni, 'fakturoidí větev běží dřív, než se vůbec ověřila role')
+      .toBeLessThan(fakturoid);
+
+    // POŘADÍ SAMO NESTAČÍ (nález bezpečnostní brány 16. 9. 2026 🟡): pouhé
+    // `indexOf` chytí přesun větve, ale ne `if (false)` místo `if (!jeAdmin)`
+    // ani `_role: 'member'` — text by zůstal, jen by měřil něco jiného.
+    // Proto se tvrdí CELÝ tvar obou míst, i s rolí a se stavovým kódem.
+    expect(fnKod, 'role se zjišťuje na něco jiného než admina')
+      .toMatch(/_user_id: \(await jakoUzivatel\.auth\.getUser\(\)\)\.data\.user\?\.id, _role: 'admin',/);
+    expect(fnKod, 'odmítnutí neadmina zmizelo nebo přestalo vracet 403')
+      .toMatch(/if \(!jeAdmin\) return odpoved\(\{ error: '[^']+' \}, 403\);/);
+  });
+
+  it('Edge funkce odpovídá prohlížeči (CORS + preflight)', () => {
+    // NÁLEZ BEZPEČNOSTNÍ BRÁNY 16. 9. 2026 🔴. `functions.invoke` posílá
+    // `authorization`, `apikey` i `content-type: application/json`, tedy
+    // non-safelisted trojici → prohlížeč vyšle preflight `OPTIONS` BEZ hlavičky
+    // `Authorization`. Bez obsluhy spadne na 401 bez CORS hlaviček a prohlížeč
+    // požadavek zahodí dřív, než odejde — tlačítko by nefungovalo vůbec
+    // a admin by viděl jen obecné „nepodařilo se získat".
+    expect(fnKod, 'funkce nemá CORS hlavičky — z prohlížeče se nedovolá')
+      .toContain("'Access-Control-Allow-Origin'");
+    expect(fnKod, 'neobsluhuje se preflight OPTIONS')
+      .toMatch(/req\.method === 'OPTIONS'/);
+    // Hlavičky musí být i na CHYBOVÝCH odpovědích, jinak prohlížeč zahodí
+    // právě to tělo, ze kterého hook dolovává konkrétní důvod.
+    const odpoved = fnKod.slice(fnKod.indexOf('function odpoved('));
+    expect(odpoved.slice(0, 300), 'chybové odpovědi jdou bez CORS hlaviček')
+      .toContain('...corsHeaders');
+  });
+
+  it('syrový text databáze a Storage nejde ven', () => {
+    const vetev = fakturoidniVetev();
+    expect(vetev, 'chybová hláška Postgresu/Storage se posílá klientovi')
+      .not.toMatch(/error:\s*chyba\w*\.message/);
+    // …a zároveň se neztrácí: bez logu by se příčina 500 nedala dohledat nikde.
+    expect(vetev, 'detail chyby se ani neloguje — 500 by pak bylo neprohledatelné')
+      .toMatch(/console\.error\('\[invoice-pdf-url\]/);
+  });
+
+  it('okno se otevírá v gestu uživatele, ne po await', () => {
+    // `window.open` až po dokončení mutace je mimo uživatelské gesto a Safari
+    // i přísnější Firefox ho zablokují. S `'noopener'` navrací `null` vždycky,
+    // takže by to nešlo ani poznat — stažení by tiše nenastalo.
+    const telo = duesKod.slice(duesKod.indexOf('const stahniKopii'),
+                               duesKod.indexOf('const stahniKopii') + 900);
+    const otevreni = telo.indexOf('window.open(');
+    const cekani = telo.indexOf('await kopiePdf(');
+    expect(otevreni, 'okno se neotevírá vůbec').toBeGreaterThan(-1);
+    expect(otevreni, 'window.open je až ZA await — popup blocker ho zahodí')
+      .toBeLessThan(cekani);
+    expect(telo, 'chybí náhradní cesta, když popup přece jen neprojde')
+      .toContain('window.location.href = odkaz');
+  });
+});

@@ -189,6 +189,54 @@ export const useFakturoid = () => {
     },
   });
 
+  /**
+   * Podepsaný odkaz na NAŠI kopii PDF.
+   *
+   * Fakturoid drží originál a `public_url` na něj vede — tohle je ta druhá,
+   * naše kopie, kterou si při vystavení ukládáme do privátního bucketu
+   * `invoices` (`fakturoid/<klíč>.pdf`). Má cenu právě tehdy, když ta první
+   * cesta selže: účet u Fakturoidu vyprší, doklad tam někdo smaže, nebo se
+   * jen řeší, co přesně jsme v ten den poslali.
+   *
+   * ODKAZ PODEPISUJE SERVER, ne my. Bucket má jedinou politiku
+   * (`invoices_bucket_service` pro `service_role`), takže z prohlížeče se do
+   * něj nedá ani nahlédnout — a je to tak schválně: kontrola role probíhá
+   * v Edge funkci na každý požadavek, ne jednou při přihlášení.
+   */
+  const kopiePdf = useMutation({
+    mutationFn: async (fakturoidInvoiceId: string) => {
+      const { data, error } = await supabase.functions.invoke('invoice-pdf-url', {
+        body: { fakturoid_invoice_id: fakturoidInvoiceId },
+      });
+      if (error) {
+        // TÝŽ `teloChyby` jako u vystavení, ne druhá kopie. `functions.invoke`
+        // schová tělo do obecné hlášky, takže by se konkrétní důvod („Naše kopie
+        // PDF u tohohle dokladu není…") jinak nikdy neukázal — a dvě
+        // implementace téhož dolování v jednom souboru se rozejdou při první
+        // opravě. (Nález code review 16. 9. 2026.)
+        const telo = await teloChyby(error);
+        const duvod = typeof telo?.error === 'string' ? telo.error : '';
+        if (duvod) throw new Error(duvod);
+
+        // Platformní brána `verify_jwt` vrací `{"code":401,"message":…}`, tedy
+        // tělo BEZ `error` — vypršelá session je u admina, který má stránku
+        // otevřenou přes oběd, ten nejpravděpodobnější případ ze všech. Bez
+        // tohohle rozlišení by dostal obecné „nepodařilo se získat" a hledal
+        // chybu ve svém dokladu.
+        const ctx = (error as { context?: Response }).context;
+        if (typeof ctx?.status === 'number' && ctx.status === 401) {
+          throw new Error('Přihlášení vypršelo. Přihlas se prosím znovu a zkus to.');
+        }
+        throw new Error('Odkaz ke stažení se nepodařilo získat.');
+      }
+      const url = (data as { url?: string } | null)?.url;
+      if (typeof url !== 'string' || !url) {
+        throw new Error('Odkaz ke stažení se nepodařilo získat.');
+      }
+      return url;
+    },
+  });
+
   return {
     doklady,
     nacitamDoklady,
@@ -199,5 +247,7 @@ export const useFakturoid = () => {
     chybaDokladu,
     vystavit: vystavit.mutateAsync,
     vystavuje: vystavit.isPending,
+    kopiePdf: kopiePdf.mutateAsync,
+    stahujeKopii: kopiePdf.isPending,
   };
 };

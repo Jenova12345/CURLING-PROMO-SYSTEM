@@ -6,6 +6,7 @@ import {
 import { cs } from 'date-fns/locale';
 import {
   ChevronLeft, ChevronRight, Wallet, FileText, Receipt, ExternalLink, AlertTriangle, Check, Scale,
+  Download,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -57,7 +58,42 @@ type KPotvrzeni = {
 const Dues = () => {
   const { isAdmin } = useAuth();
   const { toast } = useToast();
-  const { doklady, nacitamDoklady, chybaDokladu, vystavit, vystavuje } = useFakturoid();
+  const { doklady, nacitamDoklady, chybaDokladu, vystavit, vystavuje,
+          kopiePdf, stahujeKopii } = useFakturoid();
+
+  /**
+   * Stažení naší kopie dokladu.
+   *
+   * Nové okno, ne `location.href`: podepsaná URL vede na stažení souboru
+   * a přesměrování celé stránky by adminovi zahodilo rozdělaný výběr období.
+   * Hláška z Edge funkce se ukazuje tak, jak přišla — je konkrétní a rovnou
+   * říká, kam jít místo toho („stáhni si originál ve Fakturoidu").
+   */
+  const stahniKopii = async (id: string) => {
+    // OKNO SE OTEVÍRÁ SYNCHRONNĚ, ještě uvnitř kliknutí (nález bezpečnostní
+    // brány 16. 9. 2026 🟡). `window.open` až PO `await` je mimo uživatelské
+    // gesto a Safari i přísněji nastavený Firefox ho zablokují — a protože
+    // `'noopener'` vrací `null` vždycky, nešlo to ani poznat: stažení by tiše
+    // nenastalo a nepřišel by ani toast.
+    const okno = window.open('', '_blank');
+    // Ruční náhrada za `'noopener'`, který s sebou bere i návratovou hodnotu.
+    if (okno) okno.opener = null;
+    try {
+      const odkaz = await kopiePdf(id);
+      // Když popup přece jen neprošel, jde se přes adresní řádek. Podepsaná URL
+      // má `Content-Disposition: attachment`, takže prohlížeč stáhne soubor
+      // a ze stránky neodejde.
+      if (okno) okno.location.replace(odkaz);
+      else window.location.href = odkaz;
+    } catch (e) {
+      okno?.close();
+      toast({
+        title: 'Kopii se nepodařilo stáhnout',
+        description: (e as Error).message,
+        variant: 'destructive',
+      });
+    }
+  };
   // Podklad tiskne údaje haly z nastavení, ne z `BRAND` (riziko 5 v plánu):
   // doklad má ukazovat, co je nastavené, ne co je zadrátované ve frontendu.
   const {
@@ -754,13 +790,31 @@ const Dues = () => {
                             takže se k ní z aplikace nikdo nedostane — ale React 18
                             `javascript:` v `href` propustí s pouhým varováním
                             a tohle je jednořádková pojistka. */}
-                        {d.public_url?.startsWith('https://') && (
-                          <Button variant="outline" size="sm" asChild>
-                            <a href={d.public_url} target="_blank" rel="noopener noreferrer">
-                              <ExternalLink className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Otevřít
-                            </a>
-                          </Button>
-                        )}
+                        <div className="flex items-center justify-end gap-2">
+                          {d.public_url?.startsWith('https://') && (
+                            <Button variant="outline" size="sm" asChild>
+                              <a href={d.public_url} target="_blank" rel="noopener noreferrer">
+                                <ExternalLink className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Otevřít
+                              </a>
+                            </Button>
+                          )}
+                          {/* NAŠE KOPIE, ne originál. „Otevřít" vede k Fakturoidu;
+                              tohle stáhne PDF, které jsme si při vystavení uložili
+                              k sobě. Cenu to má právě tehdy, když ta první cesta
+                              selže — vypršelý účet, smazaný doklad, nebo prostě
+                              otázka „co jsme jim tehdy poslali".
+                              Tlačítko je jen u dokladů, kde kopie opravdu leží:
+                              bez `pdf_path` by nabízelo stažení, které skončí
+                              chybou (uložení do Storage je v pipeline varování,
+                              ne důvod doklad neuznat). */}
+                          {d.pdf_path && (
+                            <Button variant="outline" size="sm" disabled={stahujeKopii}
+                                    className="whitespace-nowrap"
+                                    onClick={() => stahniKopii(d.id!)}>
+                              <Download className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Stáhnout naši kopii
+                            </Button>
+                          )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
