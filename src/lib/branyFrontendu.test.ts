@@ -15,6 +15,20 @@ import { describe, expect, it } from 'vitest';
 const KOREN = join(import.meta.dirname!, '..', '..');
 const cti = (relativni: string) => readFileSync(join(KOREN, relativni), 'utf8');
 
+/**
+ * Zdroják bez komentářů.
+ *
+ * Brána nesmí měřit vlastní vysvětlivky. Přesně na tom spadla 14. 9. 2026
+ * kontrola uvnitř migrace: `position()` našla zakázaný tvar v komentáři nad
+ * správným kódem a prohlásila migraci za rozbitou. Tady je to ještě zrádnější —
+ * komentář, který VYSVĚTLUJE, co se sem nesmí vrátit, obsahuje ten zakázaný
+ * název, takže by dobře okomentovaná oprava shodila vlastní bránu.
+ *
+ * `//` se nebere, když mu předchází dvojtečka, ať to nesežere `https://`.
+ */
+const bezKomentaru = (zdroj: string) =>
+  zdroj.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/gm, '$1');
+
 describe('ReservationDialog: typ akce se mění PŘED sazbou', () => {
   // `zmen_typ_akce` nastaví `rate_per_hour = NULL` a nechá trigger ocenit
   // z ceníku. Když se tedy nejdřív uloží ruční sazba a teprve pak změní typ,
@@ -226,15 +240,29 @@ describe('Trenér se nečte ze `shifts`', () => {
   // vrací nula řádků BEZ CHYBY — UI pak tvrdí „trenér nepřiřazen" i po
   // úspěšném přiřazení a zástupce přiřadí znovu (druhá placená směna).
   it('useReservations čte trenéra přes RPC trener_akce', () => {
-    const hook = cti('src/hooks/useReservations.ts');
+    const hook = bezKomentaru(cti('src/hooks/useReservations.ts'));
     expect(hook).toContain("supabase.rpc('trener_akce'");
     // Obsazenost štábu (`shiftFill`) ze `shifts` číst SMÍ — je vypnutá pro
     // kohokoli mimo admina a staff (`enabled`). Zakázaná je jen ta cesta,
     // která hledá TRENÉRA: ta se zástupci klubu tiše rozbije.
+    //
+    // DŘÍV TU STÁLO `.not.toContain("required_role")`. To bylo o jedno patro
+    // hrubší, než je ta hrozba: od 15. 9. 2026 se `required_role` v tomhle
+    // dotazu VYBÍRÁ (potřebuje ho sdílený výpočet obsazenosti na rozpad po
+    // rolích), ale nikde se podle něj NEFILTRUJE. Nebezpečná je právě jen ta
+    // druhá věc — hledání konkrétní role ve `shifts`. Hlídáme tedy ji.
     expect(hook,
       'hook zase hledá trenérskou směnu přímo v tabulce shifts — zástupci ' +
       'klubu se tím trenér stane neviditelným.',
-    ).not.toContain("required_role");
+    ).not.toMatch(/\.(eq|neq|in|filter|match)\(\s*['"`]?\{?\s*required_role/);
+    expect(hook,
+      'hook porovnává required_role s trainer — to je zase to hledání trenéra ' +
+      've shifts, jen napsané jinak.',
+    ).not.toMatch(/required_role[^\n]{0,40}trainer/);
+    // A ta druhá půlka ochrany: dotaz na obsazenost musí zůstat vypnutý pro
+    // kohokoli mimo admina a štáb. Bez toho by zástupci klubu vracel nula řádků
+    // bez chyby a obsazenost by mu tiše lhala nulou.
+    expect(hook).toMatch(/enabled:\s*!!user\s*&&\s*\(isAdmin \|\| isStaff\)/);
   });
 
   it('přání trenéra se ukládá přes RPC, ne přímým UPDATE sloupce', () => {
@@ -768,5 +796,83 @@ describe('Kontrolní součet: fakturoidí sloupce jsou vidět a křičí', () =>
       .toMatch(/rezervace mimo zobrazený měsíc/);
     expect(zdroj, 'banner „Nesedí" zase tvrdí jen jednu příčinu ze dvou')
       .toMatch(/nebo sahá mimo zobrazený měsíc/);
+  });
+});
+
+describe('Obsazenost akce: jeden výpočet, žádné druhé počítání', () => {
+  // Ticket klienta 15. 9. 2026 (akce Hyundai 5. 12.): kalendář hlásil „0/3",
+  // obrazovka směn „2/3". Čísla nebyla špatně — byly to dva různé výpočty,
+  // každý v jiném souboru. Sjednotily se do `src/lib/obsazenostAkce.ts`.
+  //
+  // Chování toho výpočtu hlídá `obsazenostAkce.test.ts`. Tahle brána hlídá to
+  // druhé: že si žádná obrazovka NEZALOŽÍ výpočet vlastní. To ze samotného
+  // chování poznat nejde — nový `filter().length` v komponentě projde všemi
+  // testy chování a rozpor se vrátí přesně tak, jak se objevil poprvé.
+
+  it('kalendář nepočítá obsazenost sám, volá sdílený výpočet', () => {
+    const hook = bezKomentaru(cti('src/hooks/useReservations.ts'));
+    expect(hook).toContain('obsazenostPodleAkci(');
+    // Vlastní klasifikace stavů směny v kalendáři = přesně ten rozchod zpátky.
+    expect(hook,
+      'useReservations si zase překládá stav směny na obsazenost sám — ' +
+      'patří to do src/lib/obsazenostAkce.ts, ať se to nerozejde s nabídkou směn.',
+    ).not.toMatch(/status === 'claimed'|status === 'completed'/);
+    expect(hook).not.toContain('filled += 1');
+  });
+
+  it('obrazovka směn nepočítá obsazenost sama, volá sdílený výpočet', () => {
+    const hook = bezKomentaru(cti('src/hooks/useShifts.ts'));
+    expect(hook).toContain('spoctiObsazenost(');
+    expect(hook).toContain('volnoProRoli(');
+    // TOHLE BYLA TA CHYBA: čitatel profiltrovaný podle rolí proti jmenovateli
+    // spočítanému bez filtru. Obě jména jsou pryč a zpátky se nesmí vrátit.
+    expect(hook,
+      'totalSlots je zpátky — to byl ten nefiltrovaný jmenovatel proti ' +
+      'role-filtrovanému čitateli, kvůli kterému instruktor viděl 2/3.',
+    ).not.toContain('totalSlots');
+    expect(hook).not.toContain('openCount');
+  });
+
+  it('podmínku „smím tuhle roli vzít" má nabídka i čítač z jednoho místa', () => {
+    const hook = bezKomentaru(cti('src/hooks/useShifts.ts'));
+    expect(hook).toContain('smenaPatriRoli(');
+    // Opsaná podmínka v hooku by se zase rozešla s tím, co počítá
+    // „Volné pro tvoji roli".
+    expect(hook,
+      'filtr rolí je zase opsaný v useShifts — patří do obsazenostAkce.ts, ' +
+      'protože týž predikát potřebuje i čítač volných míst.',
+    ).not.toMatch(/roles\.includes\(requiredRole\)/);
+  });
+
+  it.each([
+    ['src/pages/Calendar.tsx'],
+    ['src/pages/Shifts.tsx'],
+    ['src/components/reservations/ObsazeniDetail.tsx'],
+  ])('%s bere text „Obsazeno X/Y" ze sdíleného popisku', (soubor) => {
+    const zdroj = bezKomentaru(cti(soubor));
+    expect(zdroj).toContain('popisObsazenosti(');
+    // Natvrdo napsané znění je začátek rozcházení textů: jedna obrazovka se
+    // přejmenuje, druhá ne, a uživatel zase srovnává dvě různé věty.
+    expect(zdroj,
+      `${soubor} si píše znění čítače natvrdo — má být z popisObsazenosti().`,
+    ).not.toMatch(/['"`>]\s*Obsazeno \{/);
+  });
+
+  it('odznak v kalendáři bere i práh „hotovo" ze sdíleného výpočtu', () => {
+    const zdroj = bezKomentaru(cti('src/components/reservations/ReservationCalendar.tsx'));
+    expect(zdroj).toContain('jeObsazeno(');
+    // `filled` byl starý tvar, který existoval jen v kalendáři.
+    expect(zdroj).not.toContain('fill.filled');
+    // Vlastní práh by se rozešel s tím, co za „obsazeno" považuje zbytek.
+    expect(zdroj).not.toMatch(/fill\.obsazeno\s*>=/);
+  });
+
+  it('brigádník vidí navíc „Volné pro tvoji roli"', () => {
+    const zdroj = bezKomentaru(cti('src/pages/Shifts.tsx'));
+    expect(zdroj).toContain('popisVolnaProRoli(');
+    expect(zdroj).toContain('volnoProMe');
+    // Starý popisek sliboval „volná místa", a přitom jedno číslo míchalo
+    // filtrované s nefiltrovaným.
+    expect(zdroj).not.toContain('Volná místa celkem');
   });
 });

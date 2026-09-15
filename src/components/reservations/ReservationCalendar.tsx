@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import { fmtKc } from '@/lib/money';
 import { barvaProRezervaci, jeKomercni, vzhledRezervace, BARVA_KOMERCE } from '@/lib/barvaKlubu';
 import type { Sheet, CalendarReservation, ShiftFill } from '@/hooks/useReservations';
+import { jeObsazeno } from '@/lib/obsazenostAkce';
 
 const PX_PER_MIN = 1;      // 1 minuta = 1 px
 const DRAG_THRESHOLD = 6;  // menší posun bereme jako klik, ne tažení
@@ -424,11 +425,15 @@ export function ReservationCalendar({
                 {!r.approved_at && (
                   <Clock className={cn('h-3 w-3 shrink-0', komercni ? 'text-amber-200' : 'text-amber-600')} />
                 )}
-                {muzeMitBrigadniky && fill && (
+                {/* Zkratka téže metriky jako v detailu a na obrazovce směn:
+                    obsazeno/pozic. Čísla i práh „hotovo" jsou ze sdíleného
+                    výpočtu (`@/lib/obsazenostAkce`) — na chip se nepočítá nic
+                    vlastního. Akce bez pozic (všechny směny zrušené) odznak nemá. */}
+                {muzeMitBrigadniky && fill && fill.total > 0 && (
                   <span className={cn(
                     'ml-auto shrink-0 rounded px-1 text-[10px] font-semibold',
-                    fill.filled >= fill.total ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700',
-                  )}>{fill.filled}/{fill.total}</span>
+                    jeObsazeno(fill) ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700',
+                  )}>{fill.obsazeno}/{fill.total}</span>
                 )}
               </div>
               <div className={cn('truncate text-[11px]', komercni ? 'text-white/85' : 'text-muted-foreground')}>

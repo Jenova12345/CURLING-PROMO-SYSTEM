@@ -5,6 +5,7 @@ import { useShifts } from '@/hooks/useShifts';
 import { useShiftApplications } from '@/hooks/useShiftApplications';
 import { useStabKontrola } from '@/hooks/useStabKontrola';
 import { AlertTriangle } from 'lucide-react';
+import { spoctiObsazenost, popisObsazenosti } from '@/lib/obsazenostAkce';
 
 const ROLE_LABELS: Record<string, string> = {
   instructor: 'Instruktor', bar_staff: 'Obsluha baru', manager: 'Provozní hospoda',
@@ -20,6 +21,8 @@ export function ObsazeniDetail({ eventId }: { eventId: string }) {
 
   const eventShifts = (shifts as Array<Record<string, unknown>>).filter((s) => s.event_id === eventId);
   if (eventShifts.length === 0) return null;
+  // Týž výpočet i tentýž text jako v kalendáři a na obrazovce směn.
+  const obsazenost = spoctiObsazenost(eventShifts as Array<{ status?: string | null; required_role?: string | null }>);
 
   const approve = async (appId: string) => {
     try {
@@ -32,7 +35,12 @@ export function ObsazeniDetail({ eventId }: { eventId: string }) {
 
   return (
     <div className="mt-2 space-y-2 border-t pt-2">
-      <div className="text-xs font-medium">Obsazení směn</div>
+      <div className="flex items-baseline justify-between gap-2">
+        <div className="text-xs font-medium">Obsazení směn</div>
+        {obsazenost.total > 0 && (
+          <div className="text-xs text-muted-foreground">{popisObsazenosti(obsazenost)}</div>
+        )}
+      </div>
 
       {/* VAROVÁNÍ, NE ZÁKAZ (R8). Akce se dvěma dráhami a jedním instruktorem
           může být záměr — proto se to jen ukáže a nic to neblokuje. Směnu navíc

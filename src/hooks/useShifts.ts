@@ -3,6 +3,9 @@ import { supabase } from '@/integrations/supabase/client';
 import { popisChybySmeny } from '@/lib/chybySmen';
 import { useAuth } from '@/contexts/AuthContext';
 import { bezZrusenychAkci, jenNeskoncene } from '@/lib/nabidkySmen';
+import {
+  spoctiObsazenost, volnoProRoli, smenaPatriRoli, type Obsazenost,
+} from '@/lib/obsazenostAkce';
 
 export const useShifts = () => {
   const { user, isAdmin, isStaff, roles } = useAuth();
@@ -414,43 +417,46 @@ export const useShifts = () => {
   // Filtr sedí ZDE, v jednom zdroji: `openShifts` živí nabídku brigádníka,
   // adminský seznam i čítač na Přehledu. Kdyby se filtrovalo až v komponentě,
   // kryla by se jedna z těch tří cest a zbylé dvě by ukazovaly jiné číslo.
+  //
+  // Podmínku „smím tuhle roli vzít?" drží `smenaPatriRoli` v `@/lib/obsazenostAkce`,
+  // protože TÝŽ predikát potřebuje i čítač „Volné pro tvoji roli". Dokud byl
+  // opsaný tady, počítala nabídka jedno a čítač druhé (ticket Hyundai, 15. 9. 2026).
+  const kdoSeDiva = { role: roles, isAdmin };
   const openShifts = jenNeskoncene(bezZrusenychAkci(shifts, zruseneAkce)).filter(s => {
     if (s.status !== 'open') return false;
     if (myEventIds.has(s.event_id)) return false;
-    
-    // Admin sees all
-    if (isAdmin) return true;
-    
-    // If shift has no required_role, show to all staff (legacy)
-    const requiredRole = (s as any).required_role;
-    if (!requiredRole) return true;
-    
-    // Show only if user has the required role
-    return roles.includes(requiredRole);
+    return smenaPatriRoli((s as { required_role?: string | null }).required_role, kdoSeDiva);
   });
 
   // Group open shifts by event_id for staff view (show one entry per event)
+  //
+  // ČÍTAČ UŽ SE TU NESKLÁDÁ. Dřív tu vedle sebe stály `openCount` (volné směny
+  // PO filtru rolí) a `totalSlots` (`shifts.filter(...).length`, tedy BEZ filtru).
+  // Instruktorovi z toho u akce se třemi pozicemi vycházelo „2/3", zatímco
+  // kalendář u téže akce hlásil „0/3" — dvě čísla ze dvou různých výpočtů.
+  // Teď jde obojí ze `spoctiObsazenost` nad VŠEMI směnami akce, stejně jako
+  // v kalendáři; role řeší jen doplňkové `volnoProMe`.
   const openShiftsByEvent = Object.values(
     openShifts.reduce((acc, shift) => {
       const eventId = shift.event_id;
       if (!acc[eventId]) {
-        // Count total slots for this event (all shifts regardless of status)
-        const totalSlots = shifts.filter(s => s.event_id === eventId).length;
+        const obsazenost = spoctiObsazenost(
+          shifts.filter(s => s.event_id === eventId) as { status?: string | null; required_role?: string | null }[],
+        );
         acc[eventId] = {
           eventId,
           event: shift.event,
           hourlyRate: shift.hourly_rate,
           availableShiftIds: [],
           availableShifts: [],  // Include shift data for role display
-          openCount: 0,
-          totalSlots,
+          obsazenost,
+          volnoProMe: volnoProRoli(obsazenost, kdoSeDiva),
         };
       }
       acc[eventId].availableShiftIds.push(shift.id);
       acc[eventId].availableShifts.push(shift);
-      acc[eventId].openCount += 1;
       return acc;
-    }, {} as Record<string, { eventId: string; event: any; hourlyRate: number | null; availableShiftIds: string[]; availableShifts: any[]; openCount: number; totalSlots: number }>)
+    }, {} as Record<string, { eventId: string; event: any; hourlyRate: number | null; availableShiftIds: string[]; availableShifts: any[]; obsazenost: Obsazenost; volnoProMe: number }>)
   ).sort((a, b) => {
     const aTime = a.event?.start_time ? new Date(a.event.start_time).getTime() : 0;
     const bTime = b.event?.start_time ? new Date(b.event.start_time).getTime() : 0;

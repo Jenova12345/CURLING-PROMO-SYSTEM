@@ -20,6 +20,7 @@ import { useReservations, type CalendarReservation } from '@/hooks/useReservatio
 import { hoursForDay, openingHoursEnvelope } from '@/lib/openingHours';
 import { fmtHodin, fmtKc, fmtSazba } from '@/lib/money';
 import { vzhledRezervace } from '@/lib/barvaKlubu';
+import { popisObsazenosti } from '@/lib/obsazenostAkce';
 import { ReservationCalendar } from '@/components/reservations/ReservationCalendar';
 import { ReservationDialog } from '@/components/reservations/ReservationDialog';
 import { ObsazeniDetail } from '@/components/reservations/ObsazeniDetail';
@@ -482,8 +483,13 @@ const Calendar = () => {
                         )}
                       </div>
                     )}
-                    {detail.event_id && shiftFill[detail.event_id] && (
-                      <div>Obsazení štábu: {shiftFill[detail.event_id].filled}/{shiftFill[detail.event_id].total}</div>
+                    {/* JEDNOTNÝ POPISEK. Text i čísla jdou z `@/lib/obsazenostAkce`,
+                        stejně jako na obrazovce směn — kdyby se to počítalo tady,
+                        rozejde se to znovu (ticket Hyundai, 15. 9. 2026).
+                        Akce bez pozic (`total = 0`, typicky všechny směny zrušené)
+                        se nevypisuje vůbec: „0/0" není informace. */}
+                    {detail.event_id && shiftFill[detail.event_id]?.total > 0 && (
+                      <div>Štáb: {popisObsazenosti(shiftFill[detail.event_id])}</div>
                     )}
                     {detail.note && <div className="text-muted-foreground">Poznámka: {detail.note}</div>}
 

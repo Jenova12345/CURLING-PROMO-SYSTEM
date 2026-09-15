@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Database, Json } from '@/integrations/supabase/types';
+import { obsazenostPodleAkci, type Obsazenost } from '@/lib/obsazenostAkce';
 
 type SubjectType = Database['public']['Enums']['subject_type'];
 export type EventType = Database['public']['Enums']['event_type'];
@@ -31,7 +32,11 @@ export type CalendarReservation = Database['public']['Views']['reservations_cale
 export type BookingKind = 'training' | 'tournament' | 'commercial' | 'maintenance';
 
 // Obsazenost štábu u komerční akce (jen admin/staff přes RLS na shifts).
-export type ShiftFill = { filled: number; total: number };
+//
+// VLASTNÍ TVAR TENHLE HOOK UŽ NEMÁ. Dřív to byl `{ filled, total }` spočítaný
+// tady na místě — a přesně proto se kalendář rozcházel s obrazovkou směn.
+// Teď je to týž typ z `@/lib/obsazenostAkce`, jaký čte i nabídka směn.
+export type ShiftFill = Obsazenost;
 
 export type SubjectRepLevel = Database['public']['Enums']['subject_rep_level'];
 export type Membership = { subject_id: string; level: SubjectRepLevel };
@@ -217,18 +222,15 @@ export const useReservations = (range: DateRange | null) => {
   const { data: shiftFill = {} } = useQuery({
     queryKey: ['calendar-shift-fill', eventIds],
     queryFn: async () => {
+      // `required_role` se tahá kvůli rozpadu po rolích ve SDÍLENÉM výpočtu.
+      // NENÍ to hledání trenéra ve `shifts` (ta cesta se zástupci klubu tiše
+      // rozbije a je zakázaná — viz brána v `branyFrontendu.test.ts`): tenhle
+      // dotaz podle role nefiltruje a běží jen adminovi a štábu (`enabled` níž).
       const { data, error } = await supabase
-        .from('shifts').select('event_id, status').in('event_id', eventIds);
+        .from('shifts').select('event_id, status, required_role').in('event_id', eventIds);
       if (error) throw error;
-      const map: Record<string, ShiftFill> = {};
-      for (const s of data ?? []) {
-        const id = s.event_id as string;
-        map[id] = map[id] ?? { filled: 0, total: 0 };
-        map[id].total += 1;
-        // „obsazeno" = reálně potvrzené (claimed/completed); pending je nepotvrzená žádost
-        if (s.status === 'claimed' || s.status === 'completed') map[id].filled += 1;
-      }
-      return map;
+      // ŽÁDNÝ VLASTNÍ POČÍTÁNÍ. Jeden výpočet pro kalendář i pro obrazovku směn.
+      return obsazenostPodleAkci(data ?? []);
     },
     enabled: !!user && (isAdmin || isStaff) && eventIds.length > 0,
   });

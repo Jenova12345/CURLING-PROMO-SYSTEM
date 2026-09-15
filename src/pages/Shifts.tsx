@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useShifts } from '@/hooks/useShifts';
+import { popisObsazenosti, popisVolnaProRoli } from '@/lib/obsazenostAkce';
 import { useShiftApplications } from '@/hooks/useShiftApplications';
 import { usePayouts } from '@/hooks/usePayouts';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -674,9 +675,15 @@ const Shifts = () => {
                       ))}
                     </div>
                     
-                    {/* Summary footer */}
+                    {/* Summary footer — TÁŽ metrika a TÝŽ text jako v kalendáři.
+                        „Obsazeno X/Y" je celá akce (všechny pozice, bez ohledu na
+                        role); „Volné pro tvoji roli" je to, na co se tenhle člověk
+                        opravdu může přihlásit. Dřív tu stálo jedno číslo složené
+                        z obojího a nesedělo ani s jedním. */}
                     <div className="text-xs text-muted-foreground ml-6">
-                      Volná místa celkem: {eventItem.openCount}/{eventItem.totalSlots}
+                      {popisObsazenosti(eventItem.obsazenost)}
+                      {' · '}
+                      {popisVolnaProRoli(eventItem.volnoProMe)}
                     </div>
                   </CardContent>
                 </Card>
