@@ -876,3 +876,182 @@ describe('Obsazenost akce: jeden výpočet, žádné druhé počítání', () =>
     expect(zdroj).not.toContain('Volná místa celkem');
   });
 });
+
+describe('Fakturoid: tlačítko v „Přehled fakturace"', () => {
+  const dues = cti('src/pages/Dues.tsx');
+  const duesKod = bezKomentaru(dues);
+  const hook = cti('src/hooks/useFakturoid.ts');
+  const hookKod = bezKomentaru(hook);
+
+  // Interní engine je od 15. 9. 2026 zamčený (`interni_engine_povolen = false`)
+  // a všech pět jeho vstupních bodů hlásí chybu. Kdyby se na tuhle stránku
+  // vrátilo jeho volání, admin by dostal slepou uličku místo dokladu.
+  it('Dues už nevolá interní fakturační engine', () => {
+    expect(duesKod, 'Dues.tsx volá createClubDraft — to je zamčený interní engine')
+      .not.toContain('createClubDraft');
+    expect(duesKod, 'Dues.tsx volá createCommercialDraft — to je zamčený interní engine')
+      .not.toContain('createCommercialDraft');
+    expect(duesKod, 'Dues.tsx importuje useInvoices — interní engine se sem vrátil')
+      .not.toContain('useInvoices');
+  });
+
+  it('… a místo toho volá edge funkci fakturoid-invoice', () => {
+    expect(hookKod).toContain("supabase.functions.invoke('fakturoid-invoice'");
+  });
+
+  // ROZHODNUTÍ PM 15. 9. 2026. Doklad u Fakturoidu je rovnou ostrý (stav
+  // „koncept" Fakturoid nezná), takže tahle věta je jediné místo, kde se to
+  // člověk dozví DŘÍV, než klikne. Kotvím na kus textu, ne na celou větu —
+  // formátování JSX si ji může zalomit jinak.
+  it('potvrzovací dialog nese větu o ostrém dokladu', () => {
+    const bezMezer = dues.replace(/\s+/g, ' ');
+    expect(bezMezer, 'zmizelo „vystaví se naostro"').toMatch(/se vystaví <b>naostro<\/b>/);
+    expect(bezMezer, 'zmizelo „číslo v ostré řadě"').toContain('číslo v ostré řadě');
+    expect(bezMezer, 'zmizelo „e-mail se neodešle"').toContain('e-mail se neodešle');
+    expect(bezMezer, 'zmizelo „pošleš ho z Fakturoidu"').toContain('pošleš ho z Fakturoidu');
+    expect(bezMezer, 'zmizelo „oprava jen stornem/dobropisem"').toContain('oprava jen stornem/dobropisem');
+  });
+
+  // Bez potvrzení by první klik rovnou vystavil ostrý doklad. `potvrdAVystav`
+  // se proto smí volat JEN z dialogu, ne z tlačítka v tabulce.
+  it('vystavit() se volá až z potvrzovacího dialogu, ne z tlačítka v tabulce', () => {
+    expect(duesKod, 'vystavit() zmizelo z potvrzovací funkce')
+      .toContain('await vystavit(potvrzeni.pozadavek)');
+    // Tlačítka v tabulce jen PŘIPRAVUJÍ potvrzení.
+    expect(duesKod).toContain('onClick={() => r.type === \'club\'');
+    expect(duesKod).toContain('chystejKlubovou(r.subjectId, r.name');
+  });
+
+  // Klíč klubového dokladu je `klub-{subjectId}-{RRRRMM}`. V týdenním pohledu
+  // by vznikl doklad na týden, ale zámek na celý měsíc — a zbytek měsíce by
+  // už nešel vyfakturovat vůbec.
+  it('klubová cesta je zamčená mimo měsíční pohled', () => {
+    expect(duesKod, 'zámek měsíčního pohledu zmizel')
+      .toContain("const klubovaJde = view === 'month'");
+    expect(duesKod, 'tlačítko v tabulce se zámkem nepočítá')
+      .toContain("(r.type === 'club' && !klubovaJde)");
+    expect(duesKod, 'řádek „rezervace bez akce" se zámkem nepočítá')
+      .toContain('(a.event_id === null && !klubovaJde)');
+  });
+
+  // „Ať to nespadne tiše": každý z šesti stavů má mít vlastní větev. Kotvím na
+  // `case`, ne na jméno stavu — to se vyskytuje i v typech a komentářích.
+  it('ošetřených je všech šest stavů', () => {
+    for (const stav of ['vystaveno', 'existoval', 'prazdne', 'preskoceno', 'nesedi']) {
+      expect(duesKod, `stav ${stav} nemá v potvrdAVystav vlastní větev`)
+        .toContain(`case '${stav}':`);
+    }
+    // Šestý stav není `case`, ale `catch` — chyba, u které nevíme, jak dopadla.
+    expect(duesKod, 'větev pro nejistou chybu zmizela')
+      .toContain('e instanceof FakturoidNejistaChyba');
+  });
+
+  // NÁLEZ BEZPEČNOSTNÍ BRÁNY 15. 9. 2026 (🔴).
+  //
+  // Řádek „Rezervace bez akce" jde klubovou cestou, a ta vystaví CELÉ období —
+  // `fakturovatelne_rezervace` se na `event_id` neptá. Změřeno: náhled toho
+  // řádku říkal 1 rezervaci a 10 000 Kč, server vystavil 3 a 50 000 Kč.
+  // Kdyby se do dialogu vrátila čísla toho řádku, admin odklepne jednu částku
+  // a Fakturoid vystaví ostrý doklad na jinou — opravitelný jen dobropisem.
+  it('„Rezervace bez akce" neposílá do potvrzení čísla svého řádku', () => {
+    expect(duesKod,
+      'do potvrzovacího dialogu se vrátila čísla řádku „bez akce" — ta jsou nižší ' +
+      'než to, co klubová cesta doopravdy vystaví',
+    ).not.toContain('{ count: a.rezervaci, amount: Number(a.castka) }');
+    expect(duesKod, 'souhrn za subjekt se v této větvi nedohledává')
+      .toContain('summary.find((x) => x.subjectId === akce.subjectId)');
+  });
+
+  // Bez téhle věty admin čeká doklad „na zbytek" a dostane doklad na celý měsíc.
+  it('dialog u klubové cesty přiznává, že spolkne i akce', () => {
+    const bezMezer = dues.replace(/\s+/g, ' ');
+    expect(bezMezer).toContain("potvrzeni.pozadavek.druh === 'klub'");
+    expect(bezMezer, 'zmizelo upozornění, že doklad zahrne i rezervace patřící k akcím')
+      .toContain('které patří ke konkrétním akcím');
+  });
+
+  // `nesedi` nese částky a počty řádků. V toastu po pár vteřinách zmizí i s nimi.
+  it('nesedi jde do panelu, ne (jen) do toastu', () => {
+    expect(duesKod).toContain('setNesedi({ cislo: v.cislo, duvod: v.duvod })');
+    expect(duesKod, 'panel s rozdílem zmizel z JSX').toContain('{nesedi.duvod}');
+  });
+
+  // NÁLEZ CODE REVIEW 15. 9. 2026 (🟡). Režim je serverový (`FAKTUROID_MODE`)
+  // a přepnutí na `odeslat` nevyžaduje změnu frontendu. Natvrdo napsané
+  // „e-mail se neodeslal" by od toho dne lhalo a admin by fakturu poslal
+  // podruhé — přesně tomu brání `odesliPokudMa` na serveru.
+  it('hláška po úspěchu čte `odeslano`, nedomýšlí ho', () => {
+    expect(duesKod, 'popisek toastu se rozhoduje bez `odeslano`')
+      .toContain('v.odeslano');
+    const bezMezer = dues.replace(/\s+/g, ' ');
+    expect(bezMezer).toContain('Doklad byl odeslán e-mailem z Fakturoidu.');
+    expect(bezMezer).toContain('E-mail se neodeslal — pošli ho z Fakturoidu.');
+  });
+
+  // NÁLEZ BEZPEČNOSTNÍ BRÁNY (🟢). React 18 pustí `javascript:` v href
+  // s pouhým varováním.
+  it('odkaz na doklad se otevírá jen přes https a s rel', () => {
+    expect(duesKod).toContain("d.public_url?.startsWith('https://')");
+    expect(duesKod).toContain('rel="noopener noreferrer"');
+  });
+
+  // Doklad může vzniknout a PDF se přitom neuložit. Tichý úspěch by lhal.
+  it('varování se ukazují i po úspěchu', () => {
+    expect(duesKod).toContain('setVarovani(v.varovani)');
+    expect(duesKod, 'výpis varování zmizel z JSX').toContain('varovani.map((v) =>');
+  });
+});
+
+describe('Fakturoid: hook nesmí spolknout důvod chyby', () => {
+  const hookKod = bezKomentaru(cti('src/hooks/useFakturoid.ts'));
+
+  // `functions.invoke` u non-2xx zahodí tělo a vrátí obecné „non-2xx status
+  // code". Bez dolování z `context` by admin u 403 i 409 viděl tutéž větu.
+  it('tělo chybové odpovědi se čte z context (vzor z useInvoices)', () => {
+    expect(hookKod).toContain('(error as { context?: Response }).context');
+    expect(hookKod).toContain('await ctx.json()');
+  });
+
+  // 409 `nesedi` přichází jako chyba, ale není to porucha — je to nález pro
+  // člověka. Kdyby propadl do obecného `throw`, ztratí se `duvod`.
+  it('nesedi se z chybové větve vrací jako výsledek, ne jako výjimka', () => {
+    const chybovaVetev = hookKod.slice(hookKod.indexOf('if (error) {'));
+    expect(chybovaVetev).toContain('const vysledek = jakoVysledek(telo)');
+    expect(chybovaVetev).toContain('if (vysledek) return vysledek');
+  });
+
+  // Když se tělo přečíst nedá, NEVÍME, jestli doklad vznikl — a protože je
+  // rovnou ostrý, nesmí se to zamluvit obecným „nepovedlo se".
+  it('nečitelná odpověď = nejistá chyba s vlastní hláškou', () => {
+    expect(hookKod).toContain('throw new FakturoidNejistaChyba(');
+    const zdroj = cti('src/hooks/useFakturoid.ts');
+    const bezMezer = zdroj.replace(/\s+/g, ' ');
+    expect(bezMezer).toContain('nevíme, jestli doklad vznikl');
+    expect(bezMezer).toContain('opakované kliknutí duplicitu nevyrobí');
+  });
+
+  // NÁLEZ CODE REVIEW 15. 9. 2026 (🟡). U 4xx požadavek odmítla naše strana,
+  // takže se k Fakturoidu nedostal a doklad NEVZNIKL. Posílat admina kontrolovat
+  // do Fakturoidu při vypršené session je falešný poplach — a ten znehodnotí
+  // ten jeden pravý (síť/timeout).
+  it('4xx se nevydává za nejistotu', () => {
+    expect(hookKod, 'status odpovědi se nerozlišuje')
+      .toContain('ctx.status >= 400 && ctx.status < 500');
+    const chybova = hookKod.slice(hookKod.indexOf('if (error) {'));
+    const urcite = chybova.indexOf('urciteNevznikl');
+    const nejiste = chybova.indexOf('new FakturoidNejistaChyba(');
+    expect(urcite, 'větev pro 4xx zmizela').toBeGreaterThan(-1);
+    expect(urcite,
+      'nejistá chyba se vyhazuje DŘÍV než se rozliší 4xx — pak se 4xx nikdy neuplatní',
+    ).toBeLessThan(nejiste);
+  });
+
+  // Rozjezdový režim `koncept` má smysl jen tehdy, když ho nejde obejít jedním
+  // polem v JSONu. Jediný zdroj je `FAKTUROID_MODE` v prostředí Edge funkce.
+  it('režim se z klienta neposílá', () => {
+    const telo = hookKod.slice(hookKod.indexOf('export type FakturoidPozadavek'),
+                               hookKod.indexOf('export type FakturoidVarovani'));
+    expect(telo, 'do požadavku přibyl režim — ten se z klienta přebít nesmí')
+      .not.toMatch(/\brezim\b|\bmode\b|\bodeslat\b/);
+  });
+});

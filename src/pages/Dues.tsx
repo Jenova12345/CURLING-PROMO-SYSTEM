@@ -4,8 +4,7 @@ import {
   startOfMonth, addMonths, subMonths,
 } from 'date-fns';
 import { cs } from 'date-fns/locale';
-import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Wallet, FileText, Receipt } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Wallet, FileText, Receipt, ExternalLink, AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -16,8 +15,11 @@ import { useToast } from '@/components/ui/use-toast';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { openInvoiceDraft } from '@/lib/invoiceDraft';
 import { fmtHodin as fmtH, fmtKc } from '@/lib/money';
-import { useInvoices } from '@/hooks/useInvoices';
 import { useBillingSettings } from '@/hooks/useBillingSettings';
+import {
+  useFakturoid, FakturoidNejistaChyba,
+  type FakturoidPozadavek, type FakturoidVysledek, type FakturoidVarovani,
+} from '@/hooks/useFakturoid';
 import { supabase } from '@/integrations/supabase/client';
 import { denZDb } from '@/lib/datum';
 
@@ -30,11 +32,29 @@ type View = 'day' | 'week' | 'month';
  */
 type NevyfakturovanaAkce = { event_id: string | null; nazev: string; den: string; rezervaci: number; castka: number };
 
+/**
+ * Co se chystá vystavit, dokud to admin nepotvrdí.
+ *
+ * `presna` říká, jestli je `castka` to, co doopravdy půjde na doklad. U akce
+ * ano — `nevyfakturovane_akce` od migrace 20260915110000 vrací totéž co
+ * `fakturoid_podklady_akce`. U klubu NE: přehled sčítá všechny zpoplatněné
+ * rezervace období, kdežto na doklad jdou jen schválené a dosud nevyfakturované.
+ * Tvářit se v dialogu jistě by znamenalo nechat admina odklepnout číslo,
+ * které na dokladu neuvidí.
+ */
+type KPotvrzeni = {
+  pozadavek: FakturoidPozadavek;
+  odberatel: string;
+  cemu: string;
+  rezervaci: number | null;
+  castka: number | null;
+  presna: boolean;
+};
+
 const Dues = () => {
   const { isAdmin } = useAuth();
   const { toast } = useToast();
-  const navigate = useNavigate();
-  const { createClubDraft, createCommercialDraft, isBusy } = useInvoices();
+  const { doklady, nacitamDoklady, vystavit, vystavuje } = useFakturoid();
   // Podklad tiskne údaje haly z nastavení, ne z `BRAND` (riziko 5 v plánu):
   // doklad má ukazovat, co je nastavené, ne co je zadrátované ve frontendu.
   const {
@@ -44,6 +64,14 @@ const Dues = () => {
   } = useBillingSettings();
   const [akce, setAkce] = useState<{ subjectId: string; name: string; polozky: NevyfakturovanaAkce[] } | null>(null);
   const [nacitamAkce, setNacitamAkce] = useState<string | null>(null);
+  const [potvrzeni, setPotvrzeni] = useState<KPotvrzeni | null>(null);
+  /**
+   * Doklad u Fakturoidu existuje, ale nesedí s naším podkladem. SCHVÁLNĚ TO
+   * NENÍ TOAST: rozdíl mezi dokladem a podkladem patří člověku a toast po pár
+   * vteřinách zmizí i s jediným vodítkem, podle kterého se dá dohledat.
+   */
+  const [nesedi, setNesedi] = useState<{ cislo: string | null; duvod: string } | null>(null);
+  const [varovani, setVarovani] = useState<FakturoidVarovani[]>([]);
   const [view, setView] = useState<View>('month');
   const [currentDate, setCurrentDate] = useState(() => startOfDay(new Date()));
 
@@ -126,27 +154,35 @@ const Dues = () => {
     to: format(addDays(new Date(range.to), -1), 'yyyy-MM-dd'),
   });
 
-  // Souhrnná faktura klubu za zobrazené období (spec 2B: řádek = jedna rezervace).
-  const vygenerujKlubovou = async (subjectId: string, subjectName: string) => {
+  /**
+   * KLUBOVÁ CESTA JDE JEN V MĚSÍČNÍM POHLEDU.
+   *
+   * Klíč idempotence klubového dokladu je `klub-{subjectId}-{RRRRMM}` a měsíc
+   * se bere z počátku období. V týdenním pohledu by se tedy vystavil doklad na
+   * JEDEN TÝDEN, ale se zámkem na CELÝ MĚSÍC — a druhý týden téhož měsíce by
+   * pak narazil na „doklad už existuje" a nešel by vyfakturovat vůbec.
+   * Zavřít to tady je levnější než to potom rozplétat dobropisem.
+   */
+  const klubovaJde = view === 'month';
+
+  const chystejKlubovou = (subjectId: string, subjectName: string, radek?: { count: number; amount: number }) => {
     const { from, to } = obdobi();
-    try {
-      await createClubDraft({ subjectId, from, to });
-      toast({
-        title: 'Koncept faktury založen',
-        description: `${subjectName} — zkontroluj ho a vystav na stránce Faktury.`,
-      });
-      navigate('/invoices');
-    } catch (e) {
-      // Hláška z databáze je česká a konkrétní; přebalit ji do „něco se nepovedlo"
-      // by admina připravilo o důvod (typicky „už je vyfakturováno" nebo „čeká na schválení").
-      toast({ title: 'Fakturu nelze založit', description: (e as Error).message, variant: 'destructive' });
-    }
+    setPotvrzeni({
+      pozadavek: { druh: 'klub', subjectId, obdobiOd: from, obdobiDo: to },
+      odberatel: subjectName,
+      cemu: `období ${format(new Date(range.from), 'LLLL yyyy', { locale: cs })}`,
+      rezervaci: radek?.count ?? null,
+      castka: radek?.amount ?? null,
+      // Přehled sčítá VŠECHNY zpoplatněné rezervace období; na doklad jdou jen
+      // schválené a dosud nevyfakturované. Číslo je tedy horní odhad, ne slib.
+      presna: false,
+    });
   };
 
   // Komerční odběratel se fakturuje po akcích, ne za období — proto nabídka.
   const nabidniAkce = async (subjectId: string, subjectName: string) => {
     const { from, to } = obdobi();
-    // Vlastní indikace načítání: `isBusy` z useInvoices tenhle dotaz nekryje,
+    // Vlastní indikace načítání: `vystavuje` z useFakturoid tenhle dotaz nekryje,
     // takže by tlačítko na pomalé síti vypadalo mrtvě.
     setNacitamAkce(subjectId);
     const { data, error } = await supabase.rpc('nevyfakturovane_akce', {
@@ -165,19 +201,100 @@ const Dues = () => {
     setAkce({ subjectId, name: subjectName, polozky });
   };
 
-  const vygenerujZaAkci = async (eventId: string | null) => {
+  const chystejZaAkci = (a: NevyfakturovanaAkce) => {
     if (!akce) return;
+    // `event_id = null` znamená „rezervace bez akce" — ty se fakturují souhrnně
+    // za období, ne za akci, takže jdou klubovou cestou i u komerčního odběratele
+    // (a platí pro ně tentýž měsíční zámek).
+    if (a.event_id === null) {
+      // ⚠️ SCHVÁLNĚ SE NEPOSÍLAJÍ ČÍSLA TOHOHLE ŘÁDKU.
+      //
+      // Řádek říká „1 rezervace · 10 000 Kč", ale klubová cesta jde přes
+      // `fakturoid_podklady_klub` → `fakturovatelne_rezervace`, a ta se na
+      // `event_id` NEPTÁ — vystaví všechny zpoplatněné rezervace subjektu za
+      // období, tedy i ty, které patří ke komerčním akcím vypsaným výš.
+      // Změřeno: náhled 1 rez./10 000 Kč, server 3 rez./50 000 Kč.
+      //
+      // Číslo toho řádku by tedy byl slib, který doklad poruší SMĚREM NAHORU —
+      // a protože je doklad rovnou ostrý, opravuje se to dobropisem. Posílá se
+      // proto souhrn za celý subjekt: totéž, co má klubové tlačítko v tabulce
+      // a co admin vidí na téže obrazovce. Je to horní odhad, ne slib.
+      const s = summary.find((x) => x.subjectId === akce.subjectId);
+      chystejKlubovou(akce.subjectId, akce.name, s ? { count: s.count, amount: s.amount } : undefined);
+    } else {
+      setPotvrzeni({
+        pozadavek: { druh: 'akce', eventId: a.event_id },
+        odberatel: akce.name,
+        cemu: `akce „${a.nazev}"`,
+        rezervaci: a.rezervaci,
+        castka: Number(a.castka),
+        // U akce náhled od migrace 20260915110000 ukazuje totéž, co půjde
+        // na doklad — počet i součet se shodují s `fakturoid_podklady_akce`.
+        presna: true,
+      });
+    }
+    setAkce(null);
+  };
+
+  /**
+   * Jediné místo, odkud se do Fakturoidu opravdu posílá. Všech šest stavů má
+   * vlastní reakci — „ať to nespadne tiše" znamená, že žádná větev nesmí
+   * skončit mlčky.
+   */
+  const potvrdAVystav = async () => {
+    if (!potvrzeni) return;
+    setNesedi(null);
+    setVarovani([]);
     try {
-      // `event_id = null` znamená „rezervace bez akce" — ty se fakturují souhrnně
-      // za období, ne za akci (jinak by na ně nebylo jak dosáhnout).
-      const { from, to } = obdobi();
-      if (eventId === null) await createClubDraft({ subjectId: akce.subjectId, from, to });
-      else await createCommercialDraft(eventId);
-      setAkce(null);
-      toast({ title: 'Koncept faktury založen', description: 'Zkontroluj ho a vystav na stránce Faktury.' });
-      navigate('/invoices');
+      const v: FakturoidVysledek = await vystavit(potvrzeni.pozadavek);
+      setPotvrzeni(null);
+
+      switch (v.stav) {
+        case 'vystaveno':
+        case 'existoval':
+          setVarovani(v.varovani);
+          toast({
+            title: v.stav === 'vystaveno'
+              ? `Doklad ${v.cislo ?? ''} vystaven ve Fakturoidu`.trim()
+              : `Doklad ${v.cislo ?? ''} už ve Fakturoidu byl`.trim(),
+            // `odeslano` SE MUSÍ ČÍST, NE DOMÝŠLET. Režim je serverový
+            // (`FAKTUROID_MODE`) a přepnutí na `odeslat` nevyžaduje žádnou
+            // změnu frontendu — natvrdo napsané „e-mail se neodeslal" by
+            // od toho dne lhalo a admin by fakturu poslal podruhé.
+            description: v.stav !== 'vystaveno'
+              ? 'Nic nového nevzniklo, doklad na tenhle podklad už existoval.'
+              : v.odeslano
+                ? 'Doklad byl odeslán e-mailem z Fakturoidu.'
+                : 'E-mail se neodeslal — pošli ho z Fakturoidu.',
+          });
+          break;
+        case 'prazdne':
+          toast({
+            title: 'Není co fakturovat',
+            description: 'Všechny rezervace už na dokladu jsou, nebo podklad vyšel na nulu.',
+          });
+          break;
+        case 'preskoceno':
+          toast({ title: 'Doklad se nevystavil', description: v.duvod });
+          break;
+        case 'nesedi':
+          // Do panelu, ne do toastu — viz komentář u `setNesedi`.
+          setNesedi({ cislo: v.cislo, duvod: v.duvod });
+          toast({
+            title: 'Doklad nesedí s podkladem',
+            description: 'Rozdíl je vypsaný na stránce — projdi ho, prosím, ručně.',
+            variant: 'destructive',
+          });
+          break;
+      }
     } catch (e) {
-      toast({ title: 'Fakturu nelze založit', description: (e as Error).message, variant: 'destructive' });
+      setPotvrzeni(null);
+      const nejiste = e instanceof FakturoidNejistaChyba;
+      toast({
+        title: nejiste ? 'Nevíme, jestli doklad vznikl' : 'Doklad se nepodařilo vystavit',
+        description: (e as Error).message,
+        variant: 'destructive',
+      });
     }
   };
 
@@ -199,6 +316,41 @@ const Dues = () => {
         <h1 className="text-2xl md:text-3xl font-bold flex items-center gap-2"><Wallet className="h-6 w-6" /> Přehled fakturace</h1>
         <p className="text-muted-foreground mt-1 text-sm md:text-base">Podklady k úhradě podle rezervovaných hodin. Interní (tréninky/údržba) se nepočítají.</p>
       </div>
+
+      {/* ROZDÍL MEZI DOKLADEM A PODKLADEM PATŘÍ ČLOVĚKU.
+          Schválně to není toast: `duvod` nese částky a počty řádků, tedy to
+          jediné, podle čeho se dá rozdíl dohledat — a toast po pár vteřinách
+          zmizí i s ním. Zavře se jedině kliknutím. */}
+      {nesedi && (
+        <div role="alert" className="rounded-md border border-destructive bg-destructive/10 p-4 space-y-2">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="h-5 w-5 shrink-0 text-destructive" aria-hidden="true" />
+            <div className="space-y-1">
+              <div className="font-semibold text-destructive">
+                Doklad {nesedi.cislo ?? ''} u Fakturoidu nesedí s naším podkladem
+              </div>
+              <p className="text-sm">{nesedi.duvod}</p>
+              <p className="text-sm text-muted-foreground">
+                Vazba se <b>nezapsala</b> a nic se nevystavilo. Projdi rozdíl ve Fakturoidu ručně —
+                automatika ho rozhodnout nemá čím.
+              </p>
+            </div>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => setNesedi(null)}>Rozumím, skrýt</Button>
+        </div>
+      )}
+
+      {/* Varování se ukazují I PO ÚSPĚCHU. Typicky „PDF se nepodařilo uložit" —
+          doklad přitom existuje, takže tichý úspěch by lhal. */}
+      {varovani.length > 0 && (
+        <div role="status" className="rounded-md border border-amber-500/50 bg-amber-500/10 p-4 space-y-2">
+          <div className="font-semibold">Doklad vznikl, ale něco se nepovedlo</div>
+          <ul className="list-disc pl-5 text-sm">
+            {varovani.map((v) => <li key={v.kod}>{v.zprava}</li>)}
+          </ul>
+          <Button variant="outline" size="sm" onClick={() => setVarovani([])}>Skrýt</Button>
+        </div>
+      )}
 
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="flex items-center gap-2">
@@ -241,13 +393,17 @@ const Dues = () => {
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
                         <Button
-                          size="sm" disabled={isBusy || nacitamAkce === r.subjectId}
-                          aria-label={`Vygenerovat fakturu — ${r.name}`}
+                          size="sm"
+                          disabled={vystavuje || nacitamAkce === r.subjectId || (r.type === 'club' && !klubovaJde)}
+                          title={r.type === 'club' && !klubovaJde
+                            ? 'Klubový doklad se vystavuje za celý měsíc — přepni nahoře na „Měsíc".'
+                            : undefined}
+                          aria-label={`Vystavit ve Fakturoidu — ${r.name}`}
                           onClick={() => r.type === 'club'
-                            ? vygenerujKlubovou(r.subjectId, r.name)
+                            ? chystejKlubovou(r.subjectId, r.name, { count: r.count, amount: r.amount })
                             : nabidniAkce(r.subjectId, r.name)}
                         >
-                          <Receipt className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Vygenerovat fakturu
+                          <Receipt className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Vystavit ve Fakturoidu
                         </Button>
                         {/* Podklad zůstává vedle dokladu schválně: vytiskne se za
                             jakékoli období a nic v databázi nevytvoří, takže se hodí
@@ -272,11 +428,20 @@ const Dues = () => {
               období, kdežto faktura bere jen schválené a dosud nevyfakturované.
               Přesnou částku má proto až koncept — a od toho je krok „zkontroluj". */}
           {summary.length > 0 && (
-            <p className="mt-3 text-xs text-muted-foreground">
-              Částky výš jsou za všechny zpoplatněné rezervace období. Na fakturu jdou
-              jen ty <b>schválené</b> a dosud nevyfakturované, takže koncept může být nižší —
-              přesnou částku uvidíš na něm.
-            </p>
+            <div className="mt-3 space-y-2 text-xs text-muted-foreground">
+              <p>
+                Částky výš jsou za všechny zpoplatněné rezervace období. Na doklad jdou
+                jen ty <b>schválené</b> a dosud nevyfakturované, takže může být nižší —
+                přesnou částku určí až doklad ve Fakturoidu.
+              </p>
+              {!klubovaJde && (
+                <p>
+                  <b>Klubový doklad jde vystavit jen v měsíčním pohledu.</b> Vystavuje se
+                  za celý kalendářní měsíc; v denním a týdenním pohledu by vznikl doklad
+                  za pár dní, ale zamkl by celý měsíc a zbytek by už nešlo vyfakturovat.
+                </p>
+              )}
+            </div>
           )}
         </CardContent>
       </Card>
@@ -288,8 +453,9 @@ const Dues = () => {
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
             Komerční odběratel se fakturuje po akcích: jedna akce = jeden doklad.
-            Vyber, za kterou akci se má koncept založit. Řádek „rezervace bez akce"
-            je souhrnná faktura za zobrazené období.
+            Vyber, za kterou akci se má doklad vystavit. Řádek „rezervace bez akce"
+            je souhrnný doklad za zobrazené období — a protože se vystavuje po
+            měsících, jde jen v měsíčním pohledu.
           </p>
           <div className="space-y-2">
             {akce?.polozky.map((a) => (
@@ -300,14 +466,139 @@ const Dues = () => {
                     {format(denZDb(a.den) ?? new Date(), 'd. M. yyyy', { locale: cs })} · {a.rezervaci} rezervací · {fmtKc(Number(a.castka))}
                   </div>
                 </div>
-                <Button size="sm" disabled={isBusy} onClick={() => vygenerujZaAkci(a.event_id)}>
-                  Vygenerovat
+                <Button
+                  size="sm"
+                  disabled={vystavuje || (a.event_id === null && !klubovaJde)}
+                  title={a.event_id === null && !klubovaJde
+                    ? 'Souhrn za období se vystavuje za celý měsíc — přepni nahoře na „Měsíc".'
+                    : undefined}
+                  onClick={() => chystejZaAkci(a)}
+                >
+                  Vystavit
                 </Button>
               </div>
             ))}
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* POTVRZENÍ PŘED VYSTAVENÍM.
+          Je to poslední místo, kde jde couvnout: doklad u Fakturoidu vzniká
+          rovnou ostrý (stav „koncept" Fakturoid nezná) a smazat se nedá. */}
+      <Dialog open={!!potvrzeni} onOpenChange={(o) => { if (!o && !vystavuje) setPotvrzeni(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Vystavit doklad ve Fakturoidu?</DialogTitle>
+          </DialogHeader>
+          {potvrzeni && (
+            <div className="space-y-4">
+              <dl className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-1 text-sm">
+                <dt className="text-muted-foreground">Odběratel</dt>
+                <dd className="font-medium">{potvrzeni.odberatel}</dd>
+                <dt className="text-muted-foreground">Fakturuje se</dt>
+                <dd className="font-medium">{potvrzeni.cemu}</dd>
+                {potvrzeni.rezervaci != null && (<>
+                  <dt className="text-muted-foreground">Rezervací</dt>
+                  <dd>{potvrzeni.rezervaci}</dd>
+                </>)}
+                {potvrzeni.castka != null && (<>
+                  <dt className="text-muted-foreground">Částka</dt>
+                  <dd className="font-semibold">
+                    {fmtKc(potvrzeni.castka)}
+                    {!potvrzeni.presna && <span className="ml-1 font-normal text-muted-foreground">(odhad)</span>}
+                  </dd>
+                </>)}
+              </dl>
+
+              {/* U KLUBOVÉ CESTY MUSÍ BÝT VIDĚT ROZSAH, NE JEN ČÁSTKA.
+                  Souhrnný měsíční doklad zahrne i rezervace patřící ke KONKRÉTNÍM
+                  AKCÍM, které jsou v předchozím dialogu vypsané zvlášť — server
+                  se na `event_id` neptá. Bez téhle věty by admin čekal doklad
+                  „na zbytek" a dostal doklad na celý měsíc. */}
+              {potvrzeni.pozadavek.druh === 'klub' && (
+                <p className="text-xs text-muted-foreground">
+                  Souhrnný doklad za měsíc zahrne <b>všechny</b> schválené a dosud
+                  nevyfakturované rezervace odběratele za toto období — <b>včetně těch,
+                  které patří ke konkrétním akcím</b>. Ty se pak už samostatně vyfakturovat
+                  nedají. Částka výš je za všechny zpoplatněné rezervace období, takže
+                  výsledek může být nižší.
+                </p>
+              )}
+
+              {/* Znění schválil PM 15. 9. 2026. NEZKRACOVAT: každá z těch čtyř
+                  vět odpovídá jedné vlastnosti Fakturoidu, kterou by si člověk
+                  jinak domyslel špatně. */}
+              <div className="rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm">
+                Doklad se vystaví <b>naostro</b> a dostane číslo v ostré řadě, e-mail se
+                neodešle, pošleš ho z Fakturoidu, oprava jen stornem/dobropisem.
+              </div>
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" disabled={vystavuje} onClick={() => setPotvrzeni(null)}>Zrušit</Button>
+            {/* `disabled={vystavuje}` je ochrana proti DVOJKLIKU. Server by druhý
+                klik zachytil až zámkem 3 a vrátil `preskoceno` — duplicita by
+                nevznikla, ale admin by dostal matoucí hlášku na vlastní akci. */}
+            <Button disabled={vystavuje} onClick={potvrdAVystav}>
+              {vystavuje ? 'Vystavuji…' : 'Vystavit ve Fakturoidu'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* KROK 4 — co už do Fakturoidu odešlo.
+          Bez tohohle seznamu nemá admin po zavření toastu kde zjistit, co
+          vystavil. Pohled ukazuje jen DOKONČENÉ doklady (`provider_invoice_id`
+          není NULL), takže rozpracovaný claim se tu neobjeví. */}
+      <Card>
+        <CardHeader><CardTitle className="text-base">Vystaveno ve Fakturoidu</CardTitle></CardHeader>
+        <CardContent>
+          {nacitamDoklady ? <div className="text-muted-foreground">Načítám…</div> : doklady.length === 0 ? (
+            <div className="text-muted-foreground text-sm">Zatím nebyl vystaven žádný doklad.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader><TableRow>
+                  <TableHead>Číslo</TableHead><TableHead>Odběratel</TableHead>
+                  <TableHead>Vystaveno</TableHead><TableHead className="text-right">Rezervací</TableHead>
+                  <TableHead className="text-right">Částka</TableHead><TableHead className="text-right">Rozdíl</TableHead>
+                  <TableHead />
+                </TableRow></TableHeader>
+                <TableBody>
+                  {doklady.map((d) => (
+                    <TableRow key={d.id}>
+                      <TableCell className="font-medium">{d.cislo ?? '—'}</TableCell>
+                      <TableCell>{d.subjekt}</TableCell>
+                      <TableCell>{d.vystaveno_at ? format(new Date(d.vystaveno_at), 'd. M. yyyy', { locale: cs }) : '—'}</TableCell>
+                      <TableCell className="text-right">{d.rezervaci ?? 0}</TableCell>
+                      <TableCell className="text-right">{fmtKc(Number(d.provider_total ?? 0))}</TableCell>
+                      {/* `rozdil` je kontrolní součet: co jsme poslali vs. co Fakturoid
+                          vytiskl. Nenula se musí poznat na první pohled, ne až v exportu. */}
+                      <TableCell className={`text-right ${Number(d.rozdil ?? 0) !== 0 ? 'font-bold text-destructive' : ''}`}>
+                        {fmtKc(Number(d.rozdil ?? 0))}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {/* Jen `https://`. Hodnotu sice zapisuje výhradně
+                            `fakturoid_zapis_vazbu` (zavřená přes `fakturoid_smi_volat`),
+                            takže se k ní z aplikace nikdo nedostane — ale React 18
+                            `javascript:` v `href` propustí s pouhým varováním
+                            a tohle je jednořádková pojistka. */}
+                        {d.public_url?.startsWith('https://') && (
+                          <Button variant="outline" size="sm" asChild>
+                            <a href={d.public_url} target="_blank" rel="noopener noreferrer">
+                              <ExternalLink className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Otevřít
+                            </a>
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {view === 'day' && (
         <Card>
