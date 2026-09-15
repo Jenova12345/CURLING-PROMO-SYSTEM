@@ -107,20 +107,23 @@ END $$;
 ROLLBACK TO s3;
 
 -- ===========================================================================
--- 4) ⚠ VEDLEJŠÍ EFEKT: INTERNÍ ENGINE SE ODEMYKÁ
+-- 4) INTERNÍ ENGINE ZŮSTÁVÁ ZAVŘENÝ — UŽ NE NÁHODOU, ALE VLASTNÍM ZÁMKEM
 --
---    Dnes `create_invoice_draft_*` a `issue_invoice` odmítají cokoli vystavit,
---    protože `vat_mode = 'platce'`. Ten zámek je ZÁMĚRNÝ — migrace
---    `20260830140000_vat_mode_platce.sql` ho tak zavedla doslova („interní
---    engine se ZAVŘE pro nové doklady … je to ZÁMĚR"). Nastavení `platce`
---    tedy neslo dvě věci najednou: daňový režim a zámek enginu. Návrat do
---    daňově správné polohy ten zámek mimoděk pouští a živá tlačítka v aplikaci
---    (Dues.tsx „Vystavit fakturu", Invoices.tsx vystavení/storno) ožijí,
---    přestože ostré doklady má z rozhodnutí PM vystavovat Fakturoid.
+--    Dřívější znění tohohle scénáře varovalo, že přepnutí na neplátce interní
+--    engine MIMODĚK ODEMKNE: `create_invoice_draft_*` a `issue_invoice` totiž
+--    odmítaly cokoli vystavit jen proto, že `vat_mode = 'platce'`. Nastavení
+--    `platce` neslo dvě věci najednou — daňový režim a zámek enginu —, takže
+--    návrat do daňově správné polohy by pustil živá tlačítka „Vygenerovat
+--    fakturu" (Dues.tsx) a „Vystavit fakturu" (Invoices.tsx), přestože ostré
+--    doklady má z rozhodnutí PM vystavovat Fakturoid.
 --
---    Test to NEOPRAVUJE — jen to drží pojmenované a měřitelné. Až se engine
---    vyřadí (samostatný ticket), tenhle scénář zčervená a bude hned vidět,
---    že se tak stalo, a ne že se něco rozbilo.
+--    TO UŽ NEPLATÍ. Migrace `20260915100000_zamek_interniho_enginu.sql` dala
+--    enginu vlastní zámek, nezávislý na daňovém režimu a fail-closed. Tenhle
+--    scénář proto nově tvrdí opak: i pod neplátcem je engine ZAVŘENÝ.
+--
+--    Podrobné pokrytí toho zámku (všech pět vstupních bodů, fail-closed,
+--    nepřepnutelnost z aplikace) je v `zamek_interniho_enginu_test.sql`.
+--    Tady jde jen o jedno: že přepnutí daňového režimu engine neodemklo.
 -- ===========================================================================
 SAVEPOINT s4;
 -- Savepointy se ZÁMĚRNĚ řídí zvenčí, ne z DO bloku: `ROLLBACK TO` uvnitř
@@ -138,27 +141,32 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     _odmitl := true; _hlaska := SQLERRM;
   END;
-  PERFORM pg_temp.tvrd(_odmitl AND _hlaska LIKE '%neplátce DPH%',
-    '4a) pod plátcem interní engine odmítá vystavit (to je ten náhodný zámek)');
+  PERFORM pg_temp.tvrd(_odmitl,
+    '4a) pod plátcem interní engine odmítá vystavit');
+  PERFORM pg_temp.tvrd(_hlaska LIKE '%vyřazený%' OR _hlaska LIKE '%neplátce DPH%',
+    '4a2) a je to jeden z těch dvou zámků, ne náhodný pád (' || left(_hlaska, 50) || ')');
 END $$;
 ROLLBACK TO s4;
 
 SAVEPOINT s4b;
 DO $$
-DECLARE _hlaska text;
+DECLARE _hlaska text; _odmitl boolean;
 BEGIN
-  -- Režim je tu neplátce (stav po migraci). Engine už nesmí odmítat NA REŽIM;
-  -- spadnout může na něčem jiném (práva, prázdná akce), proto se hlídá jen to,
-  -- že to NENÍ hláška o daňovém režimu.
+  -- Režim je tu neplátce (stav po migraci). Starý zámek na `vat_mode` tedy mlčí —
+  -- a právě proto se tady měří, jestli drží ten NOVÝ.
   BEGIN
     PERFORM public.create_invoice_draft_commercial(
       (SELECT event_id FROM public.reservations
         WHERE event_id IS NOT NULL AND deleted_at IS NULL ORDER BY id LIMIT 1));
-    _hlaska := '(prošlo)';
-  EXCEPTION WHEN OTHERS THEN _hlaska := SQLERRM;
+    _odmitl := false; _hlaska := '(prošlo)';
+  EXCEPTION WHEN OTHERS THEN _odmitl := true; _hlaska := SQLERRM;
   END;
+  PERFORM pg_temp.tvrd(_odmitl,
+    '4b) pod neplátcem je interní engine POŘÁD zavřený (dřív se tu odemykal)');
+  PERFORM pg_temp.tvrd(_hlaska LIKE '%Interní fakturační engine je vyřazený%',
+    '4c) a drží ho VLASTNÍ zámek, ne daňový režim (' || left(_hlaska, 50) || ')');
   PERFORM pg_temp.tvrd(_hlaska NOT LIKE '%neplátce DPH%',
-    '4b) ⚠ pod neplátcem už engine na režim NEodmítá — zámek je pryč. Hláška: ' || _hlaska);
+    '4d) starý zámek na vat_mode už tu opravdu nedrží — proto ten nový musel vzniknout');
 END $$;
 ROLLBACK TO s4b;
 
