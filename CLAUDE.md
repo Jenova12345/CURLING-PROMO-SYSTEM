@@ -204,6 +204,10 @@ změna" neexistuje.
 12 kontejnerů a ~2,5 GB RAM; na jeho Macu (7,75 GB) je to třetina paměti.
 Měřeno 16. 9. 2026: `supabase start` pro tenhle projekt = 2,47 GB.
 
+> **Globální pravidlo je v `~/.claude/CLAUDE.md`** (kapitola „🐳 Docker") a platí
+> ve všech projektech: Docker se používat SMÍ, jen nesmí zůstat běžet a nikdo
+> nesmí vypínat cizí kontejnery. Tahle kapitola ho jen upřesňuje pro tenhle repo.
+
 **Postup, který platí vždycky:**
 
 1. **Než začneš cokoli, co potřebuje Docker** (`supabase start`, `db reset`,
