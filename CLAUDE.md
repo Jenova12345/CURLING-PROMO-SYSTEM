@@ -456,6 +456,54 @@ schovává.
 `fakturoid_rozdil`), takže systémově neviditelné to není. Cesta ven dnes
 neexistuje jinak než servisním zásahem do databáze.
 
+### ÚKLID FAKTURACE (16. 9. 2026, NENASAZENO)
+
+Stránka **Faktury je zrušená**. Byla jediným klientem interního enginu, který je
+od 15. 9. 2026 zamčený, a `invoices_list` na ní je trvale prázdný. Kontrolní
+součet — jediná živá věc, co na ní byla — se přestěhoval do **Přehledu
+fakturace**, vedle karty vystavených dokladů. `/invoices` přesměrovává na
+`/dues`. DB objekty ani interní engine se NEMAZALY, spí zamčené.
+
+Ve stejné dávce přibylo tlačítko **„Stáhnout naši kopii"** u fakturoidích
+dokladů (naše kopie PDF z bucketu `invoices`).
+
+⚠️ **POŘADÍ NASAZENÍ.** Krok 3 mění Edge funkci `invoice-pdf-url` a bez ní
+nefunguje. Nasadit **nejdřív funkci** (`supabase functions deploy
+invoice-pdf-url`), **teprve pak frontend**. Opačně dostane admin od staré verze
+doslova „Chybí `invoice_id`." a bude hledat chybu ve svém dokladu.
+
+#### ⏳ DALŠÍ ODLOŽENÉ TIKETY
+
+**T4 — „ZIP pro účetní" zmizel bez náhrady.** Stránka Faktury měla tlačítko na
+měsíční ZIP dokladů (`invoice-zip`). Balil PDF **interního** enginu, kterých je
+nula, takže dnes nikomu nechybí — ale je to **produktové rozhodnutí, ne
+technické**. Edge funkce `invoice-zip` zůstává nasazená a nedotčená; chybí jen
+tlačítko. Kdyby účetní měsíční balík chtěla, je to nová věc nad
+`fakturoid_invoices`, ne oživení starého tlačítka.
+
+**T5 — Kontrolní součet nekreslí `ve_stornu` ani `dobropisovano`.**
+`billing_reconcile` je vrací, tabulka je nezobrazuje — a `ve_stornu` přitom
+**vstupuje do vzorce `rozdil`** (migrace 20260914210000). Když má subjekt něco
+ve stornu, viditelné sloupce nedají dohromady „Dluží", i když „Rozdíl" je nula,
+a admin nemá jak zjistit proč. Zděděno ze staré stránky; po přesunu je ta karta
+jediné místo, kde by to vidět šlo.
+
+**T6 — `service_role` nemá SELECT na fakturační tabulky, a tři funkce s tím
+počítají.** Migrace revokují `invoices` i `fakturoid_invoices` od
+`service_role` a grantují zpátky jen `authenticated` (ověřeno na produkci
+16. 9. 2026: `has_table_privilege('service_role','public.fakturoid_invoices',
+'SELECT')` = **false**). Přesto servisním klientem čtou `invoices`:
+`invoice-pdf-url` (interní větev), `invoice-pdf` a `invoice-zip`. **Všechny tři
+by vrátily 500 „permission denied"** — nepřišlo se na to, protože `invoices` je
+na produkci prázdná a nikdo je nezavolal. Fakturoidí větev `invoice-pdf-url` to
+má od 16. 9. 2026 správně (čte pohled klientem volajícího). Zbytek je mrtvý kód
+interního enginu, takže to nehoří; až se ale někdy odemkne, spadne to hned.
+
+**T7 — `invoice-zip` nemá CORS ani obsluhu `OPTIONS`.** Z prohlížeče se na ni
+nedá dovolat (preflight skončí na 401 bez CORS hlaviček). Dnes ji nevolá nikdo —
+jediným volajícím byla zrušená stránka Faktury. Kdyby se ZIP někdy vrátil (T4),
+je tohle první věc, kterou je potřeba opravit; vzor je v `fakturoid-invoice`.
+
 ---
 
 ## Kde jsme byli (Etapa 2, aktualizováno 13. 8. 2026)
