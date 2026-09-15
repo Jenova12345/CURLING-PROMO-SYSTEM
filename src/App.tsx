@@ -12,7 +12,6 @@ import Dashboard from "./pages/Dashboard";
 import Calendar from "./pages/Calendar";
 import Cenik from "./pages/Cenik";
 import Dues from "./pages/Dues";
-import Invoices from "./pages/Invoices";
 import Requests from "./pages/Requests";
 import MujKlub from "./pages/MujKlub";
 import Subjects from "./pages/Subjects";
@@ -48,7 +47,12 @@ const App = () => (
               <Route path="/cenik" element={<Cenik />} />
               <Route path="/shifts" element={<Shifts />} />
               <Route path="/dues" element={<Dues />} />
-              <Route path="/invoices" element={<Invoices />} />
+              {/* Stránka Faktury zrušena 16. 9. 2026 — ostré doklady vystavuje
+                  Fakturoid a interní engine je zamčený. Kontrolní součet, jediná
+                  živá věc, co na ní byla, je teď v Přehledu fakturace. Odkaz
+                  přesměrováváme, ne zahazujeme: kdo má „/invoices" v záložkách,
+                  má dojít tam, kam se obsah přestěhoval, ne na „nenalezeno". */}
+              <Route path="/invoices" element={<Navigate to="/dues" replace />} />
               <Route path="/requests" element={<Requests />} />
               <Route path="/muj-klub" element={<MujKlub />} />
               <Route path="/subjects" element={<Subjects />} />

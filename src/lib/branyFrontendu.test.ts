@@ -916,10 +916,39 @@ describe('Fakturoid: tlačítko v „Přehled fakturace"', () => {
     // Místo něj se hlídá PŘESNÝ TVAR importu: z toho modulu smí přijít
     // `useBillingReconcile` a nic jiného. Kdo si sem přitáhne `useInvoices`,
     // `useInvoiceDetail` nebo cokoli dalšího, ten řetězec rozbije.
-    const importUseInvoices = duesKod.match(/import\s*\{[^}]*\}\s*from\s*'@\/hooks\/useInvoices';/);
-    expect(importUseInvoices?.[0],
-      'import z @/hooks/useInvoices má jiný tvar — do Dues se smí brát jen useBillingReconcile',
-    ).toBe("import { useBillingReconcile } from '@/hooks/useInvoices';");
+    //
+    // NÁLEZ BEZPEČNOSTNÍ BRÁNY 16. 9. 2026 (🟡): tohle původně bralo
+    // `duesKod.match(...)` bez příznaku `g`, takže to měřilo PRVNÍ výskyt.
+    // Druhý import z téhož modulu o řádek níž by branou prošel zeleně —
+    // přesně ten žánr slepé brány, který tenhle úklid jinde opravoval.
+    // Teď se tvrdí o VŠECH výskytech, a k tomu se zvlášť zakazují cesty,
+    // které závorkový import obcházejí (default import, dynamický `import()`).
+    const importy = [...duesKod.matchAll(/import[^;]*from\s*'@\/hooks\/useInvoices';/g)]
+      .map((m) => m[0]);
+    expect(importy,
+      'import z @/hooks/useInvoices má jiný tvar (nebo jich je víc) — do Dues se smí brát jen useBillingReconcile',
+    ).toEqual(["import { useBillingReconcile } from '@/hooks/useInvoices';"]);
+    expect(duesKod, 'useInvoices se do Dues tahá dynamickým importem — obchvat brány')
+      .not.toMatch(/import\s*\(\s*['"]@\/hooks\/useInvoices/);
+  });
+
+  // NÁLEZ BEZPEČNOSTNÍ BRÁNY 16. 9. 2026 (🟡). Přesunem kontrolního součtu
+  // se z Dues stala obrazovka, kde jsou VEDLE SEBE obraty všech klubů
+  // a tlačítko do ostré číselné řady. Práva si hlídá server sám
+  // (`billing_reconcile` i `nevyfakturovane_akce` začínají kontrolou
+  // `has_role(auth.uid(),'admin')`), takže smazání tohohle řádku by nebyl únik —
+  // neadmin by dostal výjimku, ne data. Byla by to ale provozní vada, kterou
+  // do teď nehlídalo nic, a ověřovat ji ručně po každé úpravě stránky je
+  // přesně to, na co se zapomíná.
+  it('stránku vidí jen admin a guard stojí PŘED obsahem', () => {
+    expect(duesKod, 'z Dues.tsx zmizela kontrola isAdmin').toContain('if (!isAdmin) return');
+    // Guard musí být dřív než render — `if (!isAdmin)` za prvním `return (`
+    // by byl mrtvý kód, který se nikdy nevyhodnotí.
+    const guard = duesKod.indexOf('if (!isAdmin) return');
+    const render = duesKod.indexOf('\n  return (');
+    expect(render, 'nenašel se hlavní return komponenty').toBeGreaterThan(-1);
+    expect(guard, 'kontrola isAdmin je až ZA renderem — na obsah se nedostane')
+      .toBeLessThan(render);
   });
 
   it('… a místo toho volá edge funkci fakturoid-invoice', () => {
@@ -1112,5 +1141,76 @@ describe('Fakturoid: hook nesmí spolknout důvod chyby', () => {
                                hookKod.indexOf('export type FakturoidVarovani'));
     expect(telo, 'do požadavku přibyl režim — ten se z klienta přebít nesmí')
       .not.toMatch(/\brezim\b|\bmode\b|\bodeslat\b/);
+  });
+});
+
+describe('Faktury: zrušená stránka se nesmí vrátit', () => {
+  // ÚKLID 16. 9. 2026. Stránka Faktury byla jediný klient interního
+  // fakturačního enginu, který je od 15. 9. 2026 zamčený
+  // (`billing_settings.interni_engine_povolen = false`). Ostré doklady
+  // vystavuje Fakturoid. Stránka tedy nabízela tlačítka, která už jen
+  // vyrábějí chybovou hlášku z databáze, nad seznamem, který je trvale prázdný.
+  //
+  // PROČ NA TO BRÁNA. Zámek je v DATABÁZI, tahle brána hlídá UI — a to jsou
+  // dvě různé věci. Kdyby se engine někdy odemkl (přechod na plátce DPH, ruční
+  // UPDATE, revert migrace), ožila by s ním i tahle obrazovka a admin by měl
+  // vedle sebe DVĚ tlačítka na vystavení dokladu: jedno do ostré řady Fakturoidu
+  // a jedno do naší vlastní. Dvě číselné řady na tutéž fakturaci je ta nejdražší
+  // chyba, jaká se tu dá udělat. Cesta zpátky vede přes vědomé smazání téhle
+  // brány, ne přes nedopatření.
+
+  const neexistuje = (relativni: string) => {
+    let obsah: string | null = null;
+    try { obsah = cti(relativni); } catch { obsah = null; }
+    return obsah === null;
+  };
+
+  it('soubory zrušené stránky jsou pryč', () => {
+    expect(neexistuje('src/pages/Invoices.tsx'),
+      'Invoices.tsx je zpátky — interní engine má v UI klienta').toBe(true);
+    expect(neexistuje('src/lib/invoicePrint.ts'),
+      'invoicePrint.ts je zpátky — tiskne doklad interního enginu').toBe(true);
+  });
+
+  it('v navigaci není položka na /invoices', () => {
+    expect(bezKomentaru(cti('src/config/navigation.ts')),
+      'do menu se vrátila položka Faktury').not.toContain("'/invoices'");
+  });
+
+  it('/invoices nevykresluje stránku, jen přesměrovává', () => {
+    const app = bezKomentaru(cti('src/App.tsx'));
+    // Route zůstala schválně, ale jako `Navigate` — záložka na zrušené
+    // stránce má dojít tam, kam se obsah přestěhoval. Kdyby se sem vrátil
+    // `element={<Invoices />}`, je stránka zpátky bez ohledu na to, že
+    // soubor prošel horní bránou.
+    expect(app, 'v App.tsx je zpátky import stránky Faktury')
+      .not.toMatch(/import\s+\w+\s+from\s+["']\.\/pages\/Invoices["']/);
+    const radek = app.split('\n').find((r) => r.includes('path="/invoices"'));
+    expect(radek, 'route /invoices zmizela úplně — záložky pak spadnou na „nenalezeno"')
+      .toBeDefined();
+    expect(radek!, '/invoices zase něco vykresluje místo přesměrování')
+      .toMatch(/element=\{<Navigate to="\/dues" replace \/>\}/);
+  });
+
+  it('z useInvoices.ts zbyl JEN kontrolní součet', () => {
+    const zdroj = bezKomentaru(cti('src/hooks/useInvoices.ts'));
+
+    // Jmenný seznam, ne zákaz jednotlivých názvů: zákaz `createClubDraft`
+    // by nechytil `zalozKoncept`, který dělá totéž. Co není vyjmenované,
+    // je nález — i kdyby se to jmenovalo jakkoli.
+    const exporty = [...zdroj.matchAll(/export\s+(?:const|function|type|interface)\s+(\w+)/g)]
+      .map((m) => m[1]);
+    expect(exporty.sort(),
+      'z useInvoices.ts se exportuje něco navíc — interní engine se vrací do UI',
+    ).toEqual(['useBillingReconcile']);
+
+    // A druhá strana téhož: jediné RPC, které se odsud smí volat.
+    const rpc = [...zdroj.matchAll(/supabase\.rpc\(\s*'([^']+)'/g)].map((m) => m[1]);
+    expect(rpc, 'z useInvoices.ts se volá jiné RPC než kontrolní součet')
+      .toEqual(['billing_reconcile']);
+
+    // Zápis do dokladů se z klienta nedělá vůbec — ani přes `from(...)`.
+    expect(zdroj, 'do useInvoices.ts se vrátil přímý přístup k tabulkám dokladů')
+      .not.toMatch(/\.from\(\s*'invoices?(_items|_list)?'/);
   });
 });

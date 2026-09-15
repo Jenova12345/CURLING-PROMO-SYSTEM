@@ -34,7 +34,7 @@ describe('filterNavItemsByRoles — Žádosti pro zástupce klubu', () => {
   });
 
   it('zástupcovství neotevírá nic dalšího, co je jen pro admina', () => {
-    const jenAdmin = ['/subjects', '/settings', '/payouts', '/invoices', '/dues'];
+    const jenAdmin = ['/subjects', '/settings', '/payouts', '/dues'];
     const videnyZastupcem = cesty(['hobby_player'], true);
     for (const p of jenAdmin) expect(videnyZastupcem).not.toContain(p);
   });
