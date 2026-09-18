@@ -867,11 +867,21 @@ export function ReservationDialog({
                 // Podmínka je nutná: u samotného přejmenování se nic
                 // neposunulo a věta by lhala. Tenhle soubor to drží i jinde
                 // (poznámka se u nezměněného textu vůbec neposílá).
+                //
+                // A jmenuje se JEN TO, CO SE OPRAVDU ZMĚNILO — „Čas a dráha"
+                // u pouhého posunu času je o slovo víc, než co se stalo.
+                // Skloňování jde s tím: čas se změnil (rod mužský neživotný),
+                // dráha se změnila (ženský), obojí se změnily (množné číslo
+                // bez mužského životného).
                 description: `${poznamkaZmenena ? 'Název i poznámka se propsaly' : 'Název se propsal'}`
                   + ` na ${pocetTerminu(zmenaSerie.akci)} této série.`
                   + ' Minulé termíny si nechaly původní název.'
                   + (movedTime || zmenilySeDrahy
-                    ? ' Čas a dráha se změnily jen u tohohle termínu.' : ''),
+                    ? ` ${movedTime && zmenilySeDrahy
+                        ? 'Čas a dráha se změnily'
+                        : movedTime ? 'Čas se změnil' : 'Dráha se změnila'
+                      } jen u tohohle termínu.`
+                    : ''),
               }
             : { title: 'Rezervace upravena' });
         onOpenChange(false);

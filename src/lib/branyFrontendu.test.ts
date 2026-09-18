@@ -306,10 +306,37 @@ describe('Série: UI nesmí slibovat hromadný posun', () => {
     expect(od, "větev s hláškou „Série přejmenována\" v dialogu zmizela").toBeGreaterThan(-1);
     expect(do_, 'konec větve s hláškou zmizel — řez by vzal zbytek souboru')
       .toBeGreaterThan(od);
-    expect(dialog.slice(od, do_),
+    const vetev = dialog.slice(od, do_);
+    expect(vetev,
       'hláška o přejmenování série mlčí o posunu — uživatel z ní odejde ' +
       's dojmem, že se čas změnil celé sérii.',
-    ).toContain('Čas a dráha se změnily jen u tohohle termínu.');
+    ).toContain('jen u tohohle termínu.');
+    // VĚTA JMENUJE JEN TO, CO SE ZMĚNILO, a každý tvar má svoje skloňování.
+    // Kdyby se to slilo do jedné věty „Čas a dráha", tvrdila by u pouhého
+    // posunu času změnu dráhy, ke které nedošlo.
+    expect(vetev, 'chybí tvar pro změnu času i dráhy najednou')
+      .toContain('Čas a dráha se změnily');
+    expect(vetev, 'chybí tvar pro samotný čas (nebo má špatné skloňování)')
+      .toContain('Čas se změnil');
+    expect(vetev, 'chybí tvar pro samotnou dráhu (nebo má špatné skloňování)')
+      .toContain('Dráha se změnila');
+  });
+
+  // Tvary musí sedět na SVÉ větvi. Samotná přítomnost všech tří řetězců
+  // nechytí prohozené větve — „Čas se změnil" nad podmínkou o dráze je
+  // gramaticky v pořádku a věcně naruby.
+  it('tvary věty o posunu sedí na svých větvích', () => {
+    const od = dialog.indexOf("title: 'Série přejmenována'");
+    const do_ = dialog.indexOf("{ title: 'Rezervace upravena' }", od);
+    expect(do_, 'konec větve s hláškou zmizel').toBeGreaterThan(od);
+    const vetev = dialog.slice(od, do_);
+    expect(vetev,
+      'tvar „Čas a dráha se změnily" nevisí na podmínce `movedTime && zmenilySeDrahy`.',
+    ).toMatch(/movedTime && zmenilySeDrahy\s*\n?\s*\? 'Čas a dráha se změnily'/);
+    expect(vetev,
+      'tvary pro samotný čas a samotnou dráhu jsou prohozené — hláška by ' +
+      'u posunu času mluvila o dráze.',
+    ).toMatch(/: movedTime \? 'Čas se změnil' : 'Dráha se změnila'/);
   });
 
   // …a smí ji přiznat JEN tehdy, když se opravdu posunulo. U samotného
