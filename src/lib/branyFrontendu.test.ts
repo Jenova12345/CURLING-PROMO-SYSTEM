@@ -214,6 +214,146 @@ describe('Přejmenování série: dvě větve, které se musí lišit', () => {
   });
 });
 
+// KLAMAVÉ UI U SÉRIE (oprava 18. 9. 2026).
+//
+// Hromadný přesun série NEEXISTUJE — ani v UI, ani na serveru: jediné dvě
+// funkce, které umí sáhnout na celou sérii, jsou `cancel_booking` se scope
+// „series" a `prejmenuj_serii` (název + poznámka). `move_booking` parametr pro
+// sérii vůbec nemá, takže si o hromadný posun nejde ani říct.
+//
+// Dokud to UI nepřiznávalo, klient si myslel, že o něj požádal:
+//   * v dialogu vybral „celé série" (volba u NÁZVU, ale sedí ve formuláři,
+//     kde se o kus výš mění i čas a dráhy) a toast mu odpověděl
+//     „Série přejmenována" — posunul se přitom jeden termín;
+//   * potvrzení přetažení v kalendáři o sérii nemluvilo vůbec.
+// Změřeno v `audit_log` produkce 18. 9. 2026: sérii `6c52ebc4` (30 termínů)
+// pak přetahoval na druhou dráhu ručně po jednom — 5 termínů na třikrát,
+// naposledy tentýž den ve 12:38.
+//
+// Tyhle brány měří TEXTY, protože oprava je text. Zdroják se čte
+// `bezKomentaru` — vysvětlivky výš citují i to, co se do UI vrátit nesmí,
+// takže by dobře okomentovaná oprava jinak shodila vlastní bránu.
+describe('Série: UI nesmí slibovat hromadný posun', () => {
+  const dialog = bezKomentaru(cti('src/components/reservations/ReservationDialog.tsx'));
+  const kalendar = bezKomentaru(cti('src/pages/Calendar.tsx'));
+
+  // Rozhodující je text NA VOLBĚ, ne pod ní. Drobný odstavec pod skupinou
+  // přepínačů tam byl celou dobu a stálo v něm „Čas, dráhy ani cena se
+  // hromadně nemění" — a přesto se to stalo. Kdo vybírá z dvou řádků, čte ty
+  // dva řádky.
+  it('volba „celá série" má v sobě, že platí jen na název a poznámku', () => {
+    const volba = dialog.match(/<RadioGroupItem value="serie"[\s\S]{0,240}?<\/label>/);
+    expect(volba, 'volba „celá série" v dialogu zmizela').not.toBeNull();
+    expect(volba![0],
+      'popisek volby „celá série" neříká, že platí jen na název a poznámku — ' +
+      've formuláři, kde se mění i čas a dráhy, se to čte jako rozsah celé úpravy.',
+    ).toMatch(/jen název a poznámka/);
+  });
+
+  // Co volba NEDĚLÁ, musí být vidět taky — a jmenovitě. „Platí jen na název"
+  // uživatel přečte jako „název se mění navíc", ne jako „čas se nemění".
+  //
+  // Řez se NEKOTVÍ na odsazení ani na délku bloku. Dřívější znění téhle brány
+  // hledalo `[\s\S]{0,1600}?\n {14}\)}` — blok měl 1437 znaků, takže jedna
+  // věta navíc (nebo posun odsazení o dvě mezery) by ji shodila hláškou „blok
+  // zmizel", což by byla lež a poslala by příštího člověka hledat jinam.
+  // (Nález brány code review, 18. 9. 2026.)
+  it('u rozsahu série stojí, že čas ani dráha se tím nemění', () => {
+    const od = dialog.indexOf('{jeSerie && (');
+    expect(od, 'blok s volbou rozsahu série v dialogu zmizel').toBeGreaterThan(-1);
+    const konec = dialog.indexOf('</p>', od);
+    expect(konec, 'vysvětlivka pod volbou rozsahu série zmizela').toBeGreaterThan(od);
+    // Skloňování ani „touto/touhle" brána nefixuje — hlídá tvrzení, ne
+    // typografii. Jinak by oprava češtiny zčervenala jako regrese.
+    expect(dialog.slice(od, konec),
+      'u volby rozsahu chybí věta, že se čas a dráha nemění — přesně tenhle ' +
+      'slib si klient přečetl a pak sérii přetahoval po jednom termínu.',
+    ).toMatch(/Čas, dráh\w* ani cena se .{0,20}nemění/);
+  });
+
+  // Tažení má na sérii úplně stejnou moc jako dialog — žádnou. Potvrzení
+  // přetažení je poslední místo, kde to jde říct dřív, než se to stane.
+  //
+  // MĚŘÍ SE VĚTEV, NE VZDÁLENOST. Dřívější znění hledalo podmínku a větu zvlášť
+  // a ověřovalo, že mezi nimi není `)}`. To propouštělo přesně ten stav, který
+  // má brána chytat: při obrácené polaritě (`!…series_id`) i při přepisu na
+  // ternární operátor s větou v ELSE větvi zůstala zelená — věta by se přitom
+  // ukazovala právě U AKCÍ MIMO SÉRII. Změřeno mutací 18. 9. 2026 (nález brány
+  // code review); proto se teď kotví `&&` a negace se hlídá zvlášť.
+  const vetev = kalendar.match(
+    /\{pendingMove\.reservation\.series_id && \(([\s\S]{0,800}?)\)\}/,
+  );
+
+  it('potvrzení přetažení u série říká, že se posune jen tento termín', () => {
+    expect(vetev,
+      'potvrzení přetažení nemá větev `pendingMove.reservation.series_id && (` — ' +
+      'u opakované akce se nikde neřekne, že se posouvá jediný termín.',
+    ).not.toBeNull();
+    expect(vetev![1],
+      've větvi pro sérii chybí věta „Posune se jen tento termín."',
+    ).toContain('Posune se jen tento termín.');
+  });
+
+  // TŘETÍ MÍSTO SCÉNÁŘE: hláška PO uložení.
+  //
+  // Kdo v dialogu změní čas a zároveň vybere „celé série", pošle dvě různě
+  // velké změny — přejmenování celé série a posun jednoho termínu. Dokud
+  // hláška mluvila jen o té první („Série přejmenována"), byla poslední věc,
+  // kterou uživatel viděl, potvrzením té chybné představy.
+  it('hláška o přejmenování série přiznává, že posun platil na jeden termín', () => {
+    const od = dialog.indexOf("title: 'Série přejmenována'");
+    const do_ = dialog.indexOf("{ title: 'Rezervace upravena' }", od);
+    expect(od, "větev s hláškou „Série přejmenována\" v dialogu zmizela").toBeGreaterThan(-1);
+    expect(do_, 'konec větve s hláškou zmizel — řez by vzal zbytek souboru')
+      .toBeGreaterThan(od);
+    expect(dialog.slice(od, do_),
+      'hláška o přejmenování série mlčí o posunu — uživatel z ní odejde ' +
+      's dojmem, že se čas změnil celé sérii.',
+    ).toContain('Čas a dráha se změnily jen u tohohle termínu.');
+  });
+
+  // …a smí ji přiznat JEN tehdy, když se opravdu posunulo. U samotného
+  // přejmenování se nic nehnulo a věta by lhala opačným směrem.
+  it('věta o posunu je podmíněná změnou času nebo drah', () => {
+    const od = dialog.indexOf("title: 'Série přejmenována'");
+    const do_ = dialog.indexOf("{ title: 'Rezervace upravena' }", od);
+    expect(do_, 'konec větve s hláškou zmizel').toBeGreaterThan(od);
+    expect(dialog.slice(od, do_),
+      'věta o posunu se lepí do hlášky bezpodmínečně — u pouhého přejmenování ' +
+      'bude tvrdit posun, který neproběhl.',
+    ).toMatch(/\(\s*movedTime \|\| zmenilySeDrahy\s*\n?\s*\?/);
+  });
+
+  // Sada drah se porovnává na JEDNOM místě. Kdyby měla hláška vlastní kopii
+  // toho porovnání, rozejde se s tím, co se opravdu odeslalo — hláška by pak
+  // mluvila o dráhách, které se nezměnily (nebo mlčela o těch, které ano).
+  it('podmínka o změně drah se nepočítá dvakrát', () => {
+    expect((dialog.match(/\[\.\.\.editingSheetIds\]\.sort\(\)\.join/g) ?? []).length,
+      'porovnání sady drah je ve zdrojáku víckrát — hláška a odeslání se ' +
+      'můžou rozejít.',
+    ).toBe(1);
+    expect(dialog,
+      '`upravDrahyAkce` se nevolá podle `zmenilySeDrahy` — vlastní kopie ' +
+      'podmínky se časem rozejde s hláškou.',
+    ).toMatch(/zmenilySeDrahy && sheetIds\.length > 0[\s\S]{0,200}?api\.upravDrahyAkce/);
+  });
+
+  // Věta se smí ukázat JEN u série. U jednorázové rezervace není žádná série,
+  // ze které by se dalo posouvat víc termínů, a věta by jen mátla —
+  // „jen tento" implikuje, že existují ostatní.
+  it('věta o jednom termínu se neukazuje u akce mimo sérii', () => {
+    expect(kalendar,
+      'podmínka u věty je znegovaná — věta by se ukázala právě u akcí MIMO sérii.',
+    ).not.toMatch(/!\s*pendingMove\.reservation\.series_id/);
+    // Druhý výskyt téže věty by mohl viset mimo větev ověřenou výš, a tahle
+    // brána by o něm nevěděla.
+    expect((kalendar.match(/Posune se jen tento termín\./g) ?? []).length,
+      'věta „Posune se jen tento termín." je ve zdrojáku víckrát — jedna ' +
+      'z kopií nemusí stát pod podmínkou `series_id`.',
+    ).toBe(1);
+  });
+});
+
 describe('Přihlášení: nenačtený profil = zavřeno', () => {
   const auth = cti('src/contexts/AuthContext.tsx');
 

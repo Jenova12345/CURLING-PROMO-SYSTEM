@@ -709,6 +709,11 @@ export function ReservationDialog({
         // `upravDrahyAkce` níž — jinak by si ty dvě cesty přepisovaly výsledek.
         const movedSheet = editingSheetIds.length === 1 && sheetIds.length === 1
           && sheetIds[0] !== editing.sheet_id;
+        // ZMĚNILA SE SADA DRAH? Jednodráhový přesun jde přes `moveBooking` výš,
+        // změna počtu drah přes `upravDrahyAkce` níž — do hlášky potřebujeme
+        // obojí, takže se porovná celá sada, ne jen `movedSheet`.
+        const zmenilySeDrahy =
+          [...editingSheetIds].sort().join(',') !== [...sheetIds].sort().join(',');
         if (movedTime || (movedSheet && editingLanes === 1)) {
           await api.moveBooking({
             id: editing.id!,
@@ -732,7 +737,7 @@ export function ReservationDialog({
           // U ROZSAHU „CELÁ SÉRIE" se název ani poznámka přes `update_booking`
           // neposílají — sáhla by na tenhle jeden termín a hromadná změna níž
           // by pak jen přepisovala, co tahle zapsala. Sazba, čas a dráhy jdou
-          // touhle cestou dál, ty se hromadně neměnní (a nemají).
+          // touhle cestou dál, ty se hromadně nemění (a nemají).
           title: rozsahSerie ? undefined : sanitizeText(title),
           // prázdný řetězec = „smaž poznámku" (null by znamenalo „neměň")
           note: rozsahSerie ? undefined : (note ? sanitizeText(note) : ''),
@@ -784,12 +789,10 @@ export function ReservationDialog({
         }
 
         // DRÁHY (B) — přidání i ubrání jedním voláním nad celou akcí.
-        if (editing.event_id) {
-          const puvodni = [...editingSheetIds].sort().join(',');
-          const nove = [...sheetIds].sort().join(',');
-          if (puvodni !== nove && sheetIds.length > 0) {
-            await api.upravDrahyAkce({ event_id: editing.event_id, sheet_ids: sheetIds });
-          }
+        // Porovnání sady je `zmenilySeDrahy` nahoře, ať tu podmínku nemáme
+        // opsanou dvakrát a nerozejde se.
+        if (editing.event_id && zmenilySeDrahy && sheetIds.length > 0) {
+          await api.upravDrahyAkce({ event_id: editing.event_id, sheet_ids: sheetIds });
         }
 
         // ZMĚNA ODBĚRATELE — až ZA dráhami, aby nová firma sedla i na dráhu,
@@ -850,9 +853,25 @@ export function ReservationDialog({
                 // Tvrdit v té větvi „Název se propsal" by byla lež nad nulou
                 // zápisů, tak spadne na neutrální „Rezervace upravena".
                 // (Nález brány code review, 11. 9. 2026.)
+                // POSUN SE DO HLÁŠKY MUSÍ VEJÍT TAKY.
+                //
+                // Tohle je třetí místo scénáře, kvůli kterému se 18. 9. 2026
+                // opravovaly texty u série. Kdo změní čas a zároveň vybere
+                // „celé série", pošle DVĚ různě velké změny: přejmenování na
+                // celou sérii a posun JEDNOHO termínu. Hláška do té doby
+                // mluvila jen o té první, takže poslední, co uživatel viděl,
+                // potvrzovalo právě tu představu, kterou zbytek opravy vyvrací
+                // — a klient pak sérii přetahoval ručně po jednom termínu
+                // (změřeno v audit_logu produkce, série `6c52ebc4`).
+                //
+                // Podmínka je nutná: u samotného přejmenování se nic
+                // neposunulo a věta by lhala. Tenhle soubor to drží i jinde
+                // (poznámka se u nezměněného textu vůbec neposílá).
                 description: `${poznamkaZmenena ? 'Název i poznámka se propsaly' : 'Název se propsal'}`
                   + ` na ${pocetTerminu(zmenaSerie.akci)} této série.`
-                  + ' Minulé termíny si nechaly původní název.',
+                  + ' Minulé termíny si nechaly původní název.'
+                  + (movedTime || zmenilySeDrahy
+                    ? ' Čas a dráha se změnily jen u tohohle termínu.' : ''),
               }
             : { title: 'Rezervace upravena' });
         onOpenChange(false);
@@ -972,7 +991,15 @@ export function ReservationDialog({
               {/* ROZSAH U OPAKOVANÉ SÉRIE — platí JEN na název a poznámku.
                   Čas, dráhy ani cena se hromadně měnit nedají a nabízet to tu
                   by slibovalo něco, co server neumí (a schválně neumí: kolize
-                  a ceník se u každého termínu řeší zvlášť). */}
+                  a ceník se u každého termínu řeší zvlášť).
+
+                  TEXTY TU NEJSOU KOSMETIKA. Dřív stálo u druhé volby jen
+                  „celé série (budoucí termíny)" a sedělo to ve formuláři, kde
+                  se o kus výš mění i čas a dráhy — klient to četl jako rozsah
+                  celé úpravy. Změřeno na produkci 18. 9. 2026: sérii
+                  `6c52ebc4` (30 termínů) pak přetahoval na druhou dráhu ručně
+                  po jednom, pět termínů na třikrát. Proto to, co volba NEDĚLÁ,
+                  stojí přímo v ní, ne až v drobném textu pod ní. */}
               {jeSerie && (
                 <div className="space-y-2 rounded-md border bg-muted/40 p-3">
                   <Label className="text-sm">Název a poznámku změnit u</Label>
@@ -981,19 +1008,26 @@ export function ReservationDialog({
                     onValueChange={(v) => setRozsahNazvu(v as 'tato' | 'serie')}
                     className="gap-2"
                   >
-                    <label className="flex items-center gap-2 text-sm">
-                      <RadioGroupItem value="tato" id="rozsah-tato" />
+                    {/* `items-start` + `mt-0.5`: druhý popisek je dlouhý a na
+                        úzkém displeji se zalomí do dvou řádků — se `items-center`
+                        by kolečko sjelo doprostřed obou. */}
+                    <label className="flex items-start gap-2 text-sm">
+                      <RadioGroupItem value="tato" id="rozsah-tato" className="mt-0.5" />
                       jen této akce
                     </label>
-                    <label className="flex items-center gap-2 text-sm">
-                      <RadioGroupItem value="serie" id="rozsah-serie" />
-                      celé série (budoucí termíny)
+                    <label className="flex items-start gap-2 text-sm">
+                      <RadioGroupItem value="serie" id="rozsah-serie" className="mt-0.5" />
+                      celé série (budoucí termíny) — mění jen název a poznámka
                     </label>
                   </RadioGroup>
                   <p className="text-xs text-muted-foreground">
-                    Změna se u série propíše jen na termíny, které ještě nebyly —
-                    minulé si název nechávají, protože je na dokladech. Čas, dráhy
-                    ani cena se hromadně nemění.
+                    <strong className="font-medium text-foreground">
+                      Čas, dráhy ani cena se touto volbou nemění.
+                    </strong>{' '}
+                    Ty se u série upravují v každém termínu zvlášť — hromadně to
+                    systém neumí. Název a poznámka se propíšou jen na termíny,
+                    které ještě nebyly; minulé si název nechávají, protože je na
+                    dokladech.
                   </p>
                 </div>
               )}

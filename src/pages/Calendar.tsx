@@ -616,6 +616,24 @@ const Calendar = () => {
                         Akce běží na obou drahách — přesune se celá, dráhy zůstanou.
                       </div>
                     )}
+                    {/* U OPAKOVANÉ SÉRIE SE ŘEKNE ROVNOU, ŽE JDE O JEDEN TERMÍN.
+                        `move_booking` sáhne na akci (obě dráhy jednoho termínu),
+                        nikdy na `series_id` — hromadný posun série na serveru
+                        vůbec neexistuje. Dokud to tady nestálo, klient to zjistil
+                        až z kalendáře po dvou dnech tahání po jednom. */}
+                    {pendingMove.reservation.series_id && (
+                      <div className="text-muted-foreground">
+                        Akce je součástí opakované série.{' '}
+                        {/* Mezery kolem `<strong>` jsou schválně `{' '}`, ne
+                            mezera na konci řádku: ta se při přeformátování tiše
+                            ztratí a vznikne „série.Posune". */}
+                        <strong className="font-medium text-foreground">
+                          Posune se jen tento termín.
+                        </strong>{' '}
+                        Ostatní termíny série zůstanou, kde jsou — každý se musí
+                        přesunout zvlášť.
+                      </div>
+                    )}
                   </>
                 )}
               </div>
